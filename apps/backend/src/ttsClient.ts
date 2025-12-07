@@ -66,8 +66,7 @@ export class TTSClient {
    * @returns Buffer containing audio data (PCM/WAV format)
    */
   async synthesizeText(text: string): Promise<Buffer> {
-    const prompt = 'Read as a world-class audiobook narrator with expressive emotional delivery. Use one tone for narration and very distinct, consistent voices for characters: deeper voices for male roles, brighter for female roles, lighter for children. Detect dialogues automatically and shift vocal tone naturally to match each characters personality and emotion. Keep the performance cinematic not and engaging.'
-    const model = 'gemini-2.5-pro-tts';
+    const model = 'gemini-2.5-flash-tts';
     const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/${this.projectId}/locations/${this.location}/publishers/google/models/${model}:generateContent`;
 
     // Get access token
@@ -78,12 +77,12 @@ export class TTSClient {
       throw new Error('Failed to get access token');
     }
 
-    // Construct request body according to Vertex AI API documentation
+    // TTS-specific request body (no systemInstruction - not supported by TTS models)
     const requestBody = {
       contents: {
         role: 'user',
         parts: {
-          text: `${prompt}: ${text}`
+          text: text  // Pure text - let TTS model use natural narration
         }
       },
       generation_config: {
@@ -99,6 +98,9 @@ export class TTSClient {
     };
 
     try {
+      console.log(`🎤 TTS API call - Text length: ${text.length} characters`);
+      const startTime = Date.now();
+      
       const response = await fetch(endpoint, {
         method: 'POST',
         headers: {
@@ -106,7 +108,11 @@ export class TTSClient {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(120000), // 120 second timeout
       });
+
+      const fetchTime = Date.now() - startTime;
+      console.log(`⏱️ TTS API response received in ${fetchTime}ms`);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -124,15 +130,19 @@ export class TTSClient {
         throw new Error('No audio content received from Vertex AI API');
       }
 
+      console.log(`🎵 Audio data received, converting to WAV...`);
+      
       // Convert base64 to Buffer (PCM audio data)
       const pcmBuffer = Buffer.from(audioData, 'base64');
+      console.log(`📦 PCM buffer size: ${pcmBuffer.length} bytes`);
       
       // Add WAV header to PCM data for browser compatibility
       const wavBuffer = await createWavBuffer(pcmBuffer);
+      console.log(`✅ WAV conversion complete: ${wavBuffer.length} bytes`);
       
       return wavBuffer;
     } catch (error) {
-      console.error('Vertex AI TTS Error:', error);
+      console.error('❌ Vertex AI TTS Error:', error);
       throw new Error(`Failed to synthesize text: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
