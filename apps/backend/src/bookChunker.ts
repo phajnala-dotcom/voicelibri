@@ -1,3 +1,7 @@
+import AdmZip from 'adm-zip';
+import { XMLParser } from 'fast-xml-parser';
+import path from 'path';
+
 /**
  * Chunks book text into smaller pieces for TTS processing
  * Breaks at sentence endings AFTER reaching minimum chunk size
@@ -72,25 +76,32 @@ export interface BookMetadata {
 }
 
 /**
- * Parses book metadata from text file
+ * Parses book metadata from text file or EPUB buffer
  * Supports simple .txt format with metadata in first lines
  * Extensible for future formats (EPUB, PDF) through strategy pattern
  * 
- * @param fullText - Complete book text
+ * @param contentOrBuffer - Complete book text (for txt) or Buffer (for epub/pdf)
  * @param format - Book format ('txt', 'epub', 'pdf', etc.)
+ * @param filePath - Optional file path for EPUB/PDF parsing
  * @returns Parsed metadata or defaults
  */
 export function parseBookMetadata(
-  fullText: string,
-  format: 'txt' | 'epub' | 'pdf' = 'txt'
+  contentOrBuffer: string | Buffer,
+  format: 'txt' | 'epub' | 'pdf' = 'txt',
+  filePath?: string
 ): BookMetadata {
   // Strategy pattern - easy to extend for other formats
   switch (format) {
     case 'txt':
-      return parseTxtMetadata(fullText);
+      if (typeof contentOrBuffer !== 'string') {
+        throw new Error('TXT format requires string content');
+      }
+      return parseTxtMetadata(contentOrBuffer);
     case 'epub':
-      // TODO: Implement EPUB metadata parsing
-      return { title: 'Unknown', author: 'Unknown' };
+      if (typeof contentOrBuffer === 'string') {
+        throw new Error('EPUB format requires Buffer');
+      }
+      return parseEpubMetadata(contentOrBuffer, filePath);
     case 'pdf':
       // TODO: Implement PDF metadata parsing
       return { title: 'Unknown', author: 'Unknown' };
@@ -205,6 +216,257 @@ function parseTxtMetadata(fullText: string): BookMetadata {
     author,
     language,
   };
+}
+
+/**
+ * Helper function to strip HTML tags from text
+ * @param html - HTML content
+ * @returns Plain text without HTML tags
+ */
+function stripHtml(html: string): string {
+  // Remove script and style tags with their content
+  let text = html.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+  text = text.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+  
+  // Remove all HTML tags
+  text = text.replace(/<[^>]+>/g, ' ');
+  
+  // Decode common HTML entities
+  text = text.replace(/&nbsp;/g, ' ');
+  text = text.replace(/&amp;/g, '&');
+  text = text.replace(/&lt;/g, '<');
+  text = text.replace(/&gt;/g, '>');
+  text = text.replace(/&quot;/g, '"');
+  text = text.replace(/&#39;/g, "'");
+  text = text.replace(/&apos;/g, "'");
+  
+  // Clean up whitespace
+  text = text.replace(/\s+/g, ' ');
+  text = text.trim();
+  
+  return text;
+}
+
+/**
+ * Parses EPUB file and extracts metadata
+ * EPUB is a ZIP archive containing XML files (OPF metadata) and HTML/XHTML content
+ * 
+ * @param epubBuffer - EPUB file as Buffer
+ * @param filePath - Optional file path for error messages
+ * @returns Extracted metadata
+ */
+function parseEpubMetadata(epubBuffer: Buffer, filePath?: string): BookMetadata {
+  try {
+    const zip = new AdmZip(epubBuffer);
+    const parser = new XMLParser({
+      ignoreAttributes: false,
+      attributeNamePrefix: '@_',
+    });
+    
+    // Find container.xml to locate OPF file
+    const containerEntry = zip.getEntry('META-INF/container.xml');
+    if (!containerEntry) {
+      console.warn('⚠️ EPUB: container.xml not found');
+      return { title: 'Unknown EPUB', author: 'Unknown' };
+    }
+    
+    const containerXml = containerEntry.getData().toString('utf8');
+    const containerData = parser.parse(containerXml);
+    
+    // Get OPF file path from container
+    const rootfile = containerData?.container?.rootfiles?.rootfile;
+    const opfPath = rootfile?.['@_full-path'];
+    
+    if (!opfPath) {
+      console.warn('⚠️ EPUB: OPF path not found in container.xml');
+      return { title: 'Unknown EPUB', author: 'Unknown' };
+    }
+    
+    // Read OPF file
+    const opfEntry = zip.getEntry(opfPath);
+    if (!opfEntry) {
+      console.warn(`⚠️ EPUB: OPF file not found at ${opfPath}`);
+      return { title: 'Unknown EPUB', author: 'Unknown' };
+    }
+    
+    const opfXml = opfEntry.getData().toString('utf8');
+    const opfData = parser.parse(opfXml);
+    
+    // Extract metadata from OPF
+    const metadata = opfData?.package?.metadata;
+    
+    let title = 'Unknown EPUB';
+    let author = 'Unknown';
+    let language: string | undefined;
+    
+    // Parse title (can be string or object with #text)
+    if (metadata?.['dc:title']) {
+      const titleData = metadata['dc:title'];
+      title = typeof titleData === 'string' ? titleData : titleData['#text'] || title;
+    }
+    
+    // Parse author/creator (can be string, object, or array)
+    if (metadata?.['dc:creator']) {
+      const creatorData = metadata['dc:creator'];
+      
+      if (Array.isArray(creatorData)) {
+        // Multiple authors - take first
+        const firstAuthor = creatorData[0];
+        author = typeof firstAuthor === 'string' ? firstAuthor : firstAuthor['#text'] || author;
+      } else if (typeof creatorData === 'string') {
+        author = creatorData;
+      } else if (creatorData['#text']) {
+        author = creatorData['#text'];
+      }
+    }
+    
+    // Parse language (can be string or object)
+    if (metadata?.['dc:language']) {
+      const langData = metadata['dc:language'];
+      const langCode = typeof langData === 'string' ? langData : langData['#text'];
+      
+      if (langCode) {
+        // Normalize language code (e.g., 'en-US' -> 'en', 'cs-CZ' -> 'cs')
+        language = langCode.split('-')[0].toLowerCase();
+      }
+    }
+    
+    console.log(`✓ EPUB metadata extracted: "${title}" by ${author} [${language || 'unknown'}]`);
+    
+    return {
+      title,
+      author,
+      language,
+    };
+    
+  } catch (error) {
+    console.error('✗ Failed to parse EPUB metadata:', error);
+    const fileName = filePath ? path.basename(filePath) : 'Unknown';
+    return {
+      title: fileName,
+      author: 'Unknown',
+    };
+  }
+}
+
+/**
+ * Extracts plain text content from EPUB file
+ * Reads HTML/XHTML files in spine order and strips HTML tags
+ * 
+ * @param epubBuffer - EPUB file as Buffer
+ * @returns Plain text content ready for TTS
+ */
+export function extractTextFromEpub(epubBuffer: Buffer): string {
+  try {
+    const zip = new AdmZip(epubBuffer);
+    const parser = new XMLParser({
+      ignoreAttributes: false,
+      attributeNamePrefix: '@_',
+    });
+    
+    // Find container.xml to locate OPF file
+    const containerEntry = zip.getEntry('META-INF/container.xml');
+    if (!containerEntry) {
+      throw new Error('container.xml not found in EPUB');
+    }
+    
+    const containerXml = containerEntry.getData().toString('utf8');
+    const containerData = parser.parse(containerXml);
+    
+    // Get OPF file path
+    const rootfile = containerData?.container?.rootfiles?.rootfile;
+    const opfPath = rootfile?.['@_full-path'];
+    
+    if (!opfPath) {
+      throw new Error('OPF path not found in container.xml');
+    }
+    
+    // Read OPF file
+    const opfEntry = zip.getEntry(opfPath);
+    if (!opfEntry) {
+      throw new Error(`OPF file not found at ${opfPath}`);
+    }
+    
+    const opfXml = opfEntry.getData().toString('utf8');
+    const opfData = parser.parse(opfXml);
+    
+    // Get base directory of OPF file (for resolving relative paths)
+    const opfDir = path.dirname(opfPath);
+    
+    // Get manifest (maps IDs to file paths)
+    const manifest = opfData?.package?.manifest?.item;
+    const manifestMap = new Map<string, string>();
+    
+    if (Array.isArray(manifest)) {
+      manifest.forEach((item: any) => {
+        const id = item['@_id'];
+        const href = item['@_href'];
+        if (id && href) {
+          manifestMap.set(id, href);
+        }
+      });
+    } else if (manifest) {
+      const id = manifest['@_id'];
+      const href = manifest['@_href'];
+      if (id && href) {
+        manifestMap.set(id, href);
+      }
+    }
+    
+    // Get spine (reading order)
+    const spine = opfData?.package?.spine?.itemref;
+    const spineItems: string[] = [];
+    
+    if (Array.isArray(spine)) {
+      spine.forEach((item: any) => {
+        const idref = item['@_idref'];
+        if (idref) {
+          spineItems.push(idref);
+        }
+      });
+    } else if (spine) {
+      const idref = spine['@_idref'];
+      if (idref) {
+        spineItems.push(idref);
+      }
+    }
+    
+    // Extract text from each spine item in order
+    const textParts: string[] = [];
+    
+    for (const itemId of spineItems) {
+      const href = manifestMap.get(itemId);
+      if (!href) {
+        console.warn(`⚠️ EPUB: Item ${itemId} not found in manifest`);
+        continue;
+      }
+      
+      // Resolve path relative to OPF directory
+      const fullPath = path.posix.join(opfDir, href);
+      const contentEntry = zip.getEntry(fullPath);
+      
+      if (!contentEntry) {
+        console.warn(`⚠️ EPUB: Content file not found: ${fullPath}`);
+        continue;
+      }
+      
+      const htmlContent = contentEntry.getData().toString('utf8');
+      const plainText = stripHtml(htmlContent);
+      
+      if (plainText.trim().length > 0) {
+        textParts.push(plainText);
+      }
+    }
+    
+    const fullText = textParts.join('\n\n');
+    console.log(`✓ EPUB text extracted: ${fullText.length} characters from ${spineItems.length} chapters`);
+    
+    return fullText;
+    
+  } catch (error) {
+    console.error('✗ Failed to extract text from EPUB:', error);
+    throw error;
+  }
 }
 
 /**
