@@ -67,7 +67,7 @@ export class TTSClient {
    */
   async synthesizeText(text: string): Promise<Buffer> {
     // Professional voice artist prompt for theatrical audiobook narration
-    const narratorPrompt = `Perform as a world-class voice artist - storyteller. Extract atmosphere and emotions and express them vividly through tone, prosody, pitch, and tempo. Detect dialogue automatically: use deeper voice and firmer timbre for male roles, brighter and softer for females, lighter and higher for children. Identify each character's personality and embody it consistently throughout. `;
+    const narratorPrompt = `Read as a top voice artist in emotionally expressive yet calm, natural tone. Detect dialogue and use lower pitch / firm timbre for males, higher pitch / soft timbre for females and children. Identify each character's personality and match their voice consistently.`;
     const model = 'gemini-2.5-flash-tts';
     const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/${this.projectId}/locations/${this.location}/publishers/google/models/${model}:generateContent`;
 
