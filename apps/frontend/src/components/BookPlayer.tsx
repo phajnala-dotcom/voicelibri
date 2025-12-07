@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { BookSelector } from './BookSelector';
 
 // ========================================
 // TypeScript Interfaces
@@ -33,11 +34,17 @@ interface AudioCache {
 
 const API_BASE_URL = 'http://localhost:3001';
 const STORAGE_KEY = 'ebook-reader-position';
+const LAST_BOOK_KEY = 'ebook-reader-last-book';
 const SAVE_INTERVAL_MS = 5000; // Save position every 5 seconds
 const RETRY_ATTEMPTS = 3;
 const RETRY_DELAYS = [1000, 2000, 4000]; // Exponential backoff
 
 const SPEED_OPTIONS = [0.75, 0.9, 1.0, 1.25, 1.5];
+
+// Helper to get position storage key for specific book
+const getPositionKey = (bookFilename: string) => {
+  return `${STORAGE_KEY}-${bookFilename}`;
+};
 
 // ========================================
 // Helper Functions
@@ -54,12 +61,14 @@ const formatTime = (seconds: number): string => {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 };
 
-const savePositionToStorage = (state: PlaybackState) => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+const savePositionToStorage = (state: PlaybackState, bookFilename: string) => {
+  const key = getPositionKey(bookFilename);
+  localStorage.setItem(key, JSON.stringify(state));
 };
 
-const loadPositionFromStorage = (): PlaybackState | null => {
-  const saved = localStorage.getItem(STORAGE_KEY);
+const loadPositionFromStorage = (bookFilename: string): PlaybackState | null => {
+  const key = getPositionKey(bookFilename);
+  const saved = localStorage.getItem(key);
   if (!saved) return null;
 
   try {
@@ -113,6 +122,7 @@ const BookPlayer: React.FC = () => {
   const [loadingChunk, setLoadingChunk] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
+  const [currentBookFile, setCurrentBookFile] = useState<string>('');
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -125,6 +135,14 @@ const BookPlayer: React.FC = () => {
     const response = await fetch(`${API_BASE_URL}/api/book/info`);
     if (!response.ok) {
       throw new Error(`Failed to fetch book info: ${response.statusText}`);
+    }
+    return response.json();
+  };
+
+  const fetchAvailableBooks = async (): Promise<{ books: any[]; currentBook: string }> => {
+    const response = await fetch(`${API_BASE_URL}/api/books`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch books: ${response.statusText}`);
     }
     return response.json();
   };
@@ -543,46 +561,87 @@ const BookPlayer: React.FC = () => {
   // ========================================
 
   const savePosition = useCallback(() => {
+    if (!currentBookFile) return; // Don't save if no book loaded
+    
     const state: PlaybackState = {
       chunkIndex: currentChunkIndex,
       timeInChunk: currentTime,
     };
-    savePositionToStorage(state);
-  }, [currentChunkIndex, currentTime]);
+    savePositionToStorage(state, currentBookFile);
+  }, [currentChunkIndex, currentTime, currentBookFile]);
 
   // ========================================
   // Effects
   // ========================================
 
-  // Initial load: Fetch book info and restore position
+  // Initial load: Try to load last book or show book selector
   useEffect(() => {
     const initializePlayer = async () => {
       try {
         setLoading(true);
         
-        // Fetch book info
-        const info = await fetchBookInfo();
-        setBookInfo(info);
-        console.log('📚 Book loaded:', info);
-
-        // Load saved position
-        const savedPos = loadPositionFromStorage();
-        if (savedPos && savedPos.chunkIndex < info._internal.totalChunks) {
-          console.log('💾 Restoring saved position:', savedPos);
-          setCurrentChunkIndex(savedPos.chunkIndex);
+        // Get last selected book from localStorage
+        const lastBook = localStorage.getItem(LAST_BOOK_KEY);
+        
+        // Fetch available books
+        const booksData = await fetchAvailableBooks();
+        const availableBooks = booksData.books;
+        
+        // Determine which book to load
+        let bookToLoad: string | null = null;
+        
+        if (lastBook && availableBooks.some((b: any) => b.filename === lastBook)) {
+          // Last book still exists
+          bookToLoad = lastBook;
+          console.log('📚 Restoring last book:', lastBook);
+        } else if (availableBooks.length > 0) {
+          // No last book or it was deleted - select first available
+          bookToLoad = availableBooks[0].filename;
+          console.log('📚 Loading first available book:', bookToLoad);
+        }
+        
+        if (bookToLoad) {
+          // Load the book via API
+          const response = await fetch(`${API_BASE_URL}/api/book/select`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: bookToLoad }),
+          });
           
-          // Will restore time after audio loads
-          setTimeout(() => {
-            if (audioRef.current && savedPos.timeInChunk > 0) {
-              audioRef.current.currentTime = savedPos.timeInChunk;
-            }
-          }, 200);
+          if (!response.ok) {
+            throw new Error('Failed to load book');
+          }
+          
+          // Fetch book info
+          const info = await fetchBookInfo();
+          setBookInfo(info);
+          setCurrentBookFile(bookToLoad);
+          console.log('� Book loaded:', info);
+
+          // Load saved position for this specific book
+          const savedPos = loadPositionFromStorage(bookToLoad);
+          if (savedPos && savedPos.chunkIndex < info._internal.totalChunks) {
+            console.log('💾 Restoring saved position:', savedPos);
+            setCurrentChunkIndex(savedPos.chunkIndex);
+            
+            // Will restore time after audio loads
+            setTimeout(() => {
+              if (audioRef.current && savedPos.timeInChunk > 0) {
+                audioRef.current.currentTime = savedPos.timeInChunk;
+              }
+            }, 200);
+          }
+        } else {
+          // No books available
+          console.log('📚 No books available in assets folder');
+          setError('Žiadne knihy nenájdené. Pridajte .epub alebo .txt súbor do assets/ priečinka.');
         }
 
         setIsInitialized(true);
       } catch (error) {
         console.error('Failed to initialize player:', error);
-        setError('Nepodarilo sa načítať knihu. Obnovte stránku.');
+        setError('Nepodarilo sa načítať knihu. Skúste vybrať knihu z menu.');
+        setIsInitialized(true); // Still show UI
       } finally {
         setLoading(false);
       }
@@ -643,6 +702,66 @@ const BookPlayer: React.FC = () => {
   }, [audioCache]);
 
   // ========================================
+  // Book Selection Handler
+  // ========================================
+
+  const handleBookSelected = async (filename: string) => {
+    try {
+      console.log('📚 Book selection changed:', filename);
+      
+      // Stop playback immediately
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.src = ''; // Clear current audio source
+      }
+      setIsPlaying(false);
+      
+      // Clear cache completely
+      audioCache.forEach(({ blobUrl }) => {
+        if (blobUrl) {
+          URL.revokeObjectURL(blobUrl);
+        }
+      });
+      setAudioCache(new Map());
+      setError(null);
+      
+      // Fetch new book info (backend already loaded it via /api/book/select)
+      const info = await fetchBookInfo();
+      setBookInfo(info);
+      setCurrentBookFile(filename);
+      
+      // Save last selected book to localStorage
+      localStorage.setItem(LAST_BOOK_KEY, filename);
+      
+      // Restore position for this book
+      const savedPos = loadPositionFromStorage(filename);
+      if (savedPos && savedPos.chunkIndex < info._internal.totalChunks) {
+        console.log('💾 Restoring saved position for', filename, ':', savedPos);
+        setCurrentChunkIndex(savedPos.chunkIndex);
+        setCurrentTime(savedPos.timeInChunk);
+        
+        // Preload the chunk at saved position
+        console.log('🔄 Preloading chunk', savedPos.chunkIndex);
+        await playChunk(savedPos.chunkIndex);
+      } else {
+        // Start from beginning
+        console.log('📍 Starting from beginning');
+        setCurrentChunkIndex(0);
+        setCurrentTime(0);
+        
+        // Preload first chunk
+        console.log('🔄 Preloading first chunk');
+        await playChunk(0);
+      }
+      
+      console.log('✓ New book loaded:', info);
+    } catch (error) {
+      console.error('Failed to load new book:', error);
+      setError('Nepodarilo sa načítať novú knihu.');
+    }
+  };
+
+  // ========================================
   // Long Press Handlers
   // ========================================
 
@@ -682,6 +801,12 @@ const BookPlayer: React.FC = () => {
   return (
     <div style={styles.container}>
       <div style={styles.player}>
+        {/* Book Selector Dropdown */}
+        <BookSelector 
+          onBookSelected={handleBookSelected}
+          currentBook={currentBookFile}
+        />
+
         {/* Book Metadata Header - Centered */}
         <div style={styles.bookHeader}>
           <h1 style={styles.bookTitle}>{bookInfo.title}</h1>
