@@ -37,3 +37,6 @@ lerna-debug.log*
 
 # OS
 Thumbs.db
+
+# Windows null device (created by WAV conversion)
+**/nul
