@@ -1,0 +1,821 @@
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+
+// ========================================
+// TypeScript Interfaces
+// ========================================
+
+interface BookInfo {
+  totalChunks: number;
+  totalWords: number;
+  estimatedDuration: number; // v sekundách
+}
+
+interface PlaybackState {
+  chunkIndex: number;
+  timeInChunk: number;
+}
+
+interface AudioCache {
+  blobUrl: string;
+  loading?: boolean;
+}
+
+// ========================================
+// Constants
+// ========================================
+
+const API_BASE_URL = 'http://localhost:3001';
+const STORAGE_KEY = 'ebook-reader-position';
+const SAVE_INTERVAL_MS = 5000; // Save position every 5 seconds
+const RETRY_ATTEMPTS = 3;
+const RETRY_DELAYS = [1000, 2000, 4000]; // Exponential backoff
+
+const SPEED_OPTIONS = [0.75, 0.9, 1.0, 1.25, 1.5];
+
+// ========================================
+// Helper Functions
+// ========================================
+
+const formatTime = (seconds: number): string => {
+  const hours = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+
+  if (hours > 0) {
+    return `${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  }
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+};
+
+const savePositionToStorage = (state: PlaybackState) => {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+};
+
+const loadPositionFromStorage = (): PlaybackState | null => {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (!saved) return null;
+
+  try {
+    return JSON.parse(saved);
+  } catch (error) {
+    console.error('Failed to parse saved position:', error);
+    return null;
+  }
+};
+
+// ========================================
+// Custom Hooks
+// ========================================
+
+const useLongPress = (callback: () => void, ms = 3000) => {
+  const [startLongPress, setStartLongPress] = useState(false);
+
+  useEffect(() => {
+    let timerId: NodeJS.Timeout;
+    if (startLongPress) {
+      timerId = setTimeout(callback, ms);
+    }
+    return () => clearTimeout(timerId);
+  }, [startLongPress, callback, ms]);
+
+  return {
+    onMouseDown: () => setStartLongPress(true),
+    onMouseUp: () => setStartLongPress(false),
+    onMouseLeave: () => setStartLongPress(false),
+    onTouchStart: () => setStartLongPress(true),
+    onTouchEnd: () => setStartLongPress(false),
+  };
+};
+
+// ========================================
+// Main Component
+// ========================================
+
+const BookPlayer: React.FC = () => {
+  // ========================================
+  // State Management
+  // ========================================
+
+  const [bookInfo, setBookInfo] = useState<BookInfo | null>(null);
+  const [currentChunkIndex, setCurrentChunkIndex] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
+  const [audioCache, setAudioCache] = useState<Map<number, AudioCache>>(new Map());
+  const [currentTime, setCurrentTime] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [loadingChunk, setLoadingChunk] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isInitialized, setIsInitialized] = useState(false);
+
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // ========================================
+  // API Functions
+  // ========================================
+
+  const fetchBookInfo = async (): Promise<BookInfo> => {
+    const response = await fetch(`${API_BASE_URL}/api/book/info`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch book info: ${response.statusText}`);
+    }
+    return response.json();
+  };
+
+  const fetchChunkAudio = async (
+    chunkIndex: number,
+    retryCount = 0
+  ): Promise<string> => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/tts/chunk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chunkIndex }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch chunk ${chunkIndex}: ${response.statusText}`);
+      }
+
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      return blobUrl;
+    } catch (error) {
+      // Retry logic with exponential backoff
+      if (retryCount < RETRY_ATTEMPTS) {
+        const delay = RETRY_DELAYS[retryCount];
+        console.warn(`Retry ${retryCount + 1}/${RETRY_ATTEMPTS} for chunk ${chunkIndex} after ${delay}ms`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return fetchChunkAudio(chunkIndex, retryCount + 1);
+      }
+      throw error;
+    }
+  };
+
+  // ========================================
+  // Audio Playback Logic
+  // ========================================
+
+  const playChunk = useCallback(async (chunkIndex: number) => {
+    console.log('🎵 playChunk called for chunk:', chunkIndex);
+    
+    if (!bookInfo) {
+      console.log('❌ No bookInfo, returning');
+      return;
+    }
+
+    // Clear loading state at start
+    setLoading(true);
+    setError(null);
+    setLoadingChunk(chunkIndex);
+    console.log('🎵 Loading state set, fetching chunk...');
+
+    try {
+      // Check cache first
+      let cachedAudio = audioCache.get(chunkIndex);
+      console.log('🎵 Cache check:', cachedAudio ? 'HIT' : 'MISS');
+
+      if (!cachedAudio?.blobUrl) {
+        // Fetch from API
+        console.log('🎵 Fetching from API...');
+        const blobUrl = await fetchChunkAudio(chunkIndex);
+        console.log('🎵 Received blobUrl:', blobUrl.substring(0, 50) + '...');
+
+        // Cache it
+        setAudioCache(prev => {
+          const newCache = new Map(prev);
+          newCache.set(chunkIndex, { blobUrl });
+          return newCache;
+        });
+
+        cachedAudio = { blobUrl };
+      }
+
+      // Play audio
+      if (audioRef.current) {
+        console.log('🎵 Setting audio src and playing...');
+        audioRef.current.src = cachedAudio.blobUrl;
+        audioRef.current.playbackRate = playbackSpeed;
+        await audioRef.current.play();
+        setIsPlaying(true);
+        setCurrentChunkIndex(chunkIndex);
+        console.log('✅ Playback started successfully');
+      }
+
+      // Clear loading state on success
+      setLoading(false);
+      setLoadingChunk(null);
+
+      // Preload next chunk in background
+      if (chunkIndex + 1 < bookInfo.totalChunks) {
+        preloadNextChunk(chunkIndex + 1);
+      }
+    } catch (error) {
+      // Clear loading state on error
+      setLoading(false);
+      setLoadingChunk(null);
+      
+      console.error('❌ Error playing chunk:', error);
+      setError(`Nepodarilo sa načítať audio chunk ${chunkIndex + 1}. Skúsiť znova?`);
+      setIsPlaying(false);
+    }
+  }, [bookInfo, audioCache, playbackSpeed]);
+
+  const preloadNextChunk = async (nextIndex: number) => {
+    if (!bookInfo || nextIndex >= bookInfo.totalChunks) return;
+    if (audioCache.has(nextIndex)) return; // Already cached
+
+    console.log(`Preloading chunk ${nextIndex + 1}/${bookInfo.totalChunks}...`);
+
+    try {
+      // Mark as loading
+      setAudioCache(prev => {
+        const newCache = new Map(prev);
+        newCache.set(nextIndex, { blobUrl: '', loading: true });
+        return newCache;
+      });
+
+      const blobUrl = await fetchChunkAudio(nextIndex);
+
+      // Update cache with blob URL
+      setAudioCache(prev => {
+        const newCache = new Map(prev);
+        newCache.set(nextIndex, { blobUrl, loading: false });
+        return newCache;
+      });
+
+      console.log(`✓ Preloaded chunk ${nextIndex + 1}`);
+    } catch (error) {
+      console.warn('Preload failed for chunk', nextIndex, error);
+      
+      // Remove loading marker and failed cache entry
+      setAudioCache(prev => {
+        const newCache = new Map(prev);
+        newCache.delete(nextIndex);
+        return newCache;
+      });
+    }
+  };
+
+  // ========================================
+  // Playback Controls
+  // ========================================
+
+  const togglePlayPause = async () => {
+    console.log('🎮 togglePlayPause called, isPlaying:', isPlaying, 'audioRef.current:', !!audioRef.current);
+    
+    if (!audioRef.current) return;
+
+    if (isPlaying) {
+      audioRef.current.pause();
+      setIsPlaying(false);
+    } else {
+      // If not initialized, play current chunk
+      const hasAudioSrc = audioRef.current.src && audioRef.current.src !== '';
+      console.log('🎮 hasAudioSrc:', hasAudioSrc, 'src:', audioRef.current.src);
+      
+      if (!hasAudioSrc) {
+        console.log('🎮 Calling playChunk for chunk:', currentChunkIndex);
+        await playChunk(currentChunkIndex);
+      } else {
+        await audioRef.current.play();
+        setIsPlaying(true);
+      }
+    }
+  };
+
+  const skipSeconds = (seconds: number) => {
+    if (!audioRef.current) return;
+    audioRef.current.currentTime = Math.max(
+      0,
+      Math.min(audioRef.current.duration || 0, audioRef.current.currentTime + seconds)
+    );
+  };
+
+  const skipMinutes = (minutes: number) => {
+    skipSeconds(minutes * 60);
+  };
+
+  const changeSpeed = (speed: number) => {
+    setPlaybackSpeed(speed);
+    if (audioRef.current) {
+      audioRef.current.playbackRate = speed;
+    }
+  };
+
+  const retryCurrentChunk = () => {
+    setError(null);
+    
+    // Clear failed cache entry
+    setAudioCache(prev => {
+      const newCache = new Map(prev);
+      newCache.delete(currentChunkIndex);
+      return newCache;
+    });
+    
+    // Retry playback
+    playChunk(currentChunkIndex);
+  };
+
+  // ========================================
+  // Audio Event Handlers
+  // ========================================
+
+  const handleAudioEnded = useCallback(() => {
+    if (!bookInfo) return;
+
+    // Auto-advance to next chunk
+    if (currentChunkIndex < bookInfo.totalChunks - 1) {
+      playChunk(currentChunkIndex + 1);
+    } else {
+      // Book finished
+      setIsPlaying(false);
+      setCurrentChunkIndex(0);
+      if (audioRef.current) {
+        audioRef.current.currentTime = 0;
+      }
+      console.log('📚 Book finished!');
+    }
+  }, [bookInfo, currentChunkIndex, playChunk]);
+
+  const handleTimeUpdate = useCallback(() => {
+    if (!audioRef.current) return;
+    setCurrentTime(audioRef.current.currentTime);
+  }, []);
+
+  const handleAudioError = useCallback((e: Event) => {
+    console.error('Audio playback error:', e);
+    setError('Chyba pri prehrávaní audio. Skúsiť znova?');
+    setIsPlaying(false);
+  }, []);
+
+  // ========================================
+  // Progress Calculation
+  // ========================================
+
+  const calculateProgress = (): number => {
+    if (!bookInfo) return 0;
+
+    const avgChunkDuration = bookInfo.estimatedDuration / bookInfo.totalChunks;
+    const totalElapsed = currentChunkIndex * avgChunkDuration + currentTime;
+    return Math.min(100, (totalElapsed / bookInfo.estimatedDuration) * 100);
+  };
+
+  const getCurrentTotalTime = (): number => {
+    if (!bookInfo) return 0;
+    const avgChunkDuration = bookInfo.estimatedDuration / bookInfo.totalChunks;
+    return currentChunkIndex * avgChunkDuration + currentTime;
+  };
+
+  // ========================================
+  // localStorage Save/Load
+  // ========================================
+
+  const savePosition = useCallback(() => {
+    const state: PlaybackState = {
+      chunkIndex: currentChunkIndex,
+      timeInChunk: currentTime,
+    };
+    savePositionToStorage(state);
+  }, [currentChunkIndex, currentTime]);
+
+  // ========================================
+  // Effects
+  // ========================================
+
+  // Initial load: Fetch book info and restore position
+  useEffect(() => {
+    const initializePlayer = async () => {
+      try {
+        setLoading(true);
+        
+        // Fetch book info
+        const info = await fetchBookInfo();
+        setBookInfo(info);
+        console.log('📚 Book loaded:', info);
+
+        // Load saved position
+        const savedPos = loadPositionFromStorage();
+        if (savedPos && savedPos.chunkIndex < info.totalChunks) {
+          console.log('💾 Restoring saved position:', savedPos);
+          setCurrentChunkIndex(savedPos.chunkIndex);
+          
+          // Will restore time after audio loads
+          setTimeout(() => {
+            if (audioRef.current && savedPos.timeInChunk > 0) {
+              audioRef.current.currentTime = savedPos.timeInChunk;
+            }
+          }, 200);
+        }
+
+        setIsInitialized(true);
+      } catch (error) {
+        console.error('Failed to initialize player:', error);
+        setError('Nepodarilo sa načítať knihu. Obnovte stránku.');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    initializePlayer();
+  }, []);
+
+  // Attach audio event listeners
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    audio.addEventListener('ended', handleAudioEnded);
+    audio.addEventListener('timeupdate', handleTimeUpdate);
+    audio.addEventListener('error', handleAudioError);
+
+    return () => {
+      audio.removeEventListener('ended', handleAudioEnded);
+      audio.removeEventListener('timeupdate', handleTimeUpdate);
+      audio.removeEventListener('error', handleAudioError);
+    };
+  }, [handleAudioEnded, handleTimeUpdate, handleAudioError]);
+
+  // Auto-save position every 5 seconds during playback
+  useEffect(() => {
+    if (isPlaying) {
+      saveTimerRef.current = setInterval(() => {
+        savePosition();
+      }, SAVE_INTERVAL_MS);
+    } else {
+      if (saveTimerRef.current) {
+        clearInterval(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+      // Save immediately when pausing
+      savePosition();
+    }
+
+    return () => {
+      if (saveTimerRef.current) {
+        clearInterval(saveTimerRef.current);
+      }
+    };
+  }, [isPlaying, savePosition]);
+
+  // Cleanup blob URLs on unmount
+  useEffect(() => {
+    return () => {
+      audioCache.forEach(({ blobUrl }) => {
+        if (blobUrl) {
+          URL.revokeObjectURL(blobUrl);
+        }
+      });
+    };
+  }, [audioCache]);
+
+  // ========================================
+  // Long Press Handlers
+  // ========================================
+
+  const backwardBigPress = useLongPress(() => {
+    console.log('⏪ Long press: -5 minutes');
+    skipMinutes(-5);
+  });
+
+  const forwardBigPress = useLongPress(() => {
+    console.log('⏩ Long press: +5 minutes');
+    skipMinutes(5);
+  });
+
+  // ========================================
+  // Render
+  // ========================================
+
+  if (!isInitialized || !bookInfo) {
+    return (
+      <div style={styles.container}>
+        <div style={styles.loadingContainer}>
+          <h2>📚 Načítavam knihu...</h2>
+          {loading && <p>Čakajte prosím...</p>}
+          {error && (
+            <div style={styles.errorBox}>
+              <p>{error}</p>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const progress = calculateProgress();
+  const totalElapsed = getCurrentTotalTime();
+
+  return (
+    <div style={styles.container}>
+      <div style={styles.player}>
+        {/* Title */}
+        <h1 style={styles.title}>📚 Ebook Reader POC 2.0</h1>
+        <h2 style={styles.subtitle}>Émile Zola - Povídky</h2>
+
+        {/* Progress Bar - Celá kniha */}
+        <div style={styles.progressSection}>
+          <div style={styles.progressBar}>
+            <div style={{ ...styles.progressFill, width: `${progress}%` }} />
+          </div>
+          <div style={styles.progressText}>
+            {Math.round(progress)}%
+          </div>
+        </div>
+
+        {/* Chunk Info */}
+        <div style={styles.chunkInfo}>
+          Chunk {currentChunkIndex + 1}/{bookInfo.totalChunks} | {formatTime(totalElapsed)} /{' '}
+          {formatTime(bookInfo.estimatedDuration)}
+        </div>
+
+        {/* Playback Controls */}
+        <div style={styles.controls}>
+          {/* Skip Backward 5 min (long press) */}
+          <button
+            {...backwardBigPress}
+            onClick={() => skipSeconds(-30)}
+            style={styles.controlButton}
+            title="Click: -30s | Hold 3s: -5min"
+          >
+            <span style={styles.buttonIcon}>◀◀</span>
+            <span style={styles.buttonLabel}>-5m</span>
+          </button>
+
+          {/* Skip Backward 30s */}
+          <button onClick={() => skipSeconds(-30)} style={styles.controlButton} title="-30s">
+            <span style={styles.buttonIcon}>◀</span>
+            <span style={styles.buttonLabel}>-30s</span>
+          </button>
+
+          {/* Play/Pause */}
+          <button
+            onClick={togglePlayPause}
+            style={{ ...styles.controlButton, ...styles.playButton }}
+            disabled={loading}
+          >
+            {loading ? (
+              <span style={styles.buttonIcon}>⏳</span>
+            ) : isPlaying ? (
+              <span style={styles.buttonIcon}>⏸</span>
+            ) : (
+              <span style={styles.buttonIcon}>▶</span>
+            )}
+            <span style={styles.buttonLabel}>{isPlaying ? 'PAUSE' : 'PLAY'}</span>
+          </button>
+
+          {/* Skip Forward 30s */}
+          <button onClick={() => skipSeconds(30)} style={styles.controlButton} title="+30s">
+            <span style={styles.buttonIcon}>▶</span>
+            <span style={styles.buttonLabel}>+30s</span>
+          </button>
+
+          {/* Skip Forward 5 min (long press) */}
+          <button
+            {...forwardBigPress}
+            onClick={() => skipSeconds(30)}
+            style={styles.controlButton}
+            title="Click: +30s | Hold 3s: +5min"
+          >
+            <span style={styles.buttonIcon}>▶▶</span>
+            <span style={styles.buttonLabel}>+5m</span>
+          </button>
+        </div>
+
+        {/* Speed Control */}
+        <div style={styles.speedControl}>
+          <label style={styles.speedLabel}>Speed:</label>
+          <select
+            value={playbackSpeed}
+            onChange={e => changeSpeed(parseFloat(e.target.value))}
+            style={styles.speedSelect}
+          >
+            {SPEED_OPTIONS.map(speed => (
+              <option key={speed} value={speed}>
+                {speed.toFixed(2)}x
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Loading/Error Messages */}
+        {loadingChunk !== null && (
+          <div style={styles.loadingMessage}>
+            ⏳ Generujem audio chunk {loadingChunk + 1}/{bookInfo.totalChunks}... (cca 25s)
+          </div>
+        )}
+
+        {audioCache.get(currentChunkIndex + 1)?.loading && (
+          <div style={styles.preloadMessage}>
+            🔄 Preloadujem ďalší chunk...
+          </div>
+        )}
+
+        {error && (
+          <div style={styles.errorBox}>
+            <p>{error}</p>
+            <button onClick={retryCurrentChunk} style={styles.retryButton}>
+              🔄 Skúsiť znova
+            </button>
+          </div>
+        )}
+
+        {/* Native Audio Player - Current Chunk Progress */}
+        <div style={styles.audioSection}>
+          <p style={styles.audioLabel}>🔊 Aktuálny chunk:</p>
+          <audio ref={audioRef} controls style={styles.audioPlayer} />
+        </div>
+
+        {/* Debug Info */}
+        <div style={styles.debugInfo}>
+          <small>
+            Cache: {audioCache.size} chunks | Playing: {isPlaying ? 'Yes' : 'No'} | Speed:{' '}
+            {playbackSpeed}x
+          </small>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ========================================
+// Styles
+// ========================================
+
+const styles: { [key: string]: React.CSSProperties } = {
+  container: {
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    minHeight: '100vh',
+    backgroundColor: '#f5f5f5',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+    padding: '20px',
+  },
+  player: {
+    backgroundColor: 'white',
+    borderRadius: '16px',
+    boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
+    padding: '40px',
+    maxWidth: '700px',
+    width: '100%',
+  },
+  title: {
+    fontSize: '28px',
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: '8px',
+    color: '#333',
+  },
+  subtitle: {
+    fontSize: '20px',
+    textAlign: 'center',
+    marginBottom: '32px',
+    color: '#666',
+    fontWeight: 'normal',
+  },
+  progressSection: {
+    marginBottom: '16px',
+  },
+  progressBar: {
+    width: '100%',
+    height: '12px',
+    backgroundColor: '#e0e0e0',
+    borderRadius: '6px',
+    overflow: 'hidden',
+    marginBottom: '8px',
+  },
+  progressFill: {
+    height: '100%',
+    backgroundColor: '#4CAF50',
+    transition: 'width 0.3s ease',
+  },
+  progressText: {
+    textAlign: 'right',
+    fontSize: '14px',
+    color: '#666',
+    fontWeight: 'bold',
+  },
+  chunkInfo: {
+    textAlign: 'center',
+    fontSize: '18px',
+    marginBottom: '32px',
+    color: '#333',
+    fontWeight: '500',
+  },
+  controls: {
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: '12px',
+    marginBottom: '24px',
+    flexWrap: 'wrap',
+  },
+  controlButton: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '12px 16px',
+    border: '2px solid #ddd',
+    borderRadius: '8px',
+    backgroundColor: 'white',
+    cursor: 'pointer',
+    fontSize: '14px',
+    transition: 'all 0.2s',
+    minWidth: '80px',
+  },
+  playButton: {
+    backgroundColor: '#4CAF50',
+    color: 'white',
+    borderColor: '#4CAF50',
+    minWidth: '100px',
+    fontWeight: 'bold',
+  },
+  buttonIcon: {
+    fontSize: '24px',
+    marginBottom: '4px',
+  },
+  buttonLabel: {
+    fontSize: '12px',
+    textTransform: 'uppercase',
+  },
+  speedControl: {
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: '12px',
+    marginBottom: '24px',
+  },
+  speedLabel: {
+    fontSize: '16px',
+    fontWeight: '500',
+  },
+  speedSelect: {
+    padding: '8px 12px',
+    fontSize: '16px',
+    borderRadius: '6px',
+    border: '2px solid #ddd',
+    cursor: 'pointer',
+  },
+  audioSection: {
+    marginTop: '24px',
+    padding: '16px',
+    backgroundColor: '#f9f9f9',
+    borderRadius: '8px',
+  },
+  audioLabel: {
+    marginBottom: '8px',
+    fontSize: '14px',
+    color: '#666',
+  },
+  audioPlayer: {
+    width: '100%',
+  },
+  loadingMessage: {
+    textAlign: 'center',
+    padding: '12px',
+    backgroundColor: '#fff3cd',
+    borderRadius: '6px',
+    marginBottom: '16px',
+    fontSize: '14px',
+    color: '#856404',
+  },
+  preloadMessage: {
+    textAlign: 'center',
+    padding: '8px',
+    backgroundColor: '#d1ecf1',
+    borderRadius: '6px',
+    marginBottom: '16px',
+    fontSize: '12px',
+    color: '#0c5460',
+  },
+  errorBox: {
+    padding: '16px',
+    backgroundColor: '#f8d7da',
+    borderRadius: '6px',
+    marginBottom: '16px',
+    textAlign: 'center',
+  },
+  retryButton: {
+    marginTop: '12px',
+    padding: '8px 16px',
+    backgroundColor: '#dc3545',
+    color: 'white',
+    border: 'none',
+    borderRadius: '6px',
+    cursor: 'pointer',
+    fontSize: '14px',
+  },
+  debugInfo: {
+    marginTop: '16px',
+    textAlign: 'center',
+    color: '#999',
+  },
+  loadingContainer: {
+    textAlign: 'center',
+    padding: '40px',
+  },
+};
+
+export default BookPlayer;
