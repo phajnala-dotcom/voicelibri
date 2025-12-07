@@ -1,0 +1,13 @@
+{
+  "type": "service_account",
+  "project_id": "calmbridge-2",
+  "private_key_id": "89242e49072b19ee1fef5fea5c7c728288691c6c",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQClkk9lONVsTpdO\nyZzwg/2Rfki1gkbw8fT6/XloRuB79w9tEU0/d3+y160e///evZrqr0xQmb+ZfNsm\nJPEiAaIAyBuHM8l9+1ZxYmtRlpNAbNbEGBgq2iuYlH4dXXVGaEbK2fQsdqNbDEfy\nZdxredTCN6qqOWVKSkNSxcAK/CjVavWOYdHh4QP6TM6RPR1MjqDyRSSm8zoCLPCV\nwc/StD9cgj9geLNbIjYP6emyQCh3NeB0RYBzmI9L4asIywUbGu+ALZEOokPqHZjL\nUMWlCeLj7Rsa+IWDan1nDx5R6m79fRMzVjAjHinzcyqLJ4tYvPn2EFhmJ6p6XTF1\n8JG5hLJFAgMBAAECggEAFrB/Ktrn/GikuYpNdHRSCl8o7Z7Fw/0UWlTkD1MvLi3E\nMmkdkeX5XPPLaKUiVk7bbO/K4HzBUfJXQdnsJYHdxoelphiFszr/NJiNJmghE8IW\niFbY8P5m3Qj0Y2fMS3K8yM2ndXRonHCJZ4Fn/F58toTUYXFuHQkiQrSQxbCak+xU\n/WIulvAvdbntEui9T5/OPMzdurv6q5rOV4a2MqE7HZpiFhTrKvcKzEA7Hzz5tAXI\n8uKvJO6v0RkUqojrnFNjO8tpH/Il7WL2M3XvGUF64r4qqRY0FqwFDnjxO8EyPmLI\niAPzYge+9qkxbHmG74YLqlxNaTgdZe+aTYv4asfwXQKBgQDQ7ePfVmEtEjT6TzuW\nr8DnYSiDNJql54qEraRMrc25nYyNv1KXB79lgzeCSvkCJk1oDKGjk/APvUFJnYHF\n+9C8VexLmNl01lOzfBlK0dlhhAMc9aQnYPB9LsTmy60TdCKvv2ul0Ph7Rswd0jW/\nq0sL6dB2S9ZDZxMjxNPmF4ZRBwKBgQDK370kmHmzG3nVbmSaA4frxlO3CTqxtCWS\noo/+pRofgS0PBqAL2nah0nmyldK9DG0TG9tU+Xz6lta3ki2fFxvrwXtsTT45GWhA\nK424BNtFw+DUzpC8SfsbJIlHCh5JnnlnZGVa+apJNwJu35HWXYTEGyE/TEzTBVm5\nZkBGE/HrUwKBgHdKTKBZJpTgX2VH1gMciGzT2ZjIcUAmqr1Ek5nAZsUDQpwwUAyx\nvMNOH2SCQBjNG8c75xKJxjiGW3+XseAD/lN6T7d+JzMBqLrDMYG5vX9jK4/eZQKi\n48zl5kDMrB5+Ycus5N7BKQ7iBmtEebHdMLU1o/PXKxhDAveaS06FwggDAoGBALM+\n267pyR0muY6J6vjpBb6bjHu7+8/miwvz9aXX2izbxSPxhpbyfr6baEsRdRDzWav4\ngOGjTXlarHuk/AoEMPcsDBC0brWkbSfFU4GzSMlrN8rOd7Lk6qggr+nEVt5U1o8z\ndRncXUgzAkNT5Vaxagyaq9VxZK9NmujkHwXLuYNhAoGAYl3rxKBa9pH4bdQjvgPs\n7njh370tJOM77bVWMpRb0SGtKozFE+0u5/J1DynwB0A2U+QprzuC4JXGZyLiX9IY\nmip048eNiApJBsICpYwKLro78w9f9ztw6buYJPQAkT/UizNTof3Lwkq8EMMTXS0P\n9HhZQAZNWOt61432022iwds=\n-----END PRIVATE KEY-----\n",
+  "client_email": "calmbridge-2@calmbridge-2.iam.gserviceaccount.com",
+  "client_id": "103485176537941435313",
+  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+  "token_uri": "https://oauth2.googleapis.com/token",
+  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/calmbridge-2%40calmbridge-2.iam.gserviceaccount.com",
+  "universe_domain": "googleapis.com"
+}
