@@ -5,9 +5,15 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 // ========================================
 
 interface BookInfo {
-  totalChunks: number;
-  totalWords: number;
-  estimatedDuration: number; // v sekundách
+  title: string;
+  author: string;
+  language?: string;
+  estimatedDuration: string; // Format: "hh:mm"
+  // Internal data for calculations (not for display)
+  _internal: {
+    totalChunks: number;
+    durationSeconds: number;
+  };
 }
 
 interface PlaybackState {
@@ -18,6 +24,7 @@ interface PlaybackState {
 interface AudioCache {
   blobUrl: string;
   loading?: boolean;
+  duration?: number; // Store actual audio duration in seconds
 }
 
 // ========================================
@@ -189,6 +196,25 @@ const BookPlayer: React.FC = () => {
         });
 
         cachedAudio = { blobUrl };
+      } else {
+        // Verify blob URL is still valid by testing if we can fetch it
+        console.log('🎵 Verifying cached blob URL...');
+        try {
+          const testResponse = await fetch(cachedAudio.blobUrl, { method: 'HEAD' });
+          if (!testResponse.ok) {
+            throw new Error('Blob URL invalid');
+          }
+        } catch (verifyError) {
+          console.warn('⚠️ Cached blob URL is invalid, re-fetching...');
+          // Re-fetch if blob URL is invalid
+          const blobUrl = await fetchChunkAudio(chunkIndex);
+          setAudioCache(prev => {
+            const newCache = new Map(prev);
+            newCache.set(chunkIndex, { blobUrl });
+            return newCache;
+          });
+          cachedAudio = { blobUrl };
+        }
       }
 
       // Play audio
@@ -207,7 +233,7 @@ const BookPlayer: React.FC = () => {
       setLoadingChunk(null);
 
       // Preload next chunk in background
-      if (chunkIndex + 1 < bookInfo.totalChunks) {
+      if (chunkIndex + 1 < bookInfo._internal.totalChunks) {
         preloadNextChunk(chunkIndex + 1);
       }
     } catch (error) {
@@ -222,10 +248,10 @@ const BookPlayer: React.FC = () => {
   }, [bookInfo, audioCache, playbackSpeed]);
 
   const preloadNextChunk = async (nextIndex: number) => {
-    if (!bookInfo || nextIndex >= bookInfo.totalChunks) return;
+    if (!bookInfo || nextIndex >= bookInfo._internal.totalChunks) return;
     if (audioCache.has(nextIndex)) return; // Already cached
 
-    console.log(`Preloading chunk ${nextIndex + 1}/${bookInfo.totalChunks}...`);
+    console.log(`Preloading chunk ${nextIndex + 1}/${bookInfo._internal.totalChunks}...`);
 
     try {
       // Mark as loading
@@ -284,12 +310,139 @@ const BookPlayer: React.FC = () => {
     }
   };
 
-  const skipSeconds = (seconds: number) => {
-    if (!audioRef.current) return;
-    audioRef.current.currentTime = Math.max(
-      0,
-      Math.min(audioRef.current.duration || 0, audioRef.current.currentTime + seconds)
-    );
+  /**
+   * Skip forward/backward with cross-chunk seeking
+   * Uses actual cached audio durations for precise skip intervals
+   */
+  const skipSeconds = async (seconds: number) => {
+    if (!audioRef.current || !bookInfo) return;
+
+    const currentTimeInChunk = audioRef.current.currentTime;
+    const currentChunkDuration = audioRef.current.duration || 0;
+    const newTimeInChunk = currentTimeInChunk + seconds;
+
+    console.log(`🔍 Skip ${seconds}s: currentChunk=${currentChunkIndex}, currentTime=${currentTimeInChunk.toFixed(2)}s, duration=${currentChunkDuration.toFixed(2)}s`);
+
+    // If new time is within current chunk bounds, simple seek
+    if (newTimeInChunk >= 0 && newTimeInChunk < currentChunkDuration) {
+      console.log(`✅ Simple seek to ${newTimeInChunk.toFixed(2)}s within current chunk`);
+      audioRef.current.currentTime = newTimeInChunk;
+      return;
+    }
+
+    // Cross-chunk seeking needed
+    let remainingSkip = seconds;
+    let targetChunkIndex = currentChunkIndex;
+    let targetTimeInChunk = currentTimeInChunk;
+
+    if (seconds > 0) {
+      // Skip forward
+      remainingSkip = seconds - (currentChunkDuration - currentTimeInChunk);
+      targetChunkIndex++;
+      targetTimeInChunk = 0;
+
+      // Use cached durations when available, fall back to estimate
+      const avgChunkDuration = bookInfo._internal.durationSeconds / bookInfo._internal.totalChunks;
+      
+      while (remainingSkip > 0 && targetChunkIndex < bookInfo._internal.totalChunks) {
+        const cachedChunk = audioCache.get(targetChunkIndex);
+        const chunkDuration = cachedChunk?.duration || avgChunkDuration;
+        
+        if (remainingSkip <= chunkDuration) {
+          // This is our target chunk
+          targetTimeInChunk = remainingSkip;
+          break;
+        }
+        
+        remainingSkip -= chunkDuration;
+        targetChunkIndex++;
+      }
+
+      // Clamp to last chunk
+      if (targetChunkIndex >= bookInfo._internal.totalChunks) {
+        targetChunkIndex = bookInfo._internal.totalChunks - 1;
+        targetTimeInChunk = 0; // Will be set to end of last chunk
+      }
+    } else {
+      // Skip backward
+      remainingSkip = Math.abs(seconds) - currentTimeInChunk;
+      
+      console.log(`⬅️ Backward skip: remainingSkip=${remainingSkip.toFixed(2)}s after current chunk`);
+      
+      const avgChunkDuration = bookInfo._internal.durationSeconds / bookInfo._internal.totalChunks;
+      
+      // If we can stay in current chunk
+      if (remainingSkip <= 0) {
+        targetTimeInChunk = currentTimeInChunk + seconds; // seconds is negative
+        targetChunkIndex = currentChunkIndex;
+        console.log(`✅ Stay in current chunk, new time=${targetTimeInChunk.toFixed(2)}s`);
+      } else {
+        // Need to go to previous chunks
+        targetChunkIndex = currentChunkIndex - 1;
+        console.log(`🔙 Going backward from chunk ${currentChunkIndex}, starting at chunk ${targetChunkIndex}`);
+        
+        while (remainingSkip > 0 && targetChunkIndex >= 0) {
+          const cachedChunk = audioCache.get(targetChunkIndex);
+          const chunkDuration = cachedChunk?.duration || avgChunkDuration;
+          
+          console.log(`  Checking chunk ${targetChunkIndex}: duration=${chunkDuration.toFixed(2)}s, remaining=${remainingSkip.toFixed(2)}s`);
+          
+          if (remainingSkip <= chunkDuration) {
+            // This is our target chunk
+            targetTimeInChunk = chunkDuration - remainingSkip;
+            console.log(`  ✅ Target found! chunk=${targetChunkIndex}, time=${targetTimeInChunk.toFixed(2)}s`);
+            break;
+          }
+          
+          remainingSkip -= chunkDuration;
+          targetChunkIndex--;
+        }
+
+        // Clamp to first chunk
+        if (targetChunkIndex < 0) {
+          targetChunkIndex = 0;
+          targetTimeInChunk = 0;
+          console.log(`⚠️ Clamped to first chunk`);
+        }
+      }
+    }
+
+    // Validate target chunk index
+    if (targetChunkIndex < 0 || targetChunkIndex >= bookInfo._internal.totalChunks) {
+      console.warn(`⚠️ Invalid target chunk: ${targetChunkIndex}, clamping to valid range`);
+      targetChunkIndex = Math.max(0, Math.min(targetChunkIndex, bookInfo._internal.totalChunks - 1));
+    }
+
+    console.log(`🎯 Final target: chunk=${targetChunkIndex}, time=${targetTimeInChunk.toFixed(2)}s`);
+
+    // Execute the skip
+    if (targetChunkIndex !== currentChunkIndex) {
+      console.log(`⏩ Cross-chunk skip: chunk ${currentChunkIndex} → ${targetChunkIndex}, target time: ${targetTimeInChunk.toFixed(1)}s`);
+      
+      const wasPlaying = isPlaying;
+      if (wasPlaying) {
+        audioRef.current.pause();
+        setIsPlaying(false);
+      }
+
+      // Don't set currentChunkIndex here - let playChunk do it on success
+      await playChunk(targetChunkIndex);
+      
+      // Set time position after chunk loads
+      setTimeout(() => {
+        if (audioRef.current) {
+          const safeDuration = audioRef.current.duration || 0;
+          audioRef.current.currentTime = Math.min(Math.max(0, targetTimeInChunk), safeDuration);
+          if (wasPlaying) {
+            audioRef.current.play();
+          }
+        }
+      }, 100);
+    } else {
+      // Same chunk, just adjust time
+      console.log(`↔️ Same chunk skip to ${newTimeInChunk.toFixed(2)}s`);
+      audioRef.current.currentTime = Math.max(0, Math.min(currentChunkDuration, newTimeInChunk));
+    }
   };
 
   const skipMinutes = (minutes: number) => {
@@ -325,7 +478,7 @@ const BookPlayer: React.FC = () => {
     if (!bookInfo) return;
 
     // Auto-advance to next chunk
-    if (currentChunkIndex < bookInfo.totalChunks - 1) {
+    if (currentChunkIndex < bookInfo._internal.totalChunks - 1) {
       playChunk(currentChunkIndex + 1);
     } else {
       // Book finished
@@ -343,6 +496,24 @@ const BookPlayer: React.FC = () => {
     setCurrentTime(audioRef.current.currentTime);
   }, []);
 
+  const handleLoadedMetadata = useCallback(() => {
+    if (!audioRef.current) return;
+    
+    // Store actual audio duration in cache
+    const duration = audioRef.current.duration;
+    if (duration && !isNaN(duration)) {
+      setAudioCache(prev => {
+        const newCache = new Map(prev);
+        const existing = newCache.get(currentChunkIndex);
+        if (existing) {
+          newCache.set(currentChunkIndex, { ...existing, duration });
+        }
+        return newCache;
+      });
+      console.log(`📊 Chunk ${currentChunkIndex} duration: ${duration.toFixed(2)}s`);
+    }
+  }, [currentChunkIndex]);
+
   const handleAudioError = useCallback((e: Event) => {
     console.error('Audio playback error:', e);
     setError('Chyba pri prehrávaní audio. Skúsiť znova?');
@@ -356,14 +527,14 @@ const BookPlayer: React.FC = () => {
   const calculateProgress = (): number => {
     if (!bookInfo) return 0;
 
-    const avgChunkDuration = bookInfo.estimatedDuration / bookInfo.totalChunks;
+    const avgChunkDuration = bookInfo._internal.durationSeconds / bookInfo._internal.totalChunks;
     const totalElapsed = currentChunkIndex * avgChunkDuration + currentTime;
-    return Math.min(100, (totalElapsed / bookInfo.estimatedDuration) * 100);
+    return Math.min(100, (totalElapsed / bookInfo._internal.durationSeconds) * 100);
   };
 
   const getCurrentTotalTime = (): number => {
     if (!bookInfo) return 0;
-    const avgChunkDuration = bookInfo.estimatedDuration / bookInfo.totalChunks;
+    const avgChunkDuration = bookInfo._internal.durationSeconds / bookInfo._internal.totalChunks;
     return currentChunkIndex * avgChunkDuration + currentTime;
   };
 
@@ -396,7 +567,7 @@ const BookPlayer: React.FC = () => {
 
         // Load saved position
         const savedPos = loadPositionFromStorage();
-        if (savedPos && savedPos.chunkIndex < info.totalChunks) {
+        if (savedPos && savedPos.chunkIndex < info._internal.totalChunks) {
           console.log('💾 Restoring saved position:', savedPos);
           setCurrentChunkIndex(savedPos.chunkIndex);
           
@@ -427,14 +598,16 @@ const BookPlayer: React.FC = () => {
 
     audio.addEventListener('ended', handleAudioEnded);
     audio.addEventListener('timeupdate', handleTimeUpdate);
+    audio.addEventListener('loadedmetadata', handleLoadedMetadata);
     audio.addEventListener('error', handleAudioError);
 
     return () => {
       audio.removeEventListener('ended', handleAudioEnded);
       audio.removeEventListener('timeupdate', handleTimeUpdate);
+      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
       audio.removeEventListener('error', handleAudioError);
     };
-  }, [handleAudioEnded, handleTimeUpdate, handleAudioError]);
+  }, [handleAudioEnded, handleTimeUpdate, handleLoadedMetadata, handleAudioError]);
 
   // Auto-save position every 5 seconds during playback
   useEffect(() => {
@@ -509,9 +682,21 @@ const BookPlayer: React.FC = () => {
   return (
     <div style={styles.container}>
       <div style={styles.player}>
-        {/* Title */}
-        <h1 style={styles.title}>📚 Ebook Reader POC 2.0</h1>
-        <h2 style={styles.subtitle}>Émile Zola - Povídky</h2>
+        {/* Book Metadata Header - Centered */}
+        <div style={styles.bookHeader}>
+          <h1 style={styles.bookTitle}>{bookInfo.title}</h1>
+          <h2 style={styles.bookAuthor}>{bookInfo.author}</h2>
+          <div style={styles.bookDetails}>
+            {bookInfo.language && (
+              <span style={styles.languageBadge}>
+                🌐 {bookInfo.language.toUpperCase()}
+              </span>
+            )}
+            <span style={styles.durationBadge}>
+              ⏱️ {bookInfo.estimatedDuration}
+            </span>
+          </div>
+        </div>
 
         {/* Progress Bar - Celá kniha */}
         <div style={styles.progressSection}>
@@ -525,8 +710,8 @@ const BookPlayer: React.FC = () => {
 
         {/* Chunk Info */}
         <div style={styles.chunkInfo}>
-          Chunk {currentChunkIndex + 1}/{bookInfo.totalChunks} | {formatTime(totalElapsed)} /{' '}
-          {formatTime(bookInfo.estimatedDuration)}
+          Chunk {currentChunkIndex + 1}/{bookInfo._internal.totalChunks} | {formatTime(totalElapsed)} /{' '}
+          {bookInfo.estimatedDuration}
         </div>
 
         {/* Playback Controls */}
@@ -539,7 +724,7 @@ const BookPlayer: React.FC = () => {
             title="Click: -30s | Hold 3s: -5min"
           >
             <span style={styles.buttonIcon}>◀◀</span>
-            <span style={styles.buttonLabel}>-5m</span>
+            <span style={styles.buttonLabel}>-5min</span>
           </button>
 
           {/* Skip Backward 30s */}
@@ -578,7 +763,7 @@ const BookPlayer: React.FC = () => {
             title="Click: +30s | Hold 3s: +5min"
           >
             <span style={styles.buttonIcon}>▶▶</span>
-            <span style={styles.buttonLabel}>+5m</span>
+            <span style={styles.buttonLabel}>+5min</span>
           </button>
         </div>
 
@@ -601,7 +786,7 @@ const BookPlayer: React.FC = () => {
         {/* Loading/Error Messages */}
         {loadingChunk !== null && (
           <div style={styles.loadingMessage}>
-            ⏳ Generujem audio chunk {loadingChunk + 1}/{bookInfo.totalChunks}... (cca 25s)
+            ⏳ Generujem audio chunk {loadingChunk + 1}/{bookInfo._internal.totalChunks}... (cca 25s)
           </div>
         )}
 
@@ -660,19 +845,50 @@ const styles: { [key: string]: React.CSSProperties } = {
     maxWidth: '700px',
     width: '100%',
   },
-  title: {
-    fontSize: '28px',
-    fontWeight: 'bold',
-    textAlign: 'center',
-    marginBottom: '8px',
-    color: '#333',
-  },
-  subtitle: {
-    fontSize: '20px',
+  // Book metadata header - centered layout
+  bookHeader: {
     textAlign: 'center',
     marginBottom: '32px',
+    paddingBottom: '24px',
+    borderBottom: '2px solid #e0e0e0',
+  },
+  bookTitle: {
+    fontSize: '28px',
+    fontWeight: 'bold',
+    margin: '0 0 12px 0',
+    color: '#1a1a1a',
+    lineHeight: '1.3',
+  },
+  bookAuthor: {
+    fontSize: '20px',
+    margin: '0 0 16px 0',
     color: '#666',
-    fontWeight: 'normal',
+    fontWeight: '500',
+  },
+  bookDetails: {
+    display: 'flex',
+    gap: '12px',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  languageBadge: {
+    display: 'inline-block',
+    padding: '6px 14px',
+    backgroundColor: '#e3f2fd',
+    color: '#1976d2',
+    borderRadius: '12px',
+    fontSize: '13px',
+    fontWeight: '600',
+  },
+  durationBadge: {
+    display: 'inline-block',
+    padding: '6px 14px',
+    backgroundColor: '#f3e5f5',
+    color: '#7b1fa2',
+    borderRadius: '12px',
+    fontSize: '13px',
+    fontWeight: '600',
   },
   progressSection: {
     marginBottom: '16px',
