@@ -66,21 +66,8 @@ export class TTSClient {
    * @returns Buffer containing audio data (PCM/WAV format)
    */
   async synthesizeText(text: string): Promise<Buffer> {
-    // Advanced dramatic narration prompt for professional audiobook performance
-    const narratorPrompt = `Perform this text as a skilled audiobook narrator with theatrical expertise:
-
-NARRATION (non-dialogue): Use warm, storytelling voice with measured pacing that reflects the scene's mood—slow and contemplative for introspective moments, faster and urgent for action.
-
-DIALOGUE (quoted speech): Embody each character distinctly:
-- Male characters: Lower pitch, firmer tone
-- Female characters: Higher pitch, softer quality  
-- Adjust emotional intensity to match context—whispered secrets, shouted arguments, tearful confessions
-
-TONE & EXPRESSION: Let emotions guide your delivery—joyful scenes sound bright and energetic, tense moments become tight and anxious, sad passages carry weight and melancholy. Match the atmosphere naturally.
-
-PACING: Vary tempo organically—pause at commas and periods, rush through excitement, linger on important revelations. Breathe life into punctuation.
-
-Read naturally as if telling this story to a captivated listener: `;
+    // Professional voice artist prompt for theatrical audiobook narration
+    const narratorPrompt = `Perform as a world-class voice artist - storyteller. Extract atmosphere and emotions and express them vividly through tone, prosody, pitch, and tempo. Detect dialogue automatically: use deeper voice and firmer timbre for male roles, brighter and softer for females, lighter and higher for children. Identify each character's personality and embody it consistently throughout. `;
     const model = 'gemini-2.5-flash-tts';
     const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/${this.projectId}/locations/${this.location}/publishers/google/models/${model}:generateContent`;
 
