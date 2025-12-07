@@ -17,7 +17,9 @@ function createWavBuffer(pcmBuffer: Buffer): Promise<Buffer> {
     const chunks: Buffer[] = [];
     
     // Create WAV writer with Vertex AI default settings
-    const writer = new FileWriter('/dev/null', {
+    // Use platform-specific null device (Windows: 'nul', Unix: '/dev/null')
+    const nullDevice = process.platform === 'win32' ? 'nul' : '/dev/null';
+    const writer = new FileWriter(nullDevice, {
       sampleRate: 24000,  // Vertex AI default sample rate
       channels: 1,        // Mono
       bitDepth: 16,       // 16-bit PCM
@@ -89,7 +91,7 @@ export class TTSClient {
           language_code: 'en-GB',
           voice_config: {
             prebuilt_voice_config: {
-              voice_name: 'Enceladus'
+              voice_name: 'Algieba'
             }
           }
         }

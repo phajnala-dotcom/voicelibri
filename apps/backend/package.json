@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test": "vitest",
+    "test:once": "vitest run"
   },
   "dependencies": {
     "@google-cloud/text-to-speech": "^5.4.0",
@@ -21,7 +23,9 @@
     "@types/express": "^4.17.21",
     "@types/cors": "^2.8.17",
     "@types/node": "^20.10.5",
+    "@types/wav": "^1.0.2",
     "tsx": "^4.7.0",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vitest": "^1.0.4"
   }
 }
