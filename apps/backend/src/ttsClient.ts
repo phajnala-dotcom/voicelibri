@@ -66,6 +66,8 @@ export class TTSClient {
    * @returns Buffer containing audio data (PCM/WAV format)
    */
   async synthesizeText(text: string): Promise<Buffer> {
+    // Enhanced narration prompt for audiobook-style reading
+    const narratorPrompt = 'Read this as an engaging audiobook narrator with expressive tone and natural pacing: ';
     const model = 'gemini-2.5-flash-tts';
     const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/${this.projectId}/locations/${this.location}/publishers/google/models/${model}:generateContent`;
 
@@ -77,12 +79,12 @@ export class TTSClient {
       throw new Error('Failed to get access token');
     }
 
-    // TTS-specific request body (no systemInstruction - not supported by TTS models)
+    // TTS-specific request body (safety filters require invoiced billing account)
     const requestBody = {
       contents: {
         role: 'user',
         parts: {
-          text: text  // Pure text - let TTS model use natural narration
+          text: `${narratorPrompt}${text}`
         }
       },
       generation_config: {
@@ -98,7 +100,7 @@ export class TTSClient {
     };
 
     try {
-      console.log(`🎤 TTS API call - Text length: ${text.length} characters`);
+      console.log(`🎤 TTS API call - Text: ${text.length} chars + Prompt: ${narratorPrompt.length} chars = ${text.length + narratorPrompt.length} total`);
       const startTime = Date.now();
       
       const response = await fetch(endpoint, {
