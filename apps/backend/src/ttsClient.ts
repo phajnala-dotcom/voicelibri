@@ -89,7 +89,6 @@ export class TTSClient {
       },
       generation_config: {
         speech_config: {
-          language_code: 'en-GB',
           voice_config: {
             prebuilt_voice_config: {
               voice_name: 'Algieba'

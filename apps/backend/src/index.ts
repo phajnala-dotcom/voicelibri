@@ -5,7 +5,13 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { synthesizeText } from './ttsClient.js';
-import { chunkBookText, getBookInfo } from './bookChunker.js';
+import { 
+  chunkBookText, 
+  getBookInfo, 
+  parseBookMetadata, 
+  formatDuration,
+  type BookMetadata 
+} from './bookChunker.js';
 
 // ES modules dirname workaround
 const __filename = fileURLToPath(import.meta.url);
@@ -24,18 +30,27 @@ app.use(express.json());
 // Load book and create chunks at startup (POC 2.0)
 let BOOK_TEXT: string;
 let BOOK_CHUNKS: string[];
+let BOOK_METADATA: BookMetadata;
 let BOOK_INFO: ReturnType<typeof getBookInfo>;
 
 try {
   const bookPath = path.join(__dirname, '..', 'assets', 'sample_ebook.txt');
   BOOK_TEXT = fs.readFileSync(bookPath, 'utf-8');
-  BOOK_CHUNKS = chunkBookText(BOOK_TEXT); // Use default 500 bytes
+  
+  // Parse metadata
+  BOOK_METADATA = parseBookMetadata(BOOK_TEXT, 'txt');
+  
+  // Chunk the book
+  BOOK_CHUNKS = chunkBookText(BOOK_TEXT); // Use default 200 bytes
   BOOK_INFO = getBookInfo(BOOK_CHUNKS);
   
   console.log('✓ Book loaded and chunked successfully');
+  console.log(`  Title: ${BOOK_METADATA.title}`);
+  console.log(`  Author: ${BOOK_METADATA.author}`);
+  console.log(`  Language: ${BOOK_METADATA.language || 'auto-detect'}`);
   console.log(`  Total chunks: ${BOOK_INFO.totalChunks}`);
   console.log(`  Total words: ${BOOK_INFO.totalWords}`);
-  console.log(`  Estimated duration: ${BOOK_INFO.estimatedDuration}`);
+  console.log(`  Estimated duration: ${formatDuration(BOOK_INFO.estimatedDuration)}`);
 } catch (error) {
   console.error('✗ Failed to load book:', error);
   process.exit(1);
@@ -85,12 +100,30 @@ app.post('/api/tts/read-sample', async (req: Request, res: Response) => {
 
 // POC 2.0: Get book information
 app.get('/api/book/info', (req: Request, res: Response) => {
-  res.json({
-    totalChunks: BOOK_INFO.totalChunks,
-    totalWords: BOOK_INFO.totalWords,
-    estimatedDuration: BOOK_INFO.estimatedDuration,
-    title: 'Sample Ebook', // TODO: Extract from metadata
-  });
+  try {
+    // Validate metadata completeness
+    if (!BOOK_METADATA.title || !BOOK_METADATA.author) {
+      console.warn('⚠️ Incomplete book metadata detected');
+    }
+
+    res.json({
+      title: BOOK_METADATA.title,
+      author: BOOK_METADATA.author,
+      language: BOOK_METADATA.language,
+      estimatedDuration: formatDuration(BOOK_INFO.estimatedDuration), // "hh:mm" format
+      // Internal data for frontend calculations (not displayed to user)
+      _internal: {
+        totalChunks: BOOK_INFO.totalChunks,
+        durationSeconds: BOOK_INFO.estimatedDuration,
+      }
+    });
+  } catch (error) {
+    console.error('✗ Error fetching book info:', error);
+    res.status(500).json({
+      error: 'Failed to retrieve book information',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
 });
 
 // POC 2.0: Get specific chunk audio
