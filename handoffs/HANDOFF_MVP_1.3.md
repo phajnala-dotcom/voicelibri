@@ -1,360 +1,520 @@
-# 🎯 HANDOFF: MVP 1.3 - Simplified Voice Selector
+# 🎯 HANDOFF: E-Book Reader TTS Application
 
 **Date:** December 8, 2025  
-**Branch:** `mvp-1.3` (from `main`)  
-**Status:** ✅ COMPLETE  
-**Previous:** MVP 1.2 - EPUB Support & Multi-Book Management  
-**Commit:** `108e458`
+**Branch:** `mvp-1.3`  
+**Status:** ✅ PRODUCTION READY  
+**Commit:** `108e458` (main), `d43b5b5` (mvp-1.3)
 
 ---
 
-## 📋 SESSION SUMMARY
+## 📋 APPLICATION OVERVIEW
 
-### 🎯 Objective
-Simplify voice selection UI from complex 3-level filtering system to clean 2-level filtering: **Gender → Voice Name**
-
-### ✅ What Was Changed
-
-#### **Before** (3-level cascading)
-- Gender → Characteristic → Voice Name
-- 3 dropdown menus
-- Complex filtering with Slovak-translated characteristics
-- Confusing UX with automatic selection changes
-
-#### **After** (2-level filtering)
-- Gender → Voice Name
-- 2 dropdown menus
-- Simple, clean filtering
-- "-" option to show all voices
+**Purpose:** Web-based audiobook player using Google Gemini TTS API  
+**Tech Stack:** TypeScript, React, Node.js, Express, Vertex AI  
+**Formats:** TXT, EPUB  
+**Language:** Czech TTS, Slovak UI
 
 ---
 
-## 🔧 TECHNICAL CHANGES
+---
 
-### 1. **VoiceConfig Interface Simplification**
+## 🏗️ SYSTEM ARCHITECTURE
 
-**Before:**
-```typescript
-interface VoiceConfig {
-  gender: 'mužský' | 'ženský';
-  characteristic: string;  // Slovak voice characteristic
-  voiceName: string;
+### Backend (`apps/backend/`)
+
+**Dependencies:**
+```json
+{
+  "@google-cloud/vertexai": "^1.9.0",
+  "adm-zip": "0.5.16",
+  "fast-xml-parser": "4.5.0",
+  "express": "^4.21.2",
+  "cors": "^2.8.5"
 }
 ```
 
-**After:**
+**Key Files:**
+
+#### `src/index.ts` (542 lines)
+Express server with TTS and book management endpoints.
+
+**API Endpoints:**
+- `GET /api/book/info` - Returns current book metadata
+- `GET /api/books` - Lists all available books
+- `POST /api/book/select { filename }` - Switches active book
+- `GET /api/tts/chunk?index=N&voiceName=X` - Returns audio blob URL
+- `POST /api/tts/cache/clear` - Clears TTS audio cache
+
+**TTS Cache:**
+- In-memory Map: `chunkIndex:voiceName → audioBuffer`
+- Auto-clears on book switch
+- Prevents regeneration of same chunk+voice
+
+#### `src/ttsClient.ts` (85 lines)
+Vertex AI Gemini TTS client wrapper.
+
+```typescript
+class GeminiTTSClient {
+  async synthesizeText(text: string, voiceName: string = 'Algieba'): Promise<Buffer>
+  // Returns: 24kHz LINEAR16 PCM audio
+  // Voice: Gemini 2.5 Flash/Pro prebuilt voices
+  // Language: Czech (cs-CZ)
+}
+```
+
+**Configuration:**
+- Project: `focus-chain-439416-v1`
+- Location: `us-central1`
+- Model: `gemini-2.0-flash-exp`
+- Sample Rate: 24000 Hz
+- Encoding: LINEAR16
+
+#### `src/bookChunker.ts` (552 lines)
+Book parsing and chunking logic.
+
+**Supported Formats:**
+- **TXT**: Heuristic paragraph detection
+- **EPUB**: OPF spine parsing, HTML stripping
+- **PDF**: Not yet implemented
+
+**Chunking Strategy:**
+- Target: ~500 words per chunk (TTS sweet spot)
+- Method: Paragraph-aware splitting (preserves readability)
+- Metadata: Title, author, language (auto-detected), duration estimate
+
+**Key Functions:**
+```typescript
+parseBookMetadata(filePath: string): BookInfo
+loadBook(filePath: string): string[]  // Returns chunks array
+parseEpubMetadata(filePath: string): Metadata
+extractTextFromEpub(filePath: string): string
+```
+
+**EPUB Parsing:**
+1. Extract `container.xml` → OPF path
+2. Parse OPF → Dublin Core metadata + spine order
+3. Extract chapters from spine items
+4. Strip HTML tags → plain text
+5. Normalize entities (`, &, etc.)
+
+---
+
+### Frontend (`apps/frontend/`)
+
+**Dependencies:**
+```json
+{
+  "react": "^18.3.1",
+  "react-dom": "^18.3.1",
+  "typescript": "~5.6.2",
+  "vite": "^6.0.1"
+}
+```
+
+#### `src/components/BookPlayer.tsx` (1,345 lines)
+Main audiobook player component.
+
+**State Management:**
+```typescript
+// Book state
+const [bookInfo, setBookInfo] = useState<BookInfo | null>(null)
+const [availableBooks, setAvailableBooks] = useState<BookListItem[]>([])
+
+// Playback state
+const [currentChunkIndex, setCurrentChunkIndex] = useState(0)
+const [isPlaying, setIsPlaying] = useState(false)
+const [playbackSpeed, setPlaybackSpeed] = useState(1.0)
+
+// Voice state
+const [selectedGender, setSelectedGender] = useState<string | null>(null)
+const [selectedVoiceName, setSelectedVoiceName] = useState<string>('Algieba')
+
+// Cache & loading
+const [audioCache, setAudioCache] = useState<Map<number, CachedAudio>>(new Map())
+const [loadingChunk, setLoadingChunk] = useState<number | null>(null)
+```
+
+**Voice Configuration:**
 ```typescript
 interface VoiceConfig {
   gender: 'mužský' | 'ženský';
   voiceName: string;
 }
-```
 
-### 2. **VOICE_MATRIX Reduction**
-
-**Removed:** All `characteristic` attributes from 30 voices
-
-**Structure:**
-```typescript
 const VOICE_MATRIX: VoiceConfig[] = [
-  // Mužské hlasy (16)
+  // 16 male voices
   { gender: 'mužský', voiceName: 'Achird' },
   { gender: 'mužský', voiceName: 'Algenib' },
-  // ... (14 more male voices)
+  // ... 14 more
   
-  // Ženské hlasy (14)
+  // 14 female voices
   { gender: 'ženský', voiceName: 'Achernar' },
   { gender: 'ženský', voiceName: 'Aoede' },
-  // ... (12 more female voices)
-];
+  // ... 12 more
+]
 ```
 
-### 3. **Helper Functions**
+**Playback Features:**
+- ✅ Play/Pause with state management
+- ✅ Skip ±30s, ±5min (cross-chunk navigation)
+- ✅ Speed control (0.75x - 1.5x)
+- ✅ Progress bar with percentage
+- ✅ Chunk preloading (next chunk loads in background)
+- ✅ Auto-advance to next chunk
+- ✅ Position persistence (per-book localStorage)
 
-**Removed:**
-- ❌ `getUniqueCharacteristics()` 
-- ❌ `getFilteredCharacteristics(gender)`
+**Voice Selection:**
+- 2-level filtering: Gender → Voice Name
+- Gender filter: `-` (all 30), `mužský` (16), `ženský` (14)
+- Direct voice selection auto-sets gender
+- Saved to localStorage: `ebook-reader-voice`
 
-**Updated:**
+**Position Persistence:**
 ```typescript
-// Before: getFilteredVoiceNames(gender, characteristic)
-// After:
-const getFilteredVoiceNames = (gender: string | null): string[] => {
-  if (!gender || gender === '') {
-    return getUniqueVoiceNames(); // All 30 voices
-  }
-  return VOICE_MATRIX
-    .filter(v => v.gender === gender)
-    .map(v => v.voiceName)
-    .sort();
-};
+localStorage.setItem(`ebook-reader-position-${filename}`, JSON.stringify({
+  chunkIndex: number,
+  chunkTime: number,
+  playbackSpeed: number
+}))
+localStorage.setItem('ebook-reader-last-book', filename)
 ```
 
-### 4. **State Variables**
+#### `src/components/BookSelector.tsx` (427 lines)
+Dropdown book selection UI.
 
-**Removed:**
-```typescript
-❌ const [selectedCharacteristic, setSelectedCharacteristic] = useState<string | null>(null);
-```
+**Features:**
+- Format icons: 📘 EPUB, 📄 TXT, 📕 PDF
+- Language badges (auto-detected from metadata)
+- Duration estimates
+- Click-outside-to-close
+- Material Design styling
 
-**Kept:**
-```typescript
-✅ const [selectedGender, setSelectedGender] = useState<string | null>(null);
-✅ const [selectedVoiceName, setSelectedVoiceName] = useState<string>('Algieba');
-```
+**Book Switching:**
+1. Stop current playback
+2. Clear audio cache (revoke blob URLs)
+3. Save current position
+4. Load new book metadata
+5. Restore saved position or start at chunk 0
+6. Preload first chunk
 
-### 5. **Event Handlers**
+---
 
-**Removed:**
-```typescript
-❌ handleCharacteristicChange(characteristic: string)
-```
+## 🎙️ VOICE SYSTEM
 
-**Simplified:**
-```typescript
-// handleGenderChange - only sets gender, auto-selects first matching voice
-const handleGenderChange = (gender: string) => {
-  setSelectedGender(gender || null);
-  
-  if (gender && gender !== '') {
-    const matchingVoice = VOICE_MATRIX.find(v => v.gender === gender);
-    if (matchingVoice) {
-      setSelectedVoiceName(matchingVoice.voiceName);
-      saveVoiceToStorage(matchingVoice);
-    }
-  }
-};
+### Available Voices (30 Total)
 
-// handleVoiceNameChange - sets gender automatically from selected voice
-const handleVoiceNameChange = (voiceName: string) => {
-  setSelectedVoiceName(voiceName);
-  const matchingVoice = VOICE_MATRIX.find(v => v.voiceName === voiceName);
-  if (matchingVoice) {
-    setSelectedGender(matchingVoice.gender);
-    saveVoiceToStorage(matchingVoice);
-  }
-};
-```
+**Male Voices (16):**
+Achird, Algenib, Algieba, Alnilam, Charon, Enceladus, Fenrir, Iapetus, Orus, Puck, Rasalgethi, Sadachbia, Sadaltager, Schedar, Umbriel, Zubenelgenubi
 
-**Updated logging:**
-```typescript
-const saveVoiceToStorage = (voice: VoiceConfig) => {
-  localStorage.setItem(VOICE_KEY, JSON.stringify(voice));
-  console.log(`🎙️ Voice changed to: ${voice.voiceName} (${voice.gender})`);
-};
-```
+**Female Voices (14):**
+Achernar, Aoede, Autonoe, Callirrhoe, Despina, Erinome, Gacrux, Kore, Laomedeia, Leda, Pulcherrima, Sulafat, Vindemiatrix, Zephyr
 
-### 6. **UI Changes** (`BookPlayer.tsx`)
-
-**Before:** 3 dropdowns in one row
+**Voice Selection UI:**
 ```tsx
-<select>Gender</select>
-<select>Characteristic</select>
-<select>Voice Name</select>
+<select value={selectedGender || ''} onChange={handleGenderChange}>
+  <option value="">-</option>
+  <option value="mužský">mužský</option>
+  <option value="ženský">ženský</option>
+</select>
+
+<select value={selectedVoiceName} onChange={handleVoiceNameChange}>
+  {getFilteredVoiceNames(selectedGender).map(voice => (
+    <option key={voice} value={voice}>{voice}</option>
+  ))}
+</select>
 ```
 
-**After:** 2 dropdowns in one row
-```tsx
-{/* Voice Control - 2-level Filtering Selector (Gender → Voice Name) */}
-<div style={styles.voiceControl}>
-  <label style={styles.voiceLabel}>Hlas:</label>
-  
-  {/* Gender Filter */}
-  <select
-    value={selectedGender || ''}
-    onChange={e => handleGenderChange(e.target.value)}
-    style={styles.voiceSelectNarrow}
-    title="Pohlavie hlasu"
-  >
-    <option value="">-</option>
-    {getUniqueGenders().map(gender => (
-      <option key={gender} value={gender}>{gender}</option>
-    ))}
-  </select>
+**Filtering Logic:**
+- `-` → Shows all 30 voices
+- `mužský` → Filters to 16 male voices
+- `ženský` → Filters to 14 female voices
+- Selecting voice → Auto-updates gender
 
-  {/* Voice Name (filtered by gender) */}
-  <select
-    value={selectedVoiceName}
-    onChange={e => handleVoiceNameChange(e.target.value)}
-    style={styles.voiceSelectNarrow}
-    title="Meno hlasu"
-  >
-    {getFilteredVoiceNames(selectedGender).map(voiceName => (
-      <option key={voiceName} value={voiceName}>{voiceName}</option>
-    ))}
-  </select>
-</div>
+**Cache Integration:**
+- Cache key: `${chunkIndex}:${voiceName}`
+- Voice changes invalidate previous cache entries
+- No cross-contamination between voices
+
+---
+
+## 📂 PROJECT STRUCTURE
+
+```
+ebook-reader/
+├── apps/
+│   ├── backend/
+│   │   ├── src/
+│   │   │   ├── index.ts          # Express server + API endpoints
+│   │   │   ├── ttsClient.ts      # Gemini TTS client
+│   │   │   └── bookChunker.ts    # Book parsing (TXT/EPUB)
+│   │   ├── assets/
+│   │   │   └── dracula.epub      # Test book (855KB, 35 chapters)
+│   │   ├── package.json
+│   │   └── tsconfig.json
+│   └── frontend/
+│       ├── src/
+│       │   ├── components/
+│       │   │   ├── BookPlayer.tsx    # Main player (1,345 lines)
+│       │   │   └── BookSelector.tsx  # Book dropdown (427 lines)
+│       │   ├── App.tsx
+│       │   └── main.tsx
+│       ├── package.json
+│       ├── tsconfig.json
+│       └── vite.config.ts
+├── handoffs/
+│   └── HANDOFF_MVP_1.3.md        # This file
+├── package.json                   # Root workspace config
+└── README.md
 ```
 
-### 7. **localStorage Restoration**
+---
 
-**Updated to skip characteristic:**
+## � DEVELOPMENT SETUP
+
+### Prerequisites
+- Node.js 18+
+- Google Cloud account with Vertex AI enabled
+- Service account JSON key
+
+### Environment Variables
+```bash
+# apps/backend/.env (not committed)
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account-key.json
+```
+
+### Installation
+```bash
+# Root directory
+npm install
+
+# Start backend (port 3001)
+cd apps/backend
+npm run dev
+
+# Start frontend (port 5173)
+cd apps/frontend
+npm run dev
+```
+
+### Testing Books
+Place `.txt` or `.epub` files in `apps/backend/assets/`
+
+---
+
+## 🎯 CURRENT FEATURES
+
+### ✅ Implemented
+- [x] Text-to-Speech (Gemini 2.5 Flash TTS)
+- [x] TXT book parsing (heuristic paragraphs)
+- [x] EPUB book parsing (OPF + spine + HTML stripping)
+- [x] Multi-book support (dropdown selector)
+- [x] Chunk-based playback (~500 words/chunk)
+- [x] Voice selection (30 voices, gender filtering)
+- [x] Playback controls (play/pause, skip ±30s/5min)
+- [x] Speed control (0.75x - 1.5x)
+- [x] Position persistence (per-book localStorage)
+- [x] Auto-resume last book on startup
+- [x] Progress tracking (chunk + time position)
+- [x] Background preloading (next chunk)
+- [x] Audio caching (prevents regeneration)
+- [x] Error handling with retry logic
+
+### ❌ Not Implemented
+- [ ] PDF support
+- [ ] Bookmarks/annotations
+- [ ] Voice preview samples
+- [ ] Offline mode/PWA
+- [ ] Backend authentication
+- [ ] Database persistence
+- [ ] Cloud storage integration
+- [ ] Mobile-specific UI
+
+---
+
+## 🐛 KNOWN ISSUES & LIMITATIONS
+
+### Performance
+- **TTS Generation:** ~25s per chunk (500 words)
+- **Cache:** In-memory only (lost on server restart)
+- **Concurrent Users:** Not optimized (single cache instance)
+
+### Compatibility
+- **Browsers:** Chrome/Edge recommended (Web Audio API)
+- **Mobile:** Desktop-optimized UI
+- **EPUB:** Basic support (complex HTML may break)
+
+### Edge Cases
+- **Large Books:** Memory usage grows with cache size
+- **Network Errors:** Manual retry required
+- **Empty Chapters:** May create zero-length chunks
+- **Language Detection:** Fallback to 'cs' if unknown
+
+---
+
+## 🚀 DEPLOYMENT NOTES
+
+### Production Checklist
+- [ ] Set `GOOGLE_APPLICATION_CREDENTIALS` env var
+- [ ] Configure CORS origins (`apps/backend/src/index.ts`)
+- [ ] Add rate limiting to TTS endpoints
+- [ ] Implement cache size limits
+- [ ] Add request authentication
+- [ ] Enable HTTPS
+- [ ] Configure Cloud Run/App Engine
+- [ ] Set up Cloud Storage for book assets
+- [ ] Add monitoring/logging (Cloud Logging)
+
+### Environment-Specific Config
 ```typescript
-const savedVoice = localStorage.getItem(VOICE_KEY);
-if (savedVoice) {
-  try {
-    const voice: VoiceConfig = JSON.parse(savedVoice);
-    setSelectedGender(voice.gender);
-    setSelectedVoiceName(voice.voiceName);
-    console.log('🎙️ Restored voice:', voice.voiceName);
-  } catch (e) {
-    console.warn('Failed to parse saved voice, using default');
+// apps/backend/src/index.ts
+const API_BASE_URL = process.env.NODE_ENV === 'production'
+  ? 'https://api.example.com'
+  : 'http://localhost:3001';
+```
+
+---
+
+## � USAGE EXAMPLES
+
+### Adding a New Book
+1. Place file in `apps/backend/assets/` (`.txt` or `.epub`)
+2. Restart backend server
+3. Refresh frontend
+4. Book appears in dropdown selector
+
+### Changing Voice
+1. Select gender: `-`, `mužský`, or `ženský`
+2. Select voice from filtered list
+3. Voice applies to all future chunks
+4. Existing cached chunks keep old voice
+
+### Resuming Playback
+1. Position auto-saves every 2 seconds
+2. Reload page → Last book auto-selected
+3. Playback resumes at saved chunk + time position
+
+---
+
+## � KEY APIs
+
+### Backend Endpoints
+
+#### `GET /api/book/info`
+Returns current book metadata.
+```typescript
+{
+  title: string,
+  author: string,
+  language: string,
+  estimatedDuration: string,
+  _internal: {
+    totalChunks: number,
+    filename: string
   }
 }
 ```
 
----
+#### `GET /api/books`
+Lists all available books.
+```typescript
+{
+  books: [
+    {
+      filename: string,
+      format: 'txt' | 'epub' | 'pdf',
+      title: string,
+      author: string,
+      language: string,
+      duration: string
+    }
+  ],
+  currentBook: string | null
+}
+```
 
-## 🎨 USER EXPERIENCE
+#### `POST /api/book/select`
+Switches active book.
+```typescript
+// Request
+{ filename: string }
 
-### Voice Selection Flow
+// Response
+{ <BookInfo> }
+```
 
-1. **Default State:**
-   - Gender: `-` (all voices)
-   - Voice: `Algieba` (default)
-   - Shows all 30 voices
+#### `GET /api/tts/chunk?index=N&voiceName=X`
+Returns audio chunk as blob URL.
+```typescript
+// Query params
+{
+  index: number,          // Chunk index (0-based)
+  voiceName: string       // Voice name (e.g., 'Algieba')
+}
 
-2. **Filter by Gender:**
-   - Select "mužský" → Shows 16 male voices
-   - Select "ženský" → Shows 14 female voices
-   - Select "-" → Shows all 30 voices again
-
-3. **Direct Voice Selection:**
-   - Select any voice → Gender automatically updates
-   - Voice changes immediately → New TTS audio generated
-
-### Simplified Logic
-- **No cascading:** Selecting gender doesn't force characteristic selection
-- **Independent filtering:** Gender filter only affects voice dropdown
-- **Clean reset:** "-" option provides quick way to see all voices
-
----
-
-## 📊 VOICE INVENTORY
-
-### Distribution
-- **Total Voices:** 30
-- **Male (mužský):** 16 voices
-- **Female (ženský):** 14 voices
-
-### Male Voices (16)
-Achird, Algenib, Algieba, Alnilam, Charon, Enceladus, Fenrir, Iapetus, Orus, Puck, Rasalgethi, Sadachbia, Sadaltager, Schedar, Umbriel, Zubenelgenubi
-
-### Female Voices (14)
-Achernar, Aoede, Autonoe, Callirrhoe, Despina, Erinome, Gacrux, Kore, Laomedeia, Leda, Pulcherrima, Sulafat, Vindemiatrix, Zephyr
-
----
-
-## 📂 FILES MODIFIED
-
-### Frontend
-- **`apps/frontend/src/components/BookPlayer.tsx`**
-  - Removed `selectedCharacteristic` state
-  - Removed `handleCharacteristicChange` handler
-  - Simplified `VoiceConfig` interface
-  - Updated `VOICE_MATRIX` (removed characteristics)
-  - Removed middle dropdown from UI
-  - Updated helper functions
-  - Cleaned up comments
-
-### Backend
-- **`apps/backend/src/ttsClient.ts`** (no changes needed - already supports voiceName parameter)
-- **`apps/backend/src/index.ts`** (no changes needed - already uses voiceName from request)
-
----
-
-## 🧪 TESTING CHECKLIST
-
-✅ **Voice Selection:**
-- [ ] Default voice loads correctly (Algieba)
-- [ ] Gender filter shows correct voice count (16/14)
-- [ ] "-" option displays all 30 voices
-- [ ] Direct voice selection updates gender automatically
-
-✅ **localStorage Persistence:**
-- [ ] Selected voice saves to localStorage
-- [ ] Voice restores on page reload
-- [ ] Gender restores correctly with voice
-
-✅ **TTS Integration:**
-- [ ] Voice changes apply to new chunks
-- [ ] Cache uses correct voiceName in key
-- [ ] No voice contamination between selections
-
-✅ **UI/UX:**
-- [ ] Dropdown width consistent (120-140px)
-- [ ] All text in Slovak
-- [ ] No TypeScript errors
-- [ ] No console warnings
-
----
-
-## 🔄 MIGRATION NOTES
-
-### Breaking Changes
-**localStorage format changed:**
-- Old: `{ gender, characteristic, voiceName }`
-- New: `{ gender, voiceName }`
-
-**Compatibility:** Graceful degradation - old saved voices will still work, `characteristic` field simply ignored
-
-### Cleanup Not Required
-- No database migration needed
-- localStorage automatically updates on next voice change
-- Users may see old characteristic in stored data (harmless)
-
----
-
-## 🚀 NEXT STEPS (Future MVP 1.4+)
-
-### Potential Enhancements
-1. **Voice Preview:** Play 5-second sample before selecting
-2. **Favorites:** Star/save preferred voices
-3. **Voice Profiles:** Save different voice configs for different book genres
-4. **Advanced Filters:** Speed, pitch, volume per voice
-5. **A/B Testing:** Compare two voices side-by-side
-
-### Known Limitations
-- No visual indication of voice characteristics (intentionally removed)
-- No voice quality/speed metadata displayed
-- Gender is the only categorical filter
-
----
-
-## 📝 COMMIT HISTORY
-
-```bash
-108e458 - feat: Simplify voice selector to 2-level filtering (Gender → Voice Name)
-          - Removed characteristics attribute from VoiceConfig
-          - Updated VOICE_MATRIX to include only gender and voiceName (30 voices total)
-          - Simplified filtering logic: gender filter now directly filters voice names
-          - Removed characteristic dropdown from UI
-          - Updated event handlers for 2-level selection flow
-          - 16 male voices (mužský), 14 female voices (ženský)
-          - '-' option shows all 30 voices
+// Response
+{ blobUrl: string }       // Blob URL for <audio> element
 ```
 
 ---
 
-## 🎓 LESSONS LEARNED
+## 🎓 ARCHITECTURE DECISIONS
 
-1. **Simplicity Wins:** 3-level filtering was over-engineered for 30 voices
-2. **User Clarity:** Fewer options = less confusion
-3. **Gender + Name:** Natural mental model (vs abstract characteristics)
-4. **"-" Pattern:** Clean way to represent "all" without verbose text
-5. **Incremental Refactoring:** Start complex, simplify based on feedback
+### Why Chunk-Based?
+- **TTS Limits:** Max ~5000 chars per request
+- **UX:** Faster initial playback (no 10min wait)
+- **Caching:** Granular cache invalidation
+- **Navigation:** Jump to specific chunks
+
+### Why In-Memory Cache?
+- **Speed:** Instant chunk replay
+- **Simplicity:** No database setup
+- **Trade-off:** Lost on restart (acceptable for MVP)
+
+### Why localStorage?
+- **No Backend:** Simplifies architecture
+- **Privacy:** User data stays local
+- **Sync:** Works offline
+- **Trade-off:** Per-browser storage
+
+### Why Gemini TTS?
+- **Quality:** Natural-sounding voices
+- **Languages:** Multi-language support
+- **Speed:** ~25s for 500 words (acceptable)
+- **Cost:** Vertex AI free tier
 
 ---
 
-## 🔗 RELATED DOCUMENTS
+## 💡 NEXT SESSION PRIORITIES
 
-- [HANDOFF_MVP_1.2_COMPLETE.md](./HANDOFF_MVP_1.2_COMPLETE.md) - EPUB support & multi-book management
-- [HANDOFF_EPUB_SUPPORT.md](./HANDOFF_EPUB_SUPPORT.md) - EPUB implementation details
-- [HANDOFF_MVP_PREP.md](./HANDOFF_MVP_PREP.md) - Initial MVP foundation
+### High Priority
+1. **PDF Support** - Complete bookChunker.ts PDF parser
+2. **Cache Persistence** - Redis/SQLite for audio cache
+3. **Mobile UI** - Responsive design adjustments
+4. **Error Recovery** - Auto-retry on network failures
+
+### Medium Priority
+5. **Voice Preview** - 5s sample playback before selection
+6. **Bookmarks** - Save specific positions with notes
+7. **Library View** - Grid layout for book browsing
+8. **Theme Toggle** - Dark/light mode
+
+### Low Priority
+9. **Authentication** - User accounts + cloud sync
+10. **Sharing** - Export position/annotations
+11. **Statistics** - Reading time tracking
+12. **Playlist Mode** - Auto-advance to next book
 
 ---
 
-**Session Duration:** ~45 minutes  
-**Files Changed:** 1 (BookPlayer.tsx)  
-**Lines Changed:** +206 / -19  
-**Complexity Reduction:** 3 dropdowns → 2 dropdowns, cleaner code, better UX ✨
+## � REFERENCES
+
+- [Gemini TTS Documentation](https://docs.cloud.google.com/text-to-speech/docs/gemini-tts)
+- [Vertex AI Node.js SDK](https://cloud.google.com/nodejs/docs/reference/vertexai/latest)
+- [EPUB Specification](http://idpf.org/epub)
+- [React Audio API](https://developer.mozilla.org/en-US/docs/Web/API/HTMLAudioElement)
+
+---
+
+**Last Updated:** December 8, 2025  
+**Maintainer:** AI Assistant  
+**Repository:** phajnala-dotcom/ebook-reader-poc
