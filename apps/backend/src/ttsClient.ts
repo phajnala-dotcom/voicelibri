@@ -63,11 +63,12 @@ export class TTSClient {
    * Synthesizes text to audio using Gemini 2.5 Pro TTS via Vertex AI REST API
    * This matches the behavior of Google AI Studio
    * @param text - The text to synthesize
+   * @param voiceName - The Gemini voice name to use (e.g., 'Algieba', 'Puck', 'Zephyr')
    * @returns Buffer containing audio data (PCM/WAV format)
    */
-  async synthesizeText(text: string): Promise<Buffer> {
+  async synthesizeText(text: string, voiceName: string = 'Algieba'): Promise<Buffer> {
     // Professional voice artist prompt for theatrical audiobook narration
-    const narratorPrompt = `Read as a top voice artist in emotionally expressive yet calm, natural tone. Detect dialogue and use lower pitch / firm timbre for males, higher pitch / soft timbre for females and children. Identify each character's personality and match their voice consistently.`;
+    const narratorPrompt = `Read as a top voice artist in emotionally expressive yet calm, natural tone. You must identify genders in dialogues and distinguish them significantly by pitch - lower for males vs. higher for females and children. You must recognize each individual and consinstently distinguish them by their own unique voice character.`;
     const model = 'gemini-2.5-flash-tts';
     const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/${this.projectId}/locations/${this.location}/publishers/google/models/${model}:generateContent`;
 
@@ -91,7 +92,7 @@ export class TTSClient {
         speech_config: {
           voice_config: {
             prebuilt_voice_config: {
-              voice_name: 'Algieba'
+              voice_name: voiceName
             }
           }
         }
@@ -149,7 +150,7 @@ export class TTSClient {
   }
 }
 
-export async function synthesizeText(text: string): Promise<Buffer> {
+export async function synthesizeText(text: string, voiceName: string = 'Algieba'): Promise<Buffer> {
   const projectId = process.env.GOOGLE_CLOUD_PROJECT;
   const location = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1';
 
@@ -167,5 +168,5 @@ export async function synthesizeText(text: string): Promise<Buffer> {
     location,
   });
   
-  return ttsClient.synthesizeText(text);
+  return ttsClient.synthesizeText(text, voiceName);
 }

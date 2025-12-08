@@ -37,8 +37,8 @@ let BOOK_FORMAT: 'txt' | 'epub' | 'pdf' = 'txt';
 let CURRENT_BOOK_FILE: string = '';
 let ASSETS_DIR: string;
 
-// Audio cache for generated chunks (must be declared before loadBookFile)
-const audioCache = new Map<number, Buffer>();
+// Audio cache for generated chunks - key format: "chunkIndex:voiceName"
+const audioCache = new Map<string, Buffer>();
 
 /**
  * Helper function to load a book by filename
@@ -306,7 +306,7 @@ app.get('/api/book/info', (req: Request, res: Response) => {
 // POC 2.0: Get specific chunk audio
 app.post('/api/tts/chunk', async (req: Request, res: Response) => {
   try {
-    const { chunkIndex } = req.body;
+    const { chunkIndex, voiceName = 'Algieba' } = req.body;
 
     // Validate chunk index
     if (typeof chunkIndex !== 'number' || chunkIndex < 0 || chunkIndex >= BOOK_CHUNKS.length) {
@@ -316,12 +316,15 @@ app.post('/api/tts/chunk', async (req: Request, res: Response) => {
       });
     }
 
-    console.log(`🎤 TTS chunk request: ${chunkIndex} / ${BOOK_CHUNKS.length - 1}`);
+    console.log(`🎤 TTS chunk request: ${chunkIndex} / ${BOOK_CHUNKS.length - 1} (voice: ${voiceName})`);
+
+    // Create cache key: "chunkIndex:voiceName"
+    const cacheKey = `${chunkIndex}:${voiceName}`;
 
     // Check cache first
-    if (audioCache.has(chunkIndex)) {
-      console.log(`✓ Using cached audio for chunk ${chunkIndex}`);
-      const cachedAudio = audioCache.get(chunkIndex)!;
+    if (audioCache.has(cacheKey)) {
+      console.log(`✓ Using cached audio for chunk ${chunkIndex} with voice ${voiceName}`);
+      const cachedAudio = audioCache.get(cacheKey)!;
       
       res.setHeader('Content-Type', 'audio/wav');
       res.setHeader('Content-Length', cachedAudio.length.toString());
@@ -335,19 +338,20 @@ app.post('/api/tts/chunk', async (req: Request, res: Response) => {
     const chunkText = BOOK_CHUNKS[chunkIndex];
     console.log(`  Synthesizing chunk ${chunkIndex} (${chunkText.length} characters)...`);
     
-    const audioBuffer = await synthesizeText(chunkText);
+    const audioBuffer = await synthesizeText(chunkText, voiceName);
     
     // Cache the audio
-    audioCache.set(chunkIndex, audioBuffer);
+    audioCache.set(cacheKey, audioBuffer);
     console.log(`✓ Audio generated and cached: ${audioBuffer.length} bytes`);
 
     // Preload next chunk in background (don't await)
-    if (chunkIndex + 1 < BOOK_CHUNKS.length && !audioCache.has(chunkIndex + 1)) {
+    const nextCacheKey = `${chunkIndex + 1}:${voiceName}`;
+    if (chunkIndex + 1 < BOOK_CHUNKS.length && !audioCache.has(nextCacheKey)) {
       console.log(`  Preloading chunk ${chunkIndex + 1}...`);
       const nextChunkText = BOOK_CHUNKS[chunkIndex + 1];
-      synthesizeText(nextChunkText)
+      synthesizeText(nextChunkText, voiceName)
         .then(nextAudio => {
-          audioCache.set(chunkIndex + 1, nextAudio);
+          audioCache.set(nextCacheKey, nextAudio);
           console.log(`✓ Chunk ${chunkIndex + 1} preloaded`);
         })
         .catch(err => {

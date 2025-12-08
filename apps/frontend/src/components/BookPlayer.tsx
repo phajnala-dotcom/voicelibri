@@ -35,11 +35,78 @@ interface AudioCache {
 const API_BASE_URL = 'http://localhost:3001';
 const STORAGE_KEY = 'ebook-reader-position';
 const LAST_BOOK_KEY = 'ebook-reader-last-book';
+const VOICE_KEY = 'ebook-reader-voice';
 const SAVE_INTERVAL_MS = 5000; // Save position every 5 seconds
 const RETRY_ATTEMPTS = 3;
 const RETRY_DELAYS = [1000, 2000, 4000]; // Exponential backoff
 
 const SPEED_OPTIONS = [0.75, 0.9, 1.0, 1.25, 1.5];
+
+// ========================================
+// Voice Configuration - All 30 Gemini TTS Voices
+// Source: https://docs.cloud.google.com/text-to-speech/docs/gemini-tts
+// ========================================
+
+interface VoiceConfig {
+  gender: 'mužský' | 'ženský';
+  voiceName: string;       // Star name of the voice
+}
+
+const VOICE_MATRIX: VoiceConfig[] = [
+  // Mužské hlasy (16)
+  { gender: 'mužský', voiceName: 'Achird' },
+  { gender: 'mužský', voiceName: 'Algenib' },
+  { gender: 'mužský', voiceName: 'Algieba' },
+  { gender: 'mužský', voiceName: 'Alnilam' },
+  { gender: 'mužský', voiceName: 'Charon' },
+  { gender: 'mužský', voiceName: 'Enceladus' },
+  { gender: 'mužský', voiceName: 'Fenrir' },
+  { gender: 'mužský', voiceName: 'Iapetus' },
+  { gender: 'mužský', voiceName: 'Orus' },
+  { gender: 'mužský', voiceName: 'Puck' },
+  { gender: 'mužský', voiceName: 'Rasalgethi' },
+  { gender: 'mužský', voiceName: 'Sadachbia' },
+  { gender: 'mužský', voiceName: 'Sadaltager' },
+  { gender: 'mužský', voiceName: 'Schedar' },
+  { gender: 'mužský', voiceName: 'Umbriel' },
+  { gender: 'mužský', voiceName: 'Zubenelgenubi' },
+  
+  // Ženské hlasy (14)
+  { gender: 'ženský', voiceName: 'Achernar' },
+  { gender: 'ženský', voiceName: 'Aoede' },
+  { gender: 'ženský', voiceName: 'Autonoe' },
+  { gender: 'ženský', voiceName: 'Callirrhoe' },
+  { gender: 'ženský', voiceName: 'Despina' },
+  { gender: 'ženský', voiceName: 'Erinome' },
+  { gender: 'ženský', voiceName: 'Gacrux' },
+  { gender: 'ženský', voiceName: 'Kore' },
+  { gender: 'ženský', voiceName: 'Laomedeia' },
+  { gender: 'ženský', voiceName: 'Leda' },
+  { gender: 'ženský', voiceName: 'Pulcherrima' },
+  { gender: 'ženský', voiceName: 'Sulafat' },
+  { gender: 'ženský', voiceName: 'Vindemiatrix' },
+  { gender: 'ženský', voiceName: 'Zephyr' },
+];
+
+// Helper functions for filtering dropdown options
+const getUniqueGenders = (): string[] => {
+  return Array.from(new Set(VOICE_MATRIX.map(v => v.gender))).sort();
+};
+
+const getUniqueVoiceNames = (): string[] => {
+  return Array.from(new Set(VOICE_MATRIX.map(v => v.voiceName))).sort();
+};
+
+// Filter voice names based on selected gender
+const getFilteredVoiceNames = (gender: string | null): string[] => {
+  if (!gender || gender === '') {
+    return getUniqueVoiceNames();
+  }
+  return VOICE_MATRIX
+    .filter(v => v.gender === gender)
+    .map(v => v.voiceName)
+    .sort();
+};
 
 // Helper to get position storage key for specific book
 const getPositionKey = (bookFilename: string) => {
@@ -124,6 +191,10 @@ const BookPlayer: React.FC = () => {
   const [isInitialized, setIsInitialized] = useState(false);
   const [currentBookFile, setCurrentBookFile] = useState<string>('');
 
+  // Voice selection state (3-level filtering: Gender → Characteristic → Voice Name)
+  const [selectedGender, setSelectedGender] = useState<string | null>(null);
+  const [selectedVoiceName, setSelectedVoiceName] = useState<string>('Algieba');
+
   const audioRef = useRef<HTMLAudioElement>(null);
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -155,7 +226,10 @@ const BookPlayer: React.FC = () => {
       const response = await fetch(`${API_BASE_URL}/api/tts/chunk`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chunkIndex }),
+        body: JSON.stringify({ 
+          chunkIndex,
+          voiceName: selectedVoiceName || 'Algieba' // Send selected voice to backend
+        }),
       });
 
       if (!response.ok) {
@@ -474,6 +548,36 @@ const BookPlayer: React.FC = () => {
     }
   };
 
+  // Voice selection handlers - 2-level filtering: Gender → Voice Name
+  // "-" zostáva vybraná ak používateľ nevyberie konkrétnu hodnotu
+  const handleGenderChange = (gender: string) => {
+    setSelectedGender(gender || null);
+    
+    // If gender selected, find first matching voice
+    if (gender && gender !== '') {
+      const matchingVoice = VOICE_MATRIX.find(v => v.gender === gender);
+      if (matchingVoice) {
+        setSelectedVoiceName(matchingVoice.voiceName);
+        saveVoiceToStorage(matchingVoice);
+      }
+    }
+  };
+
+  const handleVoiceNameChange = (voiceName: string) => {
+    setSelectedVoiceName(voiceName);
+    // Find the voice and set gender
+    const matchingVoice = VOICE_MATRIX.find(v => v.voiceName === voiceName);
+    if (matchingVoice) {
+      setSelectedGender(matchingVoice.gender);
+      saveVoiceToStorage(matchingVoice);
+    }
+  };
+
+  const saveVoiceToStorage = (voice: VoiceConfig) => {
+    localStorage.setItem(VOICE_KEY, JSON.stringify(voice));
+    console.log(`🎙️ Voice changed to: ${voice.voiceName} (${voice.gender})`);
+  };
+
   const retryCurrentChunk = () => {
     setError(null);
     
@@ -582,6 +686,19 @@ const BookPlayer: React.FC = () => {
         
         // Get last selected book from localStorage
         const lastBook = localStorage.getItem(LAST_BOOK_KEY);
+        
+        // Get last selected voice from localStorage
+        const savedVoice = localStorage.getItem(VOICE_KEY);
+        if (savedVoice) {
+          try {
+            const voice: VoiceConfig = JSON.parse(savedVoice);
+            setSelectedGender(voice.gender);
+            setSelectedVoiceName(voice.voiceName);
+            console.log('🎙️ Restored voice:', voice.voiceName);
+          } catch (e) {
+            console.warn('Failed to parse saved voice, using default');
+          }
+        }
         
         // Fetch available books
         const booksData = await fetchAvailableBooks();
@@ -894,7 +1011,7 @@ const BookPlayer: React.FC = () => {
 
         {/* Speed Control */}
         <div style={styles.speedControl}>
-          <label style={styles.speedLabel}>Speed:</label>
+          <label style={styles.speedLabel}>Rýchlosť:</label>
           <select
             value={playbackSpeed}
             onChange={e => changeSpeed(parseFloat(e.target.value))}
@@ -903,6 +1020,40 @@ const BookPlayer: React.FC = () => {
             {SPEED_OPTIONS.map(speed => (
               <option key={speed} value={speed}>
                 {speed.toFixed(2)}x
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Voice Control - 2-level Filtering Selector (Gender → Voice Name) */}
+        <div style={styles.voiceControl}>
+          <label style={styles.voiceLabel}>Hlas:</label>
+          
+          {/* Gender Filter */}
+          <select
+            value={selectedGender || ''}
+            onChange={e => handleGenderChange(e.target.value)}
+            style={styles.voiceSelectNarrow}
+            title="Pohlavie hlasu"
+          >
+            <option value="">-</option>
+            {getUniqueGenders().map(gender => (
+              <option key={gender} value={gender}>
+                {gender}
+              </option>
+            ))}
+          </select>
+
+          {/* Voice Name (filtered by gender) */}
+          <select
+            value={selectedVoiceName}
+            onChange={e => handleVoiceNameChange(e.target.value)}
+            style={styles.voiceSelectNarrow}
+            title="Meno hlasu"
+          >
+            {getFilteredVoiceNames(selectedGender).map(voiceName => (
+              <option key={voiceName} value={voiceName}>
+                {voiceName}
               </option>
             ))}
           </select>
@@ -1098,6 +1249,37 @@ const styles: { [key: string]: React.CSSProperties } = {
     borderRadius: '6px',
     border: '2px solid #ddd',
     cursor: 'pointer',
+  },
+  voiceControl: {
+    display: 'flex',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: '8px',
+    marginBottom: '24px',
+    flexWrap: 'wrap',
+  },
+  voiceLabel: {
+    fontSize: '16px',
+    fontWeight: '500',
+  },
+  voiceSelect: {
+    padding: '8px 12px',
+    fontSize: '14px',
+    borderRadius: '6px',
+    border: '2px solid #ddd',
+    cursor: 'pointer',
+    backgroundColor: 'white',
+    minWidth: '180px',
+  },
+  voiceSelectNarrow: {
+    padding: '8px 12px',
+    fontSize: '14px',
+    borderRadius: '6px',
+    border: '2px solid #ddd',
+    cursor: 'pointer',
+    backgroundColor: 'white',
+    minWidth: '120px',
+    maxWidth: '140px',
   },
   audioSection: {
     marginTop: '24px',
