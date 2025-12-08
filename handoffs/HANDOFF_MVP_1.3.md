@@ -1,183 +1,363 @@
-# 🎯 HANDOFF: E-Book Reader TTS Application
+# 🎯 E-Book Reader TTS - System Snapshot# 🎯 HANDOFF: E-Book Reader TTS Application
 
-**Date:** December 8, 2025  
+
+
+**Date:** December 8, 2025 | **Branch:** `mvp-1.3` | **Status:** ✅ Production Ready**Date:** December 8, 2025  
+
 **Branch:** `mvp-1.3`  
-**Status:** ✅ PRODUCTION READY  
+
+---**Status:** ✅ PRODUCTION READY  
+
 **Commit:** `108e458` (main), `d43b5b5` (mvp-1.3)
 
+## 📋 CORE FUNCTIONALITY
+
 ---
 
-## 📋 APPLICATION OVERVIEW
+**Web-based audiobook player** with Google Gemini TTS  
 
-**Purpose:** Web-based audiobook player using Google Gemini TTS API  
-**Tech Stack:** TypeScript, React, Node.js, Express, Vertex AI  
+- Formats: TXT, EPUB (PDF planned)## 📋 APPLICATION OVERVIEW
+
+- Languages: Czech TTS, Slovak UI
+
+- 30 prebuilt voices (16 male, 14 female)**Purpose:** Web-based audiobook player using Google Gemini TTS API  
+
+- Chunk-based playback (~500 words/chunk, ~25s generation)**Tech Stack:** TypeScript, React, Node.js, Express, Vertex AI  
+
 **Formats:** TXT, EPUB  
-**Language:** Czech TTS, Slovak UI
 
----
+---**Language:** Czech TTS, Slovak UI
 
----
 
-## 🏗️ SYSTEM ARCHITECTURE
 
-### Backend (`apps/backend/`)
+## 🏗️ ARCHITECTURE---
 
-**Dependencies:**
+
+
+### Tech Stack---
+
+- **Backend:** Node.js, Express, TypeScript, Vertex AI SDK
+
+- **Frontend:** React, TypeScript, Vite## 🏗️ SYSTEM ARCHITECTURE
+
+- **TTS:** Gemini 2.5 Flash (`gemini-2.0-flash-exp`)
+
+- **Audio:** 24kHz LINEAR16 PCM### Backend (`apps/backend/`)
+
+
+
+### Key Files**Dependencies:**
+
 ```json
-{
-  "@google-cloud/vertexai": "^1.9.0",
-  "adm-zip": "0.5.16",
-  "fast-xml-parser": "4.5.0",
+
+**Backend (`apps/backend/src/`):**{
+
+- `index.ts` - Express server, API endpoints, TTS cache  "@google-cloud/vertexai": "^1.9.0",
+
+- `ttsClient.ts` - Vertex AI Gemini TTS wrapper  "adm-zip": "0.5.16",
+
+- `bookChunker.ts` - TXT/EPUB parser, chunking logic  "fast-xml-parser": "4.5.0",
+
   "express": "^4.21.2",
-  "cors": "^2.8.5"
-}
-```
 
-**Key Files:**
+**Frontend (`apps/frontend/src/components/`):**  "cors": "^2.8.5"
 
-#### `src/index.ts` (542 lines)
+- `BookPlayer.tsx` - Main player (1,345 lines)}
+
+- `BookSelector.tsx` - Book dropdown (427 lines)```
+
+
+
+---**Key Files:**
+
+
+
+## 🔌 API ENDPOINTS#### `src/index.ts` (542 lines)
+
 Express server with TTS and book management endpoints.
 
-**API Endpoints:**
-- `GET /api/book/info` - Returns current book metadata
-- `GET /api/books` - Lists all available books
-- `POST /api/book/select { filename }` - Switches active book
-- `GET /api/tts/chunk?index=N&voiceName=X` - Returns audio blob URL
-- `POST /api/tts/cache/clear` - Clears TTS audio cache
+```
 
-**TTS Cache:**
+GET  /api/book/info              → BookInfo (title, author, chunks count)**API Endpoints:**
+
+GET  /api/books                  → Array of available books- `GET /api/book/info` - Returns current book metadata
+
+POST /api/book/select {filename} → Switch book, return metadata- `GET /api/books` - Lists all available books
+
+GET  /api/tts/chunk?index=N&voiceName=X → Audio blob URL- `POST /api/book/select { filename }` - Switches active book
+
+POST /api/tts/cache/clear        → Clear audio cache- `GET /api/tts/chunk?index=N&voiceName=X` - Returns audio blob URL
+
+```- `POST /api/tts/cache/clear` - Clears TTS audio cache
+
+
+
+---**TTS Cache:**
+
 - In-memory Map: `chunkIndex:voiceName → audioBuffer`
-- Auto-clears on book switch
+
+## 🎙️ VOICE SYSTEM- Auto-clears on book switch
+
 - Prevents regeneration of same chunk+voice
 
-#### `src/ttsClient.ts` (85 lines)
-Vertex AI Gemini TTS client wrapper.
+**30 Gemini Voices:**
 
-```typescript
-class GeminiTTSClient {
-  async synthesizeText(text: string, voiceName: string = 'Algieba'): Promise<Buffer>
-  // Returns: 24kHz LINEAR16 PCM audio
+- **Male (mužský):** 16 voices - Achird, Algenib, Algieba, Alnilam, Charon, Enceladus, Fenrir, Iapetus, Orus, Puck, Rasalgethi, Sadachbia, Sadaltager, Schedar, Umbriel, Zubenelgenubi#### `src/ttsClient.ts` (85 lines)
+
+- **Female (ženský):** 14 voices - Achernar, Aoede, Autonoe, Callirrhoe, Despina, Erinome, Gacrux, Kore, Laomedeia, Leda, Pulcherrima, Sulafat, Vindemiatrix, ZephyrVertex AI Gemini TTS client wrapper.
+
+
+
+**UI:** 2-level filtering (Gender → Voice Name)```typescript
+
+- `-` shows all 30 voicesclass GeminiTTSClient {
+
+- Gender selection filters voice list  async synthesizeText(text: string, voiceName: string = 'Algieba'): Promise<Buffer>
+
+- Voice change applies to new chunks only  // Returns: 24kHz LINEAR16 PCM audio
+
   // Voice: Gemini 2.5 Flash/Pro prebuilt voices
-  // Language: Czech (cs-CZ)
+
+**Storage:** `localStorage` key `ebook-reader-voice` = `{gender, voiceName}`  // Language: Czech (cs-CZ)
+
 }
-```
 
-**Configuration:**
+---```
+
+
+
+## 💾 DATA PERSISTENCE**Configuration:**
+
 - Project: `focus-chain-439416-v1`
-- Location: `us-central1`
-- Model: `gemini-2.0-flash-exp`
-- Sample Rate: 24000 Hz
-- Encoding: LINEAR16
 
-#### `src/bookChunker.ts` (552 lines)
-Book parsing and chunking logic.
+**localStorage Keys:**- Location: `us-central1`
+
+- `ebook-reader-position-${filename}` → `{chunkIndex, chunkTime, playbackSpeed}`- Model: `gemini-2.0-flash-exp`
+
+- `ebook-reader-last-book` → Last selected book filename- Sample Rate: 24000 Hz
+
+- `ebook-reader-voice` → `{gender, voiceName}`- Encoding: LINEAR16
+
+
+
+**Backend Cache:**#### `src/bookChunker.ts` (552 lines)
+
+- In-memory Map: `"${chunkIndex}:${voiceName}"` → audio BufferBook parsing and chunking logic.
+
+- Cleared on book switch or manual `/api/tts/cache/clear`
 
 **Supported Formats:**
-- **TXT**: Heuristic paragraph detection
+
+---- **TXT**: Heuristic paragraph detection
+
 - **EPUB**: OPF spine parsing, HTML stripping
-- **PDF**: Not yet implemented
 
-**Chunking Strategy:**
-- Target: ~500 words per chunk (TTS sweet spot)
-- Method: Paragraph-aware splitting (preserves readability)
-- Metadata: Title, author, language (auto-detected), duration estimate
+## ✅ IMPLEMENTED FEATURES- **PDF**: Not yet implemented
 
-**Key Functions:**
-```typescript
-parseBookMetadata(filePath: string): BookInfo
-loadBook(filePath: string): string[]  // Returns chunks array
-parseEpubMetadata(filePath: string): Metadata
-extractTextFromEpub(filePath: string): string
-```
 
-**EPUB Parsing:**
+
+- [x] TXT/EPUB parsing (metadata + text extraction)**Chunking Strategy:**
+
+- [x] Chunk-based TTS generation- Target: ~500 words per chunk (TTS sweet spot)
+
+- [x] 30 voice selection (gender filtering)- Method: Paragraph-aware splitting (preserves readability)
+
+- [x] Play/pause, skip ±30s/5min (cross-chunk)- Metadata: Title, author, language (auto-detected), duration estimate
+
+- [x] Speed control (0.75x - 1.5x)
+
+- [x] Progress tracking (chunk + time position)**Key Functions:**
+
+- [x] Per-book position persistence```typescript
+
+- [x] Auto-resume last book on startupparseBookMetadata(filePath: string): BookInfo
+
+- [x] Background preloading (next chunk)loadBook(filePath: string): string[]  // Returns chunks array
+
+- [x] Audio caching (prevents regeneration)parseEpubMetadata(filePath: string): Metadata
+
+- [x] Multi-book selector dropdownextractTextFromEpub(filePath: string): string
+
+- [x] Error handling with retry```
+
+
+
+---**EPUB Parsing:**
+
 1. Extract `container.xml` → OPF path
-2. Parse OPF → Dublin Core metadata + spine order
+
+## ⚙️ SETUP & RUN2. Parse OPF → Dublin Core metadata + spine order
+
 3. Extract chapters from spine items
-4. Strip HTML tags → plain text
-5. Normalize entities (`, &, etc.)
 
----
+```bash4. Strip HTML tags → plain text
 
-### Frontend (`apps/frontend/`)
+# Prerequisites5. Normalize entities (`, &, etc.)
+
+- Node.js 18+
+
+- Google Cloud service account JSON with Vertex AI enabled---
+
+
+
+# Environment### Frontend (`apps/frontend/`)
+
+echo 'GOOGLE_APPLICATION_CREDENTIALS=/path/to/key.json' > apps/backend/.env
 
 **Dependencies:**
-```json
-{
-  "react": "^18.3.1",
-  "react-dom": "^18.3.1",
-  "typescript": "~5.6.2",
-  "vite": "^6.0.1"
-}
-```
 
-#### `src/components/BookPlayer.tsx` (1,345 lines)
+# Install & Start```json
+
+npm install{
+
+cd apps/backend && npm run dev  # Port 3001  "react": "^18.3.1",
+
+cd apps/frontend && npm run dev # Port 5173  "react-dom": "^18.3.1",
+
+  "typescript": "~5.6.2",
+
+# Add Books  "vite": "^6.0.1"
+
+# Place .txt or .epub files in apps/backend/assets/}
+
+``````
+
+
+
+---#### `src/components/BookPlayer.tsx` (1,345 lines)
+
 Main audiobook player component.
 
+## 🎯 CRITICAL CODE PATTERNS
+
 **State Management:**
-```typescript
-// Book state
-const [bookInfo, setBookInfo] = useState<BookInfo | null>(null)
-const [availableBooks, setAvailableBooks] = useState<BookListItem[]>([])
 
-// Playback state
-const [currentChunkIndex, setCurrentChunkIndex] = useState(0)
-const [isPlaying, setIsPlaying] = useState(false)
-const [playbackSpeed, setPlaybackSpeed] = useState(1.0)
+### Voice Config```typescript
 
-// Voice state
-const [selectedGender, setSelectedGender] = useState<string | null>(null)
-const [selectedVoiceName, setSelectedVoiceName] = useState<string>('Algieba')
+```typescript// Book state
 
-// Cache & loading
-const [audioCache, setAudioCache] = useState<Map<number, CachedAudio>>(new Map())
-const [loadingChunk, setLoadingChunk] = useState<number | null>(null)
-```
+interface VoiceConfig {const [bookInfo, setBookInfo] = useState<BookInfo | null>(null)
 
-**Voice Configuration:**
-```typescript
-interface VoiceConfig {
-  gender: 'mužský' | 'ženský';
+  gender: 'mužský' | 'ženský';const [availableBooks, setAvailableBooks] = useState<BookListItem[]>([])
+
   voiceName: string;
+
+}// Playback state
+
+```const [currentChunkIndex, setCurrentChunkIndex] = useState(0)
+
+const [isPlaying, setIsPlaying] = useState(false)
+
+### TTS Requestconst [playbackSpeed, setPlaybackSpeed] = useState(1.0)
+
+```typescript
+
+// Backend: apps/backend/src/ttsClient.ts// Voice state
+
+async synthesizeText(text: string, voiceName: string = 'Algieba'): Promise<Buffer>const [selectedGender, setSelectedGender] = useState<string | null>(null)
+
+```const [selectedVoiceName, setSelectedVoiceName] = useState<string>('Algieba')
+
+
+
+### Cache Key// Cache & loading
+
+```typescriptconst [audioCache, setAudioCache] = useState<Map<number, CachedAudio>>(new Map())
+
+const cacheKey = `${chunkIndex}:${voiceName}`;const [loadingChunk, setLoadingChunk] = useState<number | null>(null)
+
+``````
+
+
+
+### Book Switching**Voice Configuration:**
+
+```typescript```typescript
+
+// Clear audio, revoke blobs, save position, load new bookinterface VoiceConfig {
+
+if (audioRef.current) {  gender: 'mužský' | 'ženský';
+
+  audioRef.current.pause();  voiceName: string;
+
+  audioRef.current.src = ''; // Critical: prevent old audio continuation}
+
 }
 
-const VOICE_MATRIX: VoiceConfig[] = [
-  // 16 male voices
-  { gender: 'mužský', voiceName: 'Achird' },
-  { gender: 'mužský', voiceName: 'Algenib' },
-  // ... 14 more
-  
-  // 14 female voices
-  { gender: 'ženský', voiceName: 'Achernar' },
-  { gender: 'ženský', voiceName: 'Aoede' },
-  // ... 12 more
-]
-```
+audioCache.forEach(cached => URL.revokeObjectURL(cached.blobUrl));const VOICE_MATRIX: VoiceConfig[] = [
 
-**Playback Features:**
+```  // 16 male voices
+
+  { gender: 'mužský', voiceName: 'Achird' },
+
+---  { gender: 'mužský', voiceName: 'Algenib' },
+
+  // ... 14 more
+
+## 🐛 KNOWN LIMITATIONS  
+
+  // 14 female voices
+
+- **Performance:** 25s TTS generation per chunk  { gender: 'ženský', voiceName: 'Achernar' },
+
+- **Cache:** In-memory only (lost on restart)  { gender: 'ženský', voiceName: 'Aoede' },
+
+- **EPUB:** Basic support (complex HTML may fail)  // ... 12 more
+
+- **Mobile:** Desktop-optimized UI]
+
+- **Concurrent Users:** Single-instance cache```
+
+
+
+---**Playback Features:**
+
 - ✅ Play/Pause with state management
-- ✅ Skip ±30s, ±5min (cross-chunk navigation)
+
+## 🚀 NEXT PRIORITIES- ✅ Skip ±30s, ±5min (cross-chunk navigation)
+
 - ✅ Speed control (0.75x - 1.5x)
-- ✅ Progress bar with percentage
-- ✅ Chunk preloading (next chunk loads in background)
-- ✅ Auto-advance to next chunk
-- ✅ Position persistence (per-book localStorage)
+
+1. PDF support completion- ✅ Progress bar with percentage
+
+2. Redis/SQLite cache persistence- ✅ Chunk preloading (next chunk loads in background)
+
+3. Mobile-responsive UI- ✅ Auto-advance to next chunk
+
+4. Voice preview samples- ✅ Position persistence (per-book localStorage)
+
+5. Bookmarks/annotations
 
 **Voice Selection:**
-- 2-level filtering: Gender → Voice Name
+
+---- 2-level filtering: Gender → Voice Name
+
 - Gender filter: `-` (all 30), `mužský` (16), `ženský` (14)
-- Direct voice selection auto-sets gender
+
+## 📝 KEY DECISIONS- Direct voice selection auto-sets gender
+
 - Saved to localStorage: `ebook-reader-voice`
 
-**Position Persistence:**
-```typescript
-localStorage.setItem(`ebook-reader-position-${filename}`, JSON.stringify({
+**Why chunks?** TTS char limits + faster initial playback + granular caching  
+
+**Why localStorage?** Simplicity, privacy, offline-capable  **Position Persistence:**
+
+**Why in-memory cache?** Speed, no DB setup (acceptable for MVP)  ```typescript
+
+**Why Gemini TTS?** Quality voices, multi-language, Vertex AI free tierlocalStorage.setItem(`ebook-reader-position-${filename}`, JSON.stringify({
+
   chunkIndex: number,
-  chunkTime: number,
+
+---  chunkTime: number,
+
   playbackSpeed: number
-}))
-localStorage.setItem('ebook-reader-last-book', filename)
-```
+
+**Repository:** `phajnala-dotcom/ebook-reader-poc`  }))
+
+**Google Cloud Project:** `focus-chain-439416-v1`  localStorage.setItem('ebook-reader-last-book', filename)
+
+**Region:** `us-central1````
+
 
 #### `src/components/BookSelector.tsx` (427 lines)
 Dropdown book selection UI.
