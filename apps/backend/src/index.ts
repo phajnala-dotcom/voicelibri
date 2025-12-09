@@ -13,6 +13,11 @@ import {
   extractTextFromEpub,
   type BookMetadata 
 } from './bookChunker.js';
+import { processDramatizedText } from './dramatizedProcessor.js';
+import { processTaggedTextFile } from './dramatizedChunkerSimple.js';
+import { extractVoiceSegments, removeVoiceTags } from './dramatizedChunkerSimple.js';
+import { loadVoiceMap } from './voiceAssigner.js';
+import { concatenateWavBuffers, addSilence } from './audioUtils.js';
 
 // ES modules dirname workaround
 const __filename = fileURLToPath(import.meta.url);
@@ -88,8 +93,34 @@ function loadBookFile(filename: string): void {
     throw new Error(`Unsupported book format: ${ext}`);
   }
   
-  // Chunk the book (same for all formats)
-  BOOK_CHUNKS = chunkBookText(BOOK_TEXT);
+  // Chunk the book (check for voice tags first)
+  const hasVoiceTags = /\[VOICE=.*?\]/.test(BOOK_TEXT);
+  
+  if (hasVoiceTags) {
+    console.log('📢 Detected voice tags - using dramatized chunking');
+    // Use voice-aware chunking that preserves tags
+    const segments = extractVoiceSegments(BOOK_TEXT);
+    console.log(`   Found ${segments.length} voice segments`);
+    
+    if (segments.length > 0) {
+      // For dramatized text: Each segment becomes one chunk
+      // This ensures voice tags are never split and chunks align with speaker changes
+      BOOK_CHUNKS = segments.map((segment, index) => {
+        const chunkText = `[VOICE=${segment.speaker}]\n${segment.text}\n[/VOICE]`;
+        console.log(`   Chunk ${index}: ${segment.speaker} (${segment.text.length} chars)`);
+        return chunkText;
+      });
+    } else {
+      // Fallback to regular chunking
+      console.log('   No segments found, using regular chunking');
+      BOOK_CHUNKS = chunkBookText(BOOK_TEXT);
+    }
+  } else {
+    // Regular chunking for non-dramatized text
+    console.log('📄 No voice tags detected - using regular chunking');
+    BOOK_CHUNKS = chunkBookText(BOOK_TEXT);
+  }
+  
   BOOK_INFO = getBookInfo(BOOK_CHUNKS);
   
   // Clear audio cache when switching books
@@ -334,11 +365,54 @@ app.post('/api/tts/chunk', async (req: Request, res: Response) => {
       return res.send(cachedAudio);
     }
 
-    // Synthesize chunk
+    // Get chunk text
     const chunkText = BOOK_CHUNKS[chunkIndex];
-    console.log(`  Synthesizing chunk ${chunkIndex} (${chunkText.length} characters)...`);
     
-    const audioBuffer = await synthesizeText(chunkText, voiceName);
+    // Check if chunk contains voice tags (dramatized mode)
+    const voiceSegments = extractVoiceSegments(chunkText);
+    
+    let audioBuffer: Buffer;
+    
+    if (voiceSegments.length > 0) {
+      // MULTI-VOICE MODE: Chunk has voice tags
+      console.log(`  Multi-voice chunk detected (${voiceSegments.length} segments)`);
+      
+      // Load voice map
+      const voiceMapPath = path.join(ASSETS_DIR, 'dramatized_output', 'voice_map_poc.json');
+      const voiceMap = fs.existsSync(voiceMapPath) 
+        ? await loadVoiceMap(voiceMapPath)
+        : {};
+      
+      // Synthesize each segment with its assigned voice
+      const audioBuffers: Buffer[] = [];
+      for (const segment of voiceSegments) {
+        // Get voice for this speaker (fallback to narrator voice if not found)
+        const speakerVoice = voiceMap[segment.speaker] === 'USER_SELECTED'
+          ? voiceName // Use UI-selected voice for narrator
+          : voiceMap[segment.speaker] || voiceName;
+        
+        console.log(`    ${segment.speaker} -> ${speakerVoice} (${segment.text.length} chars)`);
+        
+        // Synthesize this segment
+        const segmentAudio = await synthesizeText(segment.text, speakerVoice);
+        
+        // Add 1 second pause after each segment (except the last one)
+        const audioWithPause = addSilence(segmentAudio, 1000, 'end');
+        audioBuffers.push(audioWithPause);
+      }
+      
+      // Concatenate all audio segments
+      audioBuffer = concatenateWavBuffers(audioBuffers);
+      console.log(`  ✓ Concatenated ${audioBuffers.length} segments with pauses -> ${audioBuffer.length} bytes`);
+      
+    } else {
+      // SINGLE-VOICE MODE: No voice tags (fallback)
+      console.log(`  Single-voice mode (${chunkText.length} characters)`);
+      
+      // Remove any stray voice tags (safety)
+      const cleanText = removeVoiceTags(chunkText);
+      audioBuffer = await synthesizeText(cleanText, voiceName);
+    }
     
     // Cache the audio
     audioCache.set(cacheKey, audioBuffer);
@@ -349,14 +423,22 @@ app.post('/api/tts/chunk', async (req: Request, res: Response) => {
     if (chunkIndex + 1 < BOOK_CHUNKS.length && !audioCache.has(nextCacheKey)) {
       console.log(`  Preloading chunk ${chunkIndex + 1}...`);
       const nextChunkText = BOOK_CHUNKS[chunkIndex + 1];
-      synthesizeText(nextChunkText, voiceName)
-        .then(nextAudio => {
-          audioCache.set(nextCacheKey, nextAudio);
-          console.log(`✓ Chunk ${chunkIndex + 1} preloaded`);
-        })
-        .catch(err => {
-          console.error(`✗ Failed to preload chunk ${chunkIndex + 1}:`, err);
-        });
+      
+      // Check if next chunk is multi-voice
+      const nextSegments = extractVoiceSegments(nextChunkText);
+      if (nextSegments.length > 0) {
+        // Skip preload for multi-voice chunks (too complex for background)
+        console.log(`  Skipping preload (multi-voice chunk)`);
+      } else {
+        synthesizeText(nextChunkText, voiceName)
+          .then(nextAudio => {
+            audioCache.set(nextCacheKey, nextAudio);
+            console.log(`✓ Chunk ${chunkIndex + 1} preloaded`);
+          })
+          .catch(err => {
+            console.error(`✗ Failed to preload chunk ${chunkIndex + 1}:`, err);
+          });
+      }
     }
 
     res.setHeader('Content-Type', 'audio/wav');
@@ -370,6 +452,94 @@ app.post('/api/tts/chunk', async (req: Request, res: Response) => {
     res.status(500).json({
       error: 'TTS synthesis failed',
       message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+// ========================================
+// DRAMATIZED TTS ENDPOINTS (PoC Phase 1)
+// ========================================
+
+/**
+ * Process dramatized text file
+ * 
+ * Pipeline:
+ * 1. Load tagged text
+ * 2. Extract characters
+ * 3. Assign voices
+ * 4. Save voice map
+ * 5. Create chunks
+ * 
+ * POST /api/dramatize/process
+ * Body: { taggedTextPath: string }
+ */
+app.post('/api/dramatize/process', async (req: Request, res: Response) => {
+  try {
+    const { taggedTextPath } = req.body;
+    
+    if (!taggedTextPath) {
+      return res.status(400).json({
+        error: 'Missing taggedTextPath',
+        message: 'taggedTextPath is required'
+      });
+    }
+    
+    console.log('[API] Processing dramatized text...');
+    console.log(`[API] Input: ${taggedTextPath}`);
+    
+    // Step 1: Process text and assign voices
+    const processorResult = await processDramatizedText(taggedTextPath);
+    
+    // Step 2: Chunk the tagged text
+    const chunkerResult = await processTaggedTextFile(taggedTextPath);
+    
+    console.log('[API] ✅ Dramatization complete!');
+    
+    res.json({
+      success: true,
+      voiceMapPath: processorResult.voiceMapPath,
+      characterCount: processorResult.characterCount,
+      totalChunks: chunkerResult.totalChunks,
+      voiceMap: processorResult.voiceMap
+    });
+    
+  } catch (error) {
+    console.error('[API] ❌ Dramatization failed:', error);
+    res.status(500).json({
+      error: 'Dramatization failed',
+      message: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
+});
+
+/**
+ * Get voice map for dramatized text
+ * 
+ * GET /api/dramatize/voice-map
+ */
+app.get('/api/dramatize/voice-map', async (req: Request, res: Response) => {
+  try {
+    const voiceMapPath = path.join(ASSETS_DIR, 'dramatized_output', 'voice_map_poc.json');
+    
+    if (!fs.existsSync(voiceMapPath)) {
+      return res.status(404).json({
+        error: 'Voice map not found',
+        message: 'Run /api/dramatize/process first'
+      });
+    }
+    
+    const voiceMap = await loadVoiceMap(voiceMapPath);
+    
+    res.json({
+      success: true,
+      voiceMap
+    });
+    
+  } catch (error) {
+    console.error('[API] Failed to load voice map:', error);
+    res.status(500).json({
+      error: 'Failed to load voice map',
+      message: error instanceof Error ? error.message : 'Unknown error'
     });
   }
 });

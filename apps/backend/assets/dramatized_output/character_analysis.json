@@ -1,0 +1,22 @@
+{
+  "characters": [
+    {
+      "name": "RAGOWSKI",
+      "gender": "male",
+      "traits": ["serious", "gruff", "authoritative"],
+      "dialogueExamples": [
+        "Jen se na sebe podívejte, všichni vypadáte jako mátohy!",
+        "Doufám, že jste tohle martyrium nepodstupovali jenom proto, abyste mi uštědřili pár laciných podpásovek.",
+        "I přesto musím smeknout. Nekromantské operace vždy žádaly puntičkářský přístup hodný fanatika."
+      ]
+    },
+    {
+      "name": "LILI",
+      "gender": "female",
+      "traits": ["witty", "sharp", "confident"],
+      "dialogueExamples": [
+        "Ani ty nevypadáš bůhvíjak, Joe. Balzamovač, co si tě vzal na paškál, ti růž a oční linky nanášel s až příliš velkým nadšením."
+      ]
+    }
+  ]
+}

@@ -67,8 +67,6 @@ export class TTSClient {
    * @returns Buffer containing audio data (PCM/WAV format)
    */
   async synthesizeText(text: string, voiceName: string = 'Algieba'): Promise<Buffer> {
-    // Professional voice artist prompt for theatrical audiobook narration
-    const narratorPrompt = `Read as a top voice artist in emotionally expressive yet calm, natural tone. You must identify genders in dialogues and distinguish them significantly by pitch - lower for males vs. higher for females and children. You must recognize each individual and consinstently distinguish them by their own unique voice character.`;
     const model = 'gemini-2.5-flash-tts';
     const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/${this.projectId}/locations/${this.location}/publishers/google/models/${model}:generateContent`;
 
@@ -85,7 +83,7 @@ export class TTSClient {
       contents: {
         role: 'user',
         parts: {
-          text: `${narratorPrompt}${text}`
+          text: text
         }
       },
       generation_config: {
@@ -100,7 +98,7 @@ export class TTSClient {
     };
 
     try {
-      console.log(`🎤 TTS API call - Text: ${text.length} chars + Prompt: ${narratorPrompt.length} chars = ${text.length + narratorPrompt.length} total`);
+      console.log(`🎤 TTS API call - Text: ${text.length} chars, Voice: ${voiceName}`);
       const startTime = Date.now();
       
       const response = await fetch(endpoint, {
