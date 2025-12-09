@@ -127,11 +127,19 @@ Currently requires **manual LLM prompting** (see `handoffs/QUICKSTART_DRAMATIZED
 5. **Investigate:** Check actual network timing with DevTools Network tab
 
 ### Priority 2: Automate Dramatization
+
+**Current:** Manual workflow (see `handoffs/QUICKSTART_DRAMATIZED_TTS.md`)
+- Copy text → Claude → Character analysis → Manual tagging → Save
+
+**Goal:** Automated API endpoint
+
 **Implementation:**
-1. Use `llmCharacterAnalyzer.ts` to extract characters
-2. Auto-tag dialogue with LLM (or regex for simple cases)
+1. Use `llmCharacterAnalyzer.ts` to extract characters (already exists!)
+2. Create `apps/backend/src/llmDialogueTagger.ts` - Auto-tag with Gemini API
 3. Create API endpoint: `POST /api/dramatize` (text → tagged text)
 4. Frontend: Add "Dramatize" button before TTS
+
+**LLM Prompts:** Already documented in `handoffs/SPEC_DRAMATIZED_TTS.md` sections 4.1-4.2
 
 ---
 
