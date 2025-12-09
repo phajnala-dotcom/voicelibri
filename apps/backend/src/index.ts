@@ -348,13 +348,15 @@ app.post('/api/tts/chunk', async (req: Request, res: Response) => {
     }
 
     console.log(`🎤 TTS chunk request: ${chunkIndex} / ${BOOK_CHUNKS.length - 1} (voice: ${voiceName})`);
+    const requestStartTime = Date.now();
 
     // Create cache key: "chunkIndex:voiceName"
     const cacheKey = `${chunkIndex}:${voiceName}`;
 
     // Check cache first
     if (audioCache.has(cacheKey)) {
-      console.log(`✓ Using cached audio for chunk ${chunkIndex} with voice ${voiceName}`);
+      const cacheTime = Date.now() - requestStartTime;
+      console.log(`✓ Using cached audio for chunk ${chunkIndex} with voice ${voiceName} (${cacheTime}ms)`);
       const cachedAudio = audioCache.get(cacheKey)!;
       
       res.setHeader('Content-Type', 'audio/wav');
@@ -383,25 +385,31 @@ app.post('/api/tts/chunk', async (req: Request, res: Response) => {
         ? await loadVoiceMap(voiceMapPath)
         : {};
       
-      // Synthesize each segment with its assigned voice
-      const audioBuffers: Buffer[] = [];
-      for (const segment of voiceSegments) {
-        // Get voice for this speaker (fallback to narrator voice if not found)
-        const speakerVoice = voiceMap[segment.speaker] === 'USER_SELECTED'
-          ? voiceName // Use UI-selected voice for narrator
-          : voiceMap[segment.speaker] || voiceName;
-        
-        console.log(`    ${segment.speaker} -> ${speakerVoice} (${segment.text.length} chars)`);
-        
-        // Synthesize this segment
-        const segmentAudio = await synthesizeText(segment.text, speakerVoice);
-        
-        // Add 1 second pause after each segment (except the last one)
-        const audioWithPause = addSilence(segmentAudio, 1000, 'end');
-        audioBuffers.push(audioWithPause);
-      }
+      // Synthesize all segments in PARALLEL (Option B optimization)
+      console.log(`  Starting parallel synthesis for ${voiceSegments.length} segments...`);
+      const startTime = Date.now();
       
-      // Concatenate all audio segments
+      const audioBuffers: Buffer[] = await Promise.all(
+        voiceSegments.map(async (segment) => {
+          // Get voice for this speaker (fallback to narrator voice if not found)
+          const speakerVoice = voiceMap[segment.speaker] === 'USER_SELECTED'
+            ? voiceName // Use UI-selected voice for narrator
+            : voiceMap[segment.speaker] || voiceName;
+          
+          console.log(`    ${segment.speaker} -> ${speakerVoice} (${segment.text.length} chars)`);
+          
+          // Synthesize this segment
+          const segmentAudio = await synthesizeText(segment.text, speakerVoice);
+          
+          // Add 1 second pause after each segment
+          return addSilence(segmentAudio, 1000, 'end');
+        })
+      );
+      
+      const elapsedMs = Date.now() - startTime;
+      console.log(`  ✓ Parallel synthesis completed in ${elapsedMs}ms (${voiceSegments.length} segments)`);
+      
+      // Concatenate all audio segments (Promise.all preserves array order)
       audioBuffer = concatenateWavBuffers(audioBuffers);
       console.log(`  ✓ Concatenated ${audioBuffers.length} segments with pauses -> ${audioBuffer.length} bytes`);
       
@@ -415,8 +423,9 @@ app.post('/api/tts/chunk', async (req: Request, res: Response) => {
     }
     
     // Cache the audio
+    const totalTime = Date.now() - requestStartTime;
     audioCache.set(cacheKey, audioBuffer);
-    console.log(`✓ Audio generated and cached: ${audioBuffer.length} bytes`);
+    console.log(`✓ Audio generated and cached: ${audioBuffer.length} bytes (TOTAL TIME: ${totalTime}ms = ${(totalTime/1000).toFixed(1)}s)`);
 
     // Preload next chunk in background (don't await)
     const nextCacheKey = `${chunkIndex + 1}:${voiceName}`;

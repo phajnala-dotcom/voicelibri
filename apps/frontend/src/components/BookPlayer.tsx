@@ -197,6 +197,7 @@ const BookPlayer: React.FC = () => {
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const preloadTriggeredRef = useRef<boolean>(false); // Track if next chunk preload started
 
   // ========================================
   // API Functions
@@ -263,51 +264,54 @@ const BookPlayer: React.FC = () => {
       return;
     }
 
-    // Clear loading state at start
-    setLoading(true);
-    setError(null);
-    setLoadingChunk(chunkIndex);
-    console.log('🎵 Loading state set, fetching chunk...');
-
     try {
-      // Check cache first
+      // Check cache first - FAST PATH for instant transition
       let cachedAudio = audioCache.get(chunkIndex);
-      console.log('🎵 Cache check:', cachedAudio ? 'HIT' : 'MISS');
+      console.log('🎵 Cache check:', cachedAudio ? 'HIT ⚡' : 'MISS');
 
-      if (!cachedAudio?.blobUrl) {
-        // Fetch from API
-        console.log('🎵 Fetching from API...');
-        const blobUrl = await fetchChunkAudio(chunkIndex);
-        console.log('🎵 Received blobUrl:', blobUrl.substring(0, 50) + '...');
-
-        // Cache it
-        setAudioCache(prev => {
-          const newCache = new Map(prev);
-          newCache.set(chunkIndex, { blobUrl });
-          return newCache;
-        });
-
-        cachedAudio = { blobUrl };
-      } else {
-        // Verify blob URL is still valid by testing if we can fetch it
-        console.log('🎵 Verifying cached blob URL...');
-        try {
-          const testResponse = await fetch(cachedAudio.blobUrl, { method: 'HEAD' });
-          if (!testResponse.ok) {
-            throw new Error('Blob URL invalid');
+      if (cachedAudio?.blobUrl) {
+        // FAST PATH: Audio is cached, play immediately without loading states
+        if (audioRef.current) {
+          console.log('⚡ FAST PATH: Using cached audio, instant playback');
+          audioRef.current.src = cachedAudio.blobUrl;
+          audioRef.current.playbackRate = playbackSpeed;
+          await audioRef.current.play();
+          setIsPlaying(true);
+          setCurrentChunkIndex(chunkIndex);
+          
+          // Reset preload trigger flag
+          preloadTriggeredRef.current = false;
+          
+          // Immediately preload next chunk
+          if (chunkIndex + 1 < bookInfo._internal.totalChunks && !audioCache.has(chunkIndex + 1)) {
+            console.log(`🚀 Immediately preloading chunk ${chunkIndex + 2} (multi-voice optimization)...`);
+            preloadNextChunk(chunkIndex + 1);
+            preloadTriggeredRef.current = true;
           }
-        } catch (verifyError) {
-          console.warn('⚠️ Cached blob URL is invalid, re-fetching...');
-          // Re-fetch if blob URL is invalid
-          const blobUrl = await fetchChunkAudio(chunkIndex);
-          setAudioCache(prev => {
-            const newCache = new Map(prev);
-            newCache.set(chunkIndex, { blobUrl });
-            return newCache;
-          });
-          cachedAudio = { blobUrl };
+          
+          console.log('✅ Fast playback started');
+          return; // Early return, skip loading states
         }
       }
+
+      // SLOW PATH: Need to fetch from API
+      setLoading(true);
+      setError(null);
+      setLoadingChunk(chunkIndex);
+      console.log('🐌 SLOW PATH: Fetching from API...');
+
+      // Fetch from API
+      const blobUrl = await fetchChunkAudio(chunkIndex);
+      console.log('🎵 Received blobUrl:', blobUrl.substring(0, 50) + '...');
+
+      // Cache it
+      setAudioCache(prev => {
+        const newCache = new Map(prev);
+        newCache.set(chunkIndex, { blobUrl });
+        return newCache;
+      });
+
+      cachedAudio = { blobUrl };
 
       // Play audio
       if (audioRef.current) {
@@ -317,17 +321,23 @@ const BookPlayer: React.FC = () => {
         await audioRef.current.play();
         setIsPlaying(true);
         setCurrentChunkIndex(chunkIndex);
+        
+        // Reset preload trigger flag when starting a new chunk
+        preloadTriggeredRef.current = false;
+        
+        // IMMEDIATE preload: Start loading next chunk right away (multi-voice takes 3-5s)
+        if (chunkIndex + 1 < bookInfo._internal.totalChunks && !audioCache.has(chunkIndex + 1)) {
+          console.log(`🚀 Immediately preloading chunk ${chunkIndex + 2} (multi-voice optimization)...`);
+          preloadNextChunk(chunkIndex + 1);
+          preloadTriggeredRef.current = true; // Mark as already triggered
+        }
+        
         console.log('✅ Playback started successfully');
       }
 
       // Clear loading state on success
       setLoading(false);
       setLoadingChunk(null);
-
-      // Preload next chunk in background
-      if (chunkIndex + 1 < bookInfo._internal.totalChunks) {
-        preloadNextChunk(chunkIndex + 1);
-      }
     } catch (error) {
       // Clear loading state on error
       setLoading(false);
@@ -337,7 +347,7 @@ const BookPlayer: React.FC = () => {
       setError(`Nepodarilo sa načítať audio chunk ${chunkIndex + 1}. Skúsiť znova?`);
       setIsPlaying(false);
     }
-  }, [bookInfo, audioCache, playbackSpeed]);
+  }, [bookInfo, audioCache, playbackSpeed, fetchChunkAudio]);
 
   const preloadNextChunk = async (nextIndex: number) => {
     if (!bookInfo || nextIndex >= bookInfo._internal.totalChunks) return;
@@ -614,9 +624,28 @@ const BookPlayer: React.FC = () => {
   }, [bookInfo, currentChunkIndex, playChunk]);
 
   const handleTimeUpdate = useCallback(() => {
-    if (!audioRef.current) return;
-    setCurrentTime(audioRef.current.currentTime);
-  }, []);
+    if (!audioRef.current || !bookInfo) return;
+    
+    const currentTime = audioRef.current.currentTime;
+    const duration = audioRef.current.duration;
+    
+    setCurrentTime(currentTime);
+    
+    // Aggressive preloading: Start at 10% for multi-voice (TTS generation takes 3-5s)
+    if (duration && !isNaN(duration) && currentTime / duration >= 0.1) {
+      const nextIndex = currentChunkIndex + 1;
+      
+      // Only preload once per chunk and if next chunk exists
+      if (!preloadTriggeredRef.current && 
+          nextIndex < bookInfo._internal.totalChunks && 
+          !audioCache.has(nextIndex)) {
+        
+        console.log(`⏰ 10% mark reached (${currentTime.toFixed(1)}s/${duration.toFixed(1)}s), preloading chunk ${nextIndex + 1}...`);
+        preloadTriggeredRef.current = true;
+        preloadNextChunk(nextIndex);
+      }
+    }
+  }, [bookInfo, currentChunkIndex, audioCache, preloadNextChunk]);
 
   const handleLoadedMetadata = useCallback(() => {
     if (!audioRef.current) return;
