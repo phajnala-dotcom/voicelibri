@@ -1,0 +1,60 @@
+{
+  "chunks": [
+    {
+      "id": "001",
+      "characterCount": 113,
+      "voiceSegments": 1,
+      "estimatedDuration": 7.2,
+      "speakers": [
+        "NARRATOR"
+      ]
+    },
+    {
+      "id": "002",
+      "characterCount": 147,
+      "voiceSegments": 1,
+      "estimatedDuration": 8.8,
+      "speakers": [
+        "RAGOWSKI"
+      ]
+    },
+    {
+      "id": "003",
+      "characterCount": 154,
+      "voiceSegments": 1,
+      "estimatedDuration": 10.4,
+      "speakers": [
+        "LILI"
+      ]
+    },
+    {
+      "id": "004",
+      "characterCount": 257,
+      "voiceSegments": 1,
+      "estimatedDuration": 15.6,
+      "speakers": [
+        "NARRATOR"
+      ]
+    },
+    {
+      "id": "005",
+      "characterCount": 276,
+      "voiceSegments": 1,
+      "estimatedDuration": 14.4,
+      "speakers": [
+        "RAGOWSKI"
+      ]
+    },
+    {
+      "id": "006",
+      "characterCount": 263,
+      "voiceSegments": 1,
+      "estimatedDuration": 14.4,
+      "speakers": [
+        "NARRATOR"
+      ]
+    }
+  ],
+  "totalChunks": 6,
+  "totalDuration": 70.8
+}
