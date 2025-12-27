@@ -40,6 +40,11 @@ export interface AudiobookMetadata {
   voiceMap?: Record<string, string>; // Character -> Voice mapping
   sourceFile?: string; // Original book file name
   
+  // Dramatization metadata
+  isDramatized?: boolean; // Whether book uses multi-voice dramatization
+  dramatizationVersion?: string; // Version of dramatization algorithm (for cache invalidation)
+  charactersFound?: number; // Number of speaking characters
+  
   // User playback state (for cross-device sync)
   playback?: {
     currentChapter: number; // 0-based chapter index
