@@ -290,7 +290,7 @@ export class GeminiDramatizer {
     const voiceMap = assignVoices(
       characters.map(c => ({
         name: c.name,
-        gender: c.gender,
+        gender: c.gender === 'unknown' ? 'neutral' : c.gender,
         traits: c.traits,
       }))
     );
@@ -375,7 +375,7 @@ export class GeminiDramatizer {
     const voiceMap = assignVoices(
       characters.map(c => ({
         name: c.name,
-        gender: c.gender,
+        gender: c.gender === 'unknown' ? 'neutral' : c.gender,
         traits: c.traits,
       }))
     );
@@ -387,4 +387,72 @@ export class GeminiDramatizer {
     
     return { characters, voiceMap, taggedChapter };
   }
+}
+
+/**
+ * Convenience function: Dramatize a book
+ * Creates a default dramatizer instance and processes the book
+ */
+export async function dramatizeBook(
+  bookPath: string,
+  options?: {
+    mode?: 'fast' | 'full';
+    onProgress?: ProgressCallback;
+  }
+): Promise<DramatizationResult> {
+  const config: DramatizationConfig = {
+    gemini: {
+      projectId: process.env.GOOGLE_CLOUD_PROJECT || '',
+      location: 'us-central1',
+    },
+  };
+  
+  const dramatizer = new GeminiDramatizer(config);
+  
+  // Extract book title from path
+  const bookTitle = path.basename(bookPath, path.extname(bookPath));
+  
+  // Load book content
+  const fs = await import('fs');
+  const bookText = fs.readFileSync(bookPath, 'utf-8');
+  const format = bookPath.endsWith('.epub') ? 'epub' : 'txt';
+  
+  // For now, create single chapter (TODO: proper chapter detection)
+  const chapters: Chapter[] = [{
+    index: 0,
+    title: 'Chapter 1',
+    text: bookText,
+    startOffset: 0,
+    endOffset: bookText.length,
+  }];
+  
+  return await dramatizer.dramatizeBook(bookText, chapters, bookTitle, format, options?.onProgress);
+}
+
+/**
+ * Convenience function: Check if book has cached dramatization
+ */
+export async function checkCache(bookPath: string): Promise<{
+  hasCached: boolean;
+  metadata?: any;
+}> {
+  const config: DramatizationConfig = {
+    gemini: {
+      projectId: process.env.GOOGLE_CLOUD_PROJECT || '',
+      location: 'us-central1',
+    },
+  };
+  
+  const dramatizer = new GeminiDramatizer(config);
+  const bookTitle = path.basename(bookPath, path.extname(bookPath));
+  const cache = await dramatizer.checkCache(bookTitle);
+  
+  if (cache === null) {
+    return { hasCached: false };
+  }
+  
+  return {
+    hasCached: true,
+    metadata: cache,
+  };
 }

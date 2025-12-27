@@ -211,7 +211,7 @@ export class GeminiCharacterAnalyzer implements LlmCharacterAnalyzer {
           throw new Error(`Gemini API error: ${response.status} - ${error}`);
         }
         
-        const data = await response.json();
+        const data: any = await response.json();
         const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
         
         if (!text) {
@@ -382,31 +382,20 @@ ${chapterText}`;
   } {
     throw new Error('Use voice assignment module instead');
   }
-}
 
-/**
- * Example usage (for Phase 2 development):
- * 
- * ```typescript
- * const analyzer = new GeminiCharacterAnalyzer({
- *   projectId: 'your-project-id',
- *   location: 'us-central1',
- * });
- * 
- * const bookText = fs.readFileSync('book.txt', 'utf-8');
- * const characters = await analyzer.analyzeFullBook(bookText);
- * 
- * for (const character of characters) {
- *   const voice = analyzer.assignOptimalVoice(character);
- *   console.log(`${character.name}: ${voice} (${character.gender}, ${character.traits.join(', ')})`);
- * }
- * 
- * const validation = analyzer.validateVoiceAssignments(characters);
- * if (!validation.valid) {
- *   console.warn('Voice assignment warnings:', validation.warnings);
- * }
- * ```
- */
+  /**
+   * Refine dialogue detection
+   * NOT NEEDED in current implementation (Phase 2 feature)
+   */
+  async refineDialogueDetection(text: string): Promise<Array<{
+    type: 'dialogue' | 'narrator' | 'internal_monologue';
+    speaker: string;
+    text: string;
+    confidence: number;
+  }>> {
+    throw new Error('refineDialogueDetection not implemented yet (Phase 2 feature)');
+  }
+}
 
 /**
  * Gemini Voice Reference (for Phase 2 voice assignment)

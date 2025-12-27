@@ -49,6 +49,7 @@ import {
 } from './bookChunker.js';
 import { chunkBookByChapters, type ChunkInfo } from './chapterChunker.js';
 import { audiobookWorker } from './audiobookWorker.js';
+import { dramatizeBook, checkCache } from './geminiDramatizer.js';
 
 // ES modules dirname workaround
 const __filename = fileURLToPath(import.meta.url);
@@ -1108,6 +1109,88 @@ app.get('/api/audiobooks/worker/status', (req: Request, res: Response) => {
 });
 
 /**
+ * Check if book has cached dramatization
+ * 
+ * GET /api/dramatize/check/:bookFile
+ */
+app.get('/api/dramatize/check/:bookFile', async (req: Request, res: Response) => {
+  try {
+    const { bookFile } = req.params;
+    const bookPath = path.join(ASSETS_DIR, bookFile);
+    
+    if (!fs.existsSync(bookPath)) {
+      return res.status(404).json({
+        error: 'Book not found',
+        message: `File not found: ${bookFile}`,
+      });
+    }
+    
+    const cacheInfo = await checkCache(bookPath);
+    res.json(cacheInfo);
+  } catch (error) {
+    console.error('✗ Error checking dramatization cache:', error);
+    res.status(500).json({
+      error: 'Failed to check cache',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * Auto-dramatize book with LLM
+ * 
+ * POST /api/dramatize/auto
+ * Body: { bookFile: string, mode?: 'full' | 'fast' }
+ */
+app.post('/api/dramatize/auto', async (req: Request, res: Response) => {
+  try {
+    const { bookFile, mode = 'fast' } = req.body;
+    
+    if (!bookFile) {
+      return res.status(400).json({
+        error: 'Missing bookFile',
+        message: 'bookFile is required',
+      });
+    }
+    
+    const bookPath = path.join(ASSETS_DIR, bookFile);
+    if (!fs.existsSync(bookPath)) {
+      return res.status(404).json({
+        error: 'Book not found',
+        message: `File not found: ${bookFile}`,
+      });
+    }
+    
+    console.log(`🎭 Starting LLM dramatization for: ${bookFile} (mode: ${mode})`);
+    
+    const result = await dramatizeBook(bookPath, {
+      mode,
+      onProgress: (progress) => {
+        console.log(`  📊 ${progress.phase}: ${progress.message} (${progress.progress}%)`);
+      },
+    });
+    
+    res.json({
+      success: true,
+      message: 'Book dramatized successfully',
+      characters: result.characters,
+      voiceMap: result.voiceMap,
+      stats: {
+        charactersFound: result.stats.charactersFound,
+        chaptersTagged: result.stats.chaptersTagged,
+        totalTime: result.stats.totalTime,
+      },
+    });
+  } catch (error) {
+    console.error('✗ Error dramatizing book:', error);
+    res.status(500).json({
+      error: 'Failed to dramatize book',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
  * Serve chapter audio file
  * 
  * GET /api/audiobooks/:bookTitle/chapters/:chapterIndex
@@ -1410,6 +1493,10 @@ app.listen(PORT, () => {
   console.log(`  GET  /api/audiobooks/:bookTitle/progress`);
   console.log(`  GET  /api/audiobooks/worker/status`);
   console.log(`  GET  /api/audiobooks/:bookTitle/chapters/:chapterIndex`);
+  console.log('');
+  console.log('LLM Dramatization endpoints:');
+  console.log(`  GET  /api/dramatize/check/:bookFile`);
+  console.log(`  POST /api/dramatize/auto`);
   console.log('');
   console.log('User State Sync endpoints:');
   console.log(`  PUT  /api/audiobooks/:bookTitle/position`);
