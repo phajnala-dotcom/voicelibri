@@ -17,11 +17,6 @@ interface BookInfo {
   };
 }
 
-interface PlaybackState {
-  chunkIndex: number;
-  timeInChunk: number;
-}
-
 interface AudioCache {
   blobUrl: string;
   loading?: boolean;
@@ -33,10 +28,6 @@ interface AudioCache {
 // ========================================
 
 const API_BASE_URL = 'http://localhost:3001';
-const STORAGE_KEY = 'ebook-reader-position';
-const LAST_BOOK_KEY = 'ebook-reader-last-book';
-const VOICE_KEY = 'ebook-reader-voice';
-const SAVE_INTERVAL_MS = 5000; // Save position every 5 seconds
 const RETRY_ATTEMPTS = 3;
 const RETRY_DELAYS = [1000, 2000, 4000]; // Exponential backoff
 
@@ -108,11 +99,6 @@ const getFilteredVoiceNames = (gender: string | null): string[] => {
     .sort();
 };
 
-// Helper to get position storage key for specific book
-const getPositionKey = (bookFilename: string) => {
-  return `${STORAGE_KEY}-${bookFilename}`;
-};
-
 // ========================================
 // Helper Functions
 // ========================================
@@ -126,24 +112,6 @@ const formatTime = (seconds: number): string => {
     return `${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   }
   return `${mins}:${secs.toString().padStart(2, '0')}`;
-};
-
-const savePositionToStorage = (state: PlaybackState, bookFilename: string) => {
-  const key = getPositionKey(bookFilename);
-  localStorage.setItem(key, JSON.stringify(state));
-};
-
-const loadPositionFromStorage = (bookFilename: string): PlaybackState | null => {
-  const key = getPositionKey(bookFilename);
-  const saved = localStorage.getItem(key);
-  if (!saved) return null;
-
-  try {
-    return JSON.parse(saved);
-  } catch (error) {
-    console.error('Failed to parse saved position:', error);
-    return null;
-  }
 };
 
 // ========================================
@@ -191,13 +159,43 @@ const BookPlayer: React.FC = () => {
   const [isInitialized, setIsInitialized] = useState(false);
   const [currentBookFile, setCurrentBookFile] = useState<string>('');
 
+  // Save playback position whenever it changes
+  useEffect(() => {
+    if (currentBookFile && bookInfo) {
+      const position = {
+        chunkIndex: currentChunkIndex,
+        timeInChunk: currentTime,
+        timestamp: Date.now()
+      };
+      localStorage.setItem(`playbackPosition_${currentBookFile}`, JSON.stringify(position));
+    }
+  }, [currentChunkIndex, currentTime, currentBookFile, bookInfo]);
+
   // Voice selection state (3-level filtering: Gender → Characteristic → Voice Name)
-  const [selectedGender, setSelectedGender] = useState<string | null>(null);
-  const [selectedVoiceName, setSelectedVoiceName] = useState<string>('Algieba');
+  // Load from localStorage or use defaults
+  const [selectedGender, setSelectedGender] = useState<string | null>(() => {
+    return localStorage.getItem('preferredNarratorGender') || 'mužský';
+  });
+  const [selectedVoiceName, setSelectedVoiceName] = useState<string>(() => {
+    return localStorage.getItem('preferredNarratorVoice') || 'Algieba';
+  });
 
   const audioRef = useRef<HTMLAudioElement>(null);
-  const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
   const preloadTriggeredRef = useRef<boolean>(false); // Track if next chunk preload started
+  const hasInitializedRef = useRef<boolean>(false); // Prevent duplicate initialization in StrictMode
+
+  // Update voice dropdowns when values load from localStorage
+  useEffect(() => {
+    const savedVoice = localStorage.getItem('preferredNarratorVoice');
+    const savedGender = localStorage.getItem('preferredNarratorGender');
+    if (savedVoice) {
+      setSelectedVoiceName(savedVoice);
+    }
+    if (savedGender) {
+      setSelectedGender(savedGender);
+    }
+    console.log(`🎙️ Voice loaded from localStorage: ${savedVoice} (${savedGender})`);
+  }, []); // Run once on mount
 
   // ========================================
   // API Functions
@@ -211,17 +209,10 @@ const BookPlayer: React.FC = () => {
     return response.json();
   };
 
-  const fetchAvailableBooks = async (): Promise<{ books: any[]; currentBook: string }> => {
-    const response = await fetch(`${API_BASE_URL}/api/books`);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch books: ${response.statusText}`);
-    }
-    return response.json();
-  };
-
   const fetchChunkAudio = async (
     chunkIndex: number,
-    retryCount = 0
+    retryCount = 0,
+    bookFileOverride?: string // Allow override for book selection race condition
   ): Promise<string> => {
     try {
       const response = await fetch(`${API_BASE_URL}/api/tts/chunk`, {
@@ -229,12 +220,17 @@ const BookPlayer: React.FC = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
           chunkIndex,
-          voiceName: selectedVoiceName || 'Algieba' // Send selected voice to backend
+          voiceName: selectedVoiceName || 'Algieba', // Send selected voice to backend
+          bookFile: bookFileOverride || currentBookFile // Use override if provided
         }),
       });
 
       if (!response.ok) {
-        throw new Error(`Failed to fetch chunk ${chunkIndex}: ${response.statusText}`);
+        const errorText = await response.text().catch(() => 'Unknown error');
+        console.error(`❌ Fetch failed for chunk ${chunkIndex}:`, response.status, errorText);
+        console.error(`   Voice: ${selectedVoiceName}`);
+        console.error(`   Book file: ${bookFileOverride || currentBookFile}`);
+        throw new Error(`Failed to fetch chunk ${chunkIndex}: ${response.statusText} - ${errorText}`);
       }
 
       const blob = await response.blob();
@@ -246,7 +242,7 @@ const BookPlayer: React.FC = () => {
         const delay = RETRY_DELAYS[retryCount];
         console.warn(`Retry ${retryCount + 1}/${RETRY_ATTEMPTS} for chunk ${chunkIndex} after ${delay}ms`);
         await new Promise(resolve => setTimeout(resolve, delay));
-        return fetchChunkAudio(chunkIndex, retryCount + 1);
+        return fetchChunkAudio(chunkIndex, retryCount + 1, bookFileOverride);
       }
       throw error;
     }
@@ -256,8 +252,8 @@ const BookPlayer: React.FC = () => {
   // Audio Playback Logic
   // ========================================
 
-  const playChunk = useCallback(async (chunkIndex: number) => {
-    console.log('🎵 playChunk called for chunk:', chunkIndex);
+  const playChunk = useCallback(async (chunkIndex: number, bookFileOverride?: string) => {
+    console.log('🎵 playChunk called for chunk:', chunkIndex, 'bookFile:', bookFileOverride || currentBookFile);
     
     if (!bookInfo) {
       console.log('❌ No bookInfo, returning');
@@ -282,12 +278,7 @@ const BookPlayer: React.FC = () => {
           // Reset preload trigger flag
           preloadTriggeredRef.current = false;
           
-          // Immediately preload next chunk
-          if (chunkIndex + 1 < bookInfo._internal.totalChunks && !audioCache.has(chunkIndex + 1)) {
-            console.log(`🚀 Immediately preloading chunk ${chunkIndex + 2} (multi-voice optimization)...`);
-            preloadNextChunk(chunkIndex + 1);
-            preloadTriggeredRef.current = true;
-          }
+          // Note: Preloading now happens at 10% mark (see handleTimeUpdate)
           
           console.log('✅ Fast playback started');
           return; // Early return, skip loading states
@@ -300,8 +291,8 @@ const BookPlayer: React.FC = () => {
       setLoadingChunk(chunkIndex);
       console.log('🐌 SLOW PATH: Fetching from API...');
 
-      // Fetch from API
-      const blobUrl = await fetchChunkAudio(chunkIndex);
+      // Fetch from API (pass bookFile override to avoid race condition)
+      const blobUrl = await fetchChunkAudio(chunkIndex, 0, bookFileOverride);
       console.log('🎵 Received blobUrl:', blobUrl.substring(0, 50) + '...');
 
       // Cache it
@@ -316,6 +307,11 @@ const BookPlayer: React.FC = () => {
       // Play audio
       if (audioRef.current) {
         console.log('🎵 Setting audio src and playing...');
+        // Clear previous source first to avoid 'no supported source' errors
+        audioRef.current.pause();
+        audioRef.current.src = '';
+        audioRef.current.load();
+        // Set new source
         audioRef.current.src = cachedAudio.blobUrl;
         audioRef.current.playbackRate = playbackSpeed;
         await audioRef.current.play();
@@ -325,12 +321,7 @@ const BookPlayer: React.FC = () => {
         // Reset preload trigger flag when starting a new chunk
         preloadTriggeredRef.current = false;
         
-        // IMMEDIATE preload: Start loading next chunk right away (multi-voice takes 3-5s)
-        if (chunkIndex + 1 < bookInfo._internal.totalChunks && !audioCache.has(chunkIndex + 1)) {
-          console.log(`🚀 Immediately preloading chunk ${chunkIndex + 2} (multi-voice optimization)...`);
-          preloadNextChunk(chunkIndex + 1);
-          preloadTriggeredRef.current = true; // Mark as already triggered
-        }
+        // Note: Preloading now happens at 10% mark (see handleTimeUpdate)
         
         console.log('✅ Playback started successfully');
       }
@@ -344,7 +335,16 @@ const BookPlayer: React.FC = () => {
       setLoadingChunk(null);
       
       console.error('❌ Error playing chunk:', error);
-      setError(`Nepodarilo sa načítať audio chunk ${chunkIndex + 1}. Skúsiť znova?`);
+      console.error('   Current book file:', currentBookFile);
+      console.error('   Book override:', bookFileOverride);
+      console.error('   Chunk index:', chunkIndex);
+      console.error('   Book info:', bookInfo);
+      console.error('   Total chunks:', bookInfo?._internal.totalChunks);
+      console.error('   Cache has chunk:', audioCache.has(chunkIndex));
+      
+      // Show user-friendly error message with actual error details
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      setError(`Nepodarilo sa načítať audio chunk ${chunkIndex + 1}: ${errorMsg}. Skúsiť znova?`);
       setIsPlaying(false);
     }
   }, [bookInfo, audioCache, playbackSpeed, fetchChunkAudio]);
@@ -568,7 +568,7 @@ const BookPlayer: React.FC = () => {
       const matchingVoice = VOICE_MATRIX.find(v => v.gender === gender);
       if (matchingVoice) {
         setSelectedVoiceName(matchingVoice.voiceName);
-        saveVoiceToStorage(matchingVoice);
+        console.log(`🎙️ Voice changed to: ${matchingVoice.voiceName} (${matchingVoice.gender})`);
       }
     }
   };
@@ -579,13 +579,11 @@ const BookPlayer: React.FC = () => {
     const matchingVoice = VOICE_MATRIX.find(v => v.voiceName === voiceName);
     if (matchingVoice) {
       setSelectedGender(matchingVoice.gender);
-      saveVoiceToStorage(matchingVoice);
+      console.log(`🎙️ Voice changed to: ${matchingVoice.voiceName} (${matchingVoice.gender})`);
+      // Save to localStorage for persistence
+      localStorage.setItem('preferredNarratorVoice', voiceName);
+      localStorage.setItem('preferredNarratorGender', matchingVoice.gender);
     }
-  };
-
-  const saveVoiceToStorage = (voice: VoiceConfig) => {
-    localStorage.setItem(VOICE_KEY, JSON.stringify(voice));
-    console.log(`🎙️ Voice changed to: ${voice.voiceName} (${voice.gender})`);
   };
 
   const retryCurrentChunk = () => {
@@ -631,16 +629,13 @@ const BookPlayer: React.FC = () => {
     
     setCurrentTime(currentTime);
     
-    // Aggressive preloading: Start at 10% for multi-voice (TTS generation takes 3-5s)
-    if (duration && !isNaN(duration) && currentTime / duration >= 0.1) {
+    // Aggressive preloading: Start at 0% for multi-voice (TTS generation takes 3-5s)
+    if (duration && !isNaN(duration) && currentTime / duration >= 0.0) {
       const nextIndex = currentChunkIndex + 1;
       
-      // Only preload once per chunk and if next chunk exists
-      if (!preloadTriggeredRef.current && 
-          nextIndex < bookInfo._internal.totalChunks && 
-          !audioCache.has(nextIndex)) {
-        
-        console.log(`⏰ 10% mark reached (${currentTime.toFixed(1)}s/${duration.toFixed(1)}s), preloading chunk ${nextIndex + 1}...`);
+      // Preload next chunk at 0% mark
+      if (!preloadTriggeredRef.current) {
+        console.log(`⏰ 0% mark reached (${currentTime.toFixed(1)}s/${duration.toFixed(1)}s), preloading next chunk...`);
         preloadTriggeredRef.current = true;
         preloadNextChunk(nextIndex);
       }
@@ -690,105 +685,38 @@ const BookPlayer: React.FC = () => {
   };
 
   // ========================================
-  // localStorage Save/Load
-  // ========================================
-
-  const savePosition = useCallback(() => {
-    if (!currentBookFile) return; // Don't save if no book loaded
-    
-    const state: PlaybackState = {
-      chunkIndex: currentChunkIndex,
-      timeInChunk: currentTime,
-    };
-    savePositionToStorage(state, currentBookFile);
-  }, [currentChunkIndex, currentTime, currentBookFile]);
-
-  // ========================================
   // Effects
   // ========================================
 
   // Initial load: Try to load last book or show book selector
   useEffect(() => {
+    // Prevent duplicate initialization in React StrictMode
+    if (hasInitializedRef.current) {
+      return;
+    }
+    hasInitializedRef.current = true;
+
     const initializePlayer = async () => {
+      // Set a safety timeout to prevent infinite loading
+      const timeoutId = setTimeout(() => {
+        console.warn('⚠️ Initialization timeout - showing UI anyway');
+        setLoading(false);
+        setIsInitialized(true);
+      }, 10000); // 10 second timeout
+
       try {
         setLoading(true);
         
-        // Get last selected book from localStorage
-        const lastBook = localStorage.getItem(LAST_BOOK_KEY);
+        // No auto-restore - user must select a book manually
+        console.log('📚 Initialized - waiting for user book selection');
         
-        // Get last selected voice from localStorage
-        const savedVoice = localStorage.getItem(VOICE_KEY);
-        if (savedVoice) {
-          try {
-            const voice: VoiceConfig = JSON.parse(savedVoice);
-            setSelectedGender(voice.gender);
-            setSelectedVoiceName(voice.voiceName);
-            console.log('🎙️ Restored voice:', voice.voiceName);
-          } catch (e) {
-            console.warn('Failed to parse saved voice, using default');
-          }
-        }
-        
-        // Fetch available books
-        const booksData = await fetchAvailableBooks();
-        const availableBooks = booksData.books;
-        
-        // Determine which book to load
-        let bookToLoad: string | null = null;
-        
-        if (lastBook && availableBooks.some((b: any) => b.filename === lastBook)) {
-          // Last book still exists
-          bookToLoad = lastBook;
-          console.log('📚 Restoring last book:', lastBook);
-        } else if (availableBooks.length > 0) {
-          // No last book or it was deleted - select first available
-          bookToLoad = availableBooks[0].filename;
-          console.log('📚 Loading first available book:', bookToLoad);
-        }
-        
-        if (bookToLoad) {
-          // Load the book via API
-          const response = await fetch(`${API_BASE_URL}/api/book/select`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ filename: bookToLoad }),
-          });
-          
-          if (!response.ok) {
-            throw new Error('Failed to load book');
-          }
-          
-          // Fetch book info
-          const info = await fetchBookInfo();
-          setBookInfo(info);
-          setCurrentBookFile(bookToLoad);
-          console.log('� Book loaded:', info);
-
-          // Load saved position for this specific book
-          const savedPos = loadPositionFromStorage(bookToLoad);
-          if (savedPos && savedPos.chunkIndex < info._internal.totalChunks) {
-            console.log('💾 Restoring saved position:', savedPos);
-            setCurrentChunkIndex(savedPos.chunkIndex);
-            
-            // Will restore time after audio loads
-            setTimeout(() => {
-              if (audioRef.current && savedPos.timeInChunk > 0) {
-                audioRef.current.currentTime = savedPos.timeInChunk;
-              }
-            }, 200);
-          }
-        } else {
-          // No books available
-          console.log('📚 No books available in assets folder');
-          setError('Žiadne knihy nenájdené. Pridajte .epub alebo .txt súbor do assets/ priečinka.');
-        }
-
         setIsInitialized(true);
       } catch (error) {
         console.error('Failed to initialize player:', error);
         setError('Nepodarilo sa načítať knihu. Skúste vybrať knihu z menu.');
         setIsInitialized(true); // Still show UI
       } finally {
+        clearTimeout(timeoutId); // Clear the safety timeout
         setLoading(false);
       }
     };
@@ -813,28 +741,6 @@ const BookPlayer: React.FC = () => {
       audio.removeEventListener('error', handleAudioError);
     };
   }, [handleAudioEnded, handleTimeUpdate, handleLoadedMetadata, handleAudioError]);
-
-  // Auto-save position every 5 seconds during playback
-  useEffect(() => {
-    if (isPlaying) {
-      saveTimerRef.current = setInterval(() => {
-        savePosition();
-      }, SAVE_INTERVAL_MS);
-    } else {
-      if (saveTimerRef.current) {
-        clearInterval(saveTimerRef.current);
-        saveTimerRef.current = null;
-      }
-      // Save immediately when pausing
-      savePosition();
-    }
-
-    return () => {
-      if (saveTimerRef.current) {
-        clearInterval(saveTimerRef.current);
-      }
-    };
-  }, [isPlaying, savePosition]);
 
   // Cleanup blob URLs on unmount
   useEffect(() => {
@@ -873,31 +779,45 @@ const BookPlayer: React.FC = () => {
       
       // Fetch new book info (backend already loaded it via /api/book/select)
       const info = await fetchBookInfo();
+      console.log('📖 Book info received:', info);
+      
+      // CRITICAL: Update state synchronously BEFORE playing chunks
+      // This ensures fetchChunkAudio uses the correct currentBookFile
       setBookInfo(info);
       setCurrentBookFile(filename);
       
-      // Save last selected book to localStorage
-      localStorage.setItem(LAST_BOOK_KEY, filename);
-      
-      // Restore position for this book
-      const savedPos = loadPositionFromStorage(filename);
-      if (savedPos && savedPos.chunkIndex < info._internal.totalChunks) {
-        console.log('💾 Restoring saved position for', filename, ':', savedPos);
-        setCurrentChunkIndex(savedPos.chunkIndex);
-        setCurrentTime(savedPos.timeInChunk);
-        
-        // Preload the chunk at saved position
-        console.log('🔄 Preloading chunk', savedPos.chunkIndex);
-        await playChunk(savedPos.chunkIndex);
+      // Load saved playback position for this book
+      const savedPosition = localStorage.getItem(`playbackPosition_${filename}`);
+      let startChunkIndex = 0;
+      let startTime = 0;
+      if (savedPosition) {
+        try {
+          const position = JSON.parse(savedPosition);
+          startChunkIndex = position.chunkIndex || 0;
+          startTime = position.timeInChunk || 0;
+          console.log(`📍 Resuming from chunk ${startChunkIndex} at ${startTime.toFixed(1)}s`);
+        } catch (e) {
+          console.warn('Failed to parse saved position, starting from beginning');
+        }
       } else {
-        // Start from beginning
         console.log('📍 Starting from beginning');
-        setCurrentChunkIndex(0);
-        setCurrentTime(0);
+      }
+      
+      setCurrentChunkIndex(startChunkIndex);
+      setCurrentTime(startTime);
         
-        // Preload first chunk
-        console.log('🔄 Preloading first chunk');
-        await playChunk(0);
+      // Preload/resume chunk (pass filename to avoid race condition)
+      console.log(`🔄 Loading chunk ${startChunkIndex}`);
+      await playChunk(startChunkIndex, filename);
+      
+      // If resuming mid-chunk, seek to saved time
+      if (startTime > 0 && audioRef.current) {
+        setTimeout(() => {
+          if (audioRef.current) {
+            audioRef.current.currentTime = startTime;
+            console.log(`⏩ Seeked to ${startTime.toFixed(1)}s`);
+          }
+        }, 200);
       }
       
       console.log('✓ New book loaded:', info);
@@ -925,7 +845,7 @@ const BookPlayer: React.FC = () => {
   // Render
   // ========================================
 
-  if (!isInitialized || !bookInfo) {
+  if (!isInitialized) {
     return (
       <div style={styles.container}>
         <div style={styles.loadingContainer}>
@@ -936,6 +856,29 @@ const BookPlayer: React.FC = () => {
               <p>{error}</p>
             </div>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  // If no book is loaded, show book selector UI
+  if (!bookInfo) {
+    return (
+      <div style={styles.container}>
+        <div style={styles.player}>
+          <BookSelector 
+            onBookSelected={handleBookSelected}
+            currentBook={currentBookFile}
+          />
+          <div style={styles.loadingContainer}>
+            <h2>📖 Vyberte knihu</h2>
+            <p>Použite tlačidlo vyššie na výber knihy z knižnice</p>
+            {error && (
+              <div style={styles.errorBox}>
+                <p>{error}</p>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     );
@@ -1056,7 +999,7 @@ const BookPlayer: React.FC = () => {
 
         {/* Voice Control - 2-level Filtering Selector (Gender → Voice Name) */}
         <div style={styles.voiceControl}>
-          <label style={styles.voiceLabel}>Hlas:</label>
+          <label style={styles.voiceLabel}>Hlas rozprávača:</label>
           
           {/* Gender Filter */}
           <select

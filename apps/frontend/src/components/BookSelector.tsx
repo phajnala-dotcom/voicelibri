@@ -61,6 +61,7 @@ export const BookSelector: React.FC<BookSelectorProps> = ({ onBookSelected, curr
 
     setLoading(true);
     try {
+      // First, select the book to check if library version exists
       const response = await fetch(`${API_BASE_URL}/api/book/select`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -73,6 +74,27 @@ export const BookSelector: React.FC<BookSelectorProps> = ({ onBookSelected, curr
 
       const data = await response.json();
       console.log('✓ Book selected:', data.book);
+      console.log('📚 Library version exists:', data.hasLibraryVersion);
+      
+      // Show confirmation dialog only if library version doesn't exist
+      if (!data.hasLibraryVersion) {
+        setLoading(false);
+        const confirmed = window.confirm(
+          `📚 Načítať knihu?\n\n` +
+          `Kniha: ${filename}\n\n` +
+          `Táto kniha bude načítaná do prehrávača.\n` +
+          `Audio sa bude generovať na požiadanie pri prehrávaní.\n\n` +
+          `Chcete pokračovať?`
+        );
+
+        if (!confirmed) {
+          setIsOpen(false);
+          return;
+        }
+        setLoading(true);
+      } else {
+        console.log('✓ Library version exists, loading without confirmation');
+      }
       
       onBookSelected(filename);
       setIsOpen(false);
