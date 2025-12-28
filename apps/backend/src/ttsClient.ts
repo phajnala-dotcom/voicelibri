@@ -62,11 +62,16 @@ export class TTSClient {
   /**
    * Synthesizes text to audio using Gemini 2.5 Pro TTS via Vertex AI REST API
    * This matches the behavior of Google AI Studio
-   * @param text - The text to synthesize
+   * @param text - The text to synthesize (supports SSML with prosody tags)
    * @param voiceName - The Gemini voice name to use (e.g., 'Algieba', 'Puck', 'Zephyr')
+   * @param style - Voice style modifier: 'normal', 'whisper', 'thought', 'letter'
    * @returns Buffer containing audio data (PCM/WAV format)
    */
-  async synthesizeText(text: string, voiceName: string = 'Algieba'): Promise<Buffer> {
+  async synthesizeText(
+    text: string, 
+    voiceName: string = 'Algieba',
+    style: 'normal' | 'whisper' | 'thought' | 'letter' = 'normal'
+  ): Promise<Buffer> {
     const model = 'gemini-2.5-flash-tts';
     const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/${this.projectId}/locations/${this.location}/publishers/google/models/${model}:generateContent`;
 
@@ -78,12 +83,34 @@ export class TTSClient {
       throw new Error('Failed to get access token');
     }
 
+    // Apply SSML styling based on voice style
+    let styledText = text;
+    switch (style) {
+      case 'whisper':
+        // Softer, slower for whispers
+        styledText = `<speak><prosody volume="-10dB" rate="95%">${text}</prosody></speak>`;
+        break;
+      case 'thought':
+        // Slightly lower pitch, slower for internal thoughts
+        styledText = `<speak><prosody pitch="-5%" rate="90%">${text}</prosody></speak>`;
+        break;
+      case 'letter':
+        // Slower, slightly lower pitch for reading letters
+        styledText = `<speak><prosody rate="85%" pitch="-2%">${text}</prosody></speak>`;
+        break;
+      case 'normal':
+      default:
+        // No modifications
+        styledText = text;
+        break;
+    }
+
     // TTS-specific request body (safety filters require invoiced billing account)
     const requestBody = {
       contents: {
         role: 'user',
         parts: {
-          text: text
+          text: styledText
         }
       },
       generation_config: {
@@ -98,7 +125,8 @@ export class TTSClient {
     };
 
     try {
-      console.log(`🎤 TTS API call - Text: ${text.length} chars, Voice: ${voiceName}`);
+      const styleDesc = style !== 'normal' ? ` [${style.toUpperCase()}]` : '';
+      console.log(`🎤 TTS API call - Text: ${text.length} chars, Voice: ${voiceName}${styleDesc}`);
       const startTime = Date.now();
       
       const response = await fetch(endpoint, {

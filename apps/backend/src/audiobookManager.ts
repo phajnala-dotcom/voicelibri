@@ -43,7 +43,15 @@ export interface AudiobookMetadata {
   // Dramatization metadata
   isDramatized?: boolean; // Whether book uses multi-voice dramatization
   dramatizationVersion?: string; // Version of dramatization algorithm (for cache invalidation)
+  dramatizationType?: 'llm-only' | 'hybrid-optimized'; // Which dramatization pipeline was used
   charactersFound?: number; // Number of speaking characters
+  dramatizationCost?: number; // Total cost in USD for dramatization
+  dramatizationConfidence?: number; // Average confidence score (0-1)
+  taggingMethodBreakdown?: { // How chapters were tagged
+    autoNarrator: number;
+    ruleBased: number;
+    llmFallback: number;
+  };
   
   // User playback state (for cross-device sync)
   playback?: {
