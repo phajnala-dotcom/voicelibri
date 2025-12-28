@@ -73,6 +73,18 @@ export interface BookMetadata {
   publisher?: string;      // Publisher name
   year?: number;          // Publication year
   isbn?: string;          // ISBN if available
+  
+  // Hybrid dramatization metadata
+  isDramatized?: boolean;
+  dramatizationType?: 'llm-only' | 'hybrid-optimized';
+  charactersFound?: number;
+  dramatizationCost?: number;
+  dramatizationConfidence?: number;
+  taggingMethodBreakdown?: {
+    autoNarrator: number;
+    ruleBased: number;
+    llmFallback: number;
+  };
 }
 
 /**

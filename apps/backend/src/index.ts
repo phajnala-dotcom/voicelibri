@@ -48,6 +48,8 @@ import {
   type Chapter 
 } from './bookChunker.js';
 import { chunkBookByChapters, type ChunkInfo } from './chapterChunker.js';
+import { dramatizeBookHybrid, dramatizeFirstChapterHybrid } from './hybridDramatizer.js';
+import { GeminiConfig } from './llmCharacterAnalyzer.js';
 import { audiobookWorker } from './audiobookWorker.js';
 import { dramatizeBook, checkCache } from './geminiDramatizer.js';
 
@@ -91,7 +93,7 @@ const CONSOLIDATION_CHECK_INTERVAL = 30000; // Check every 30 seconds
  * Helper function to load a book by filename
  * @param filename - Name of the book file in assets/
  */
-function loadBookFile(filename: string): void {
+async function loadBookFile(filename: string, enableDramatization: boolean = false): Promise<void> {
   const bookPath = path.join(ASSETS_DIR, filename);
   
   if (!fs.existsSync(bookPath)) {
@@ -143,8 +145,77 @@ function loadBookFile(filename: string): void {
     throw new Error(`Unsupported book format: ${ext}`);
   }
   
+  // Check for voice tags (existing or from dramatization)
+  let hasVoiceTags = /\[VOICE=.*?\]/.test(BOOK_TEXT);
+  
+  // HYBRID DRAMATIZATION: Auto-tag dialogue with LLM
+  if (enableDramatization && !hasVoiceTags) {
+    console.log('\n🎭 HYBRID DRAMATIZATION ENABLED');
+    console.log('===============================');
+    
+    try {
+      const geminiConfig: GeminiConfig = {
+        projectId: process.env.GOOGLE_CLOUD_PROJECT || '',
+        location: process.env.GOOGLE_CLOUD_LOCATION || 'us-central1',
+      };
+      
+      if (!geminiConfig.projectId) {
+        throw new Error('GOOGLE_CLOUD_PROJECT environment variable not set');
+      }
+      
+      console.log('⚡ Starting hybrid dramatization...');
+      console.log(`   Book: ${BOOK_TEXT.length} chars, ${BOOK_CHAPTERS.length} chapters`);
+      
+      const result = await dramatizeBookHybrid(
+        BOOK_TEXT,
+        BOOK_CHAPTERS.map(ch => ch.text),
+        geminiConfig,
+        0.85 // Confidence threshold
+      );
+      
+      // Replace book chapters with tagged versions
+      for (let i = 0; i < BOOK_CHAPTERS.length; i++) {
+        BOOK_CHAPTERS[i].text = result.taggedChapters[i].taggedText;
+      }
+      
+      // Rebuild full book text from tagged chapters
+      BOOK_TEXT = BOOK_CHAPTERS.map(ch => ch.text).join('\n\n');
+      hasVoiceTags = true;
+      
+      // Update metadata with dramatization info
+      BOOK_METADATA.isDramatized = true;
+      BOOK_METADATA.dramatizationType = 'hybrid-optimized';
+      BOOK_METADATA.charactersFound = result.characters.length;
+      BOOK_METADATA.dramatizationCost = result.totalCost;
+      BOOK_METADATA.dramatizationConfidence = result.taggedChapters.reduce((sum, ch) => sum + ch.confidence, 0) / result.taggedChapters.length;
+      BOOK_METADATA.taggingMethodBreakdown = {
+        autoNarrator: result.taggedChapters.filter(ch => ch.method === 'auto-narrator').length,
+        ruleBased: result.taggedChapters.filter(ch => ch.method === 'rule-based').length,
+        llmFallback: result.taggedChapters.filter(ch => ch.method === 'llm-fallback').length,
+      };
+      
+      console.log('\n✅ HYBRID DRAMATIZATION COMPLETE');
+      console.log('==================================');
+      console.log(`💰 Total cost: $${result.totalCost.toFixed(4)}`);
+      console.log(`📊 Average confidence: ${(BOOK_METADATA.dramatizationConfidence! * 100).toFixed(1)}%`);
+      console.log(`👥 Characters found: ${result.characters.length}`);
+      console.log(`📈 Tagging methods:`);
+      console.log(`   Auto-narrator: ${BOOK_METADATA.taggingMethodBreakdown!.autoNarrator} chapters`);
+      console.log(`   Rule-based: ${BOOK_METADATA.taggingMethodBreakdown!.ruleBased} chapters`);
+      console.log(`   LLM fallback: ${BOOK_METADATA.taggingMethodBreakdown!.llmFallback} chapters`);
+      console.log(`\n🎤 Characters: ${result.characters.map(c => c.name).join(', ')}`);
+      console.log('');
+      
+    } catch (error) {
+      console.error('\n❌ HYBRID DRAMATIZATION FAILED');
+      console.error('================================');
+      console.error(error);
+      console.error('\n⚠️ Falling back to single-voice narration\n');
+      hasVoiceTags = false;
+    }
+  }
+  
   // Chunk the book using chapter-aware chunking
-  const hasVoiceTags = /\[VOICE=.*?\]/.test(BOOK_TEXT);
   console.log(hasVoiceTags ? '📢 Detected voice tags - using dramatized chapter chunking' : '📄 Using regular chapter chunking');
   
   const chunkingResult = chunkBookByChapters(BOOK_CHAPTERS, hasVoiceTags);
@@ -578,10 +649,16 @@ app.post('/api/book/select', async (req: Request, res: Response) => {
       }
     }
     
-    // Load the new book
-    loadBookFile(filename);
+    // Check if dramatization is requested (from query param or body)
+    const enableDramatization = req.query.dramatize === 'true' || req.body.dramatize === true;
+    
+    // Load the new book (with optional dramatization)
+    await loadBookFile(filename, enableDramatization);
     
     console.log(`✓ Switched to book: ${filename}`);
+    if (enableDramatization && BOOK_METADATA) {
+      console.log(`   🎭 Hybrid dramatization: ${BOOK_METADATA.isDramatized ? 'SUCCESS' : 'FAILED (fallback to single-voice)'}`);
+    }
     
     // Return book info (after loadBookFile, these should be populated)
     if (!BOOK_METADATA || !BOOK_INFO) {
@@ -613,6 +690,13 @@ app.post('/api/book/select', async (req: Request, res: Response) => {
         language: BOOK_METADATA.language,
         totalChunks: BOOK_INFO.totalChunks,
         estimatedDuration: formatDuration(BOOK_INFO.estimatedDuration),
+        // Dramatization info
+        isDramatized: BOOK_METADATA.isDramatized || false,
+        dramatizationType: BOOK_METADATA.dramatizationType,
+        charactersFound: BOOK_METADATA.charactersFound,
+        dramatizationCost: BOOK_METADATA.dramatizationCost,
+        dramatizationConfidence: BOOK_METADATA.dramatizationConfidence,
+        taggingMethodBreakdown: BOOK_METADATA.taggingMethodBreakdown,
       },
       hasLibraryVersion, // Tell frontend if audiobook exists in library
     });
