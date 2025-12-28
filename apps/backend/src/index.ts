@@ -230,6 +230,52 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
     }
   }
   
+  // For pre-tagged books: Extract characters from existing tags and create voice map
+  if (hasVoiceTags && Object.keys(VOICE_MAP).length === 0) {
+    console.log('\n🎭 PRE-TAGGED BOOK DETECTED');
+    console.log('============================');
+    console.log('   Extracting characters from existing voice tags...');
+    
+    try {
+      // Extract all unique character names from voice tags in the book text
+      const voiceTagRegex = /\[VOICE=([^:\]]+)(?::[^\]]+)?\]/g;
+      const characterNames = new Set<string>();
+      let match;
+      
+      while ((match = voiceTagRegex.exec(BOOK_TEXT)) !== null) {
+        characterNames.add(match[1]);
+      }
+      
+      console.log(`   Found ${characterNames.size} unique voices: ${Array.from(characterNames).join(', ')}`);
+      
+      // Create character profiles (with neutral gender - voice assigner will pick diverse voices)
+      const charactersForVoiceMap: Character[] = Array.from(characterNames)
+        .filter(name => name !== 'NARRATOR') // NARRATOR handled separately
+        .map(name => ({
+          name,
+          gender: 'neutral' as const,
+          traits: []
+        }));
+      
+      VOICE_MAP = assignVoices(charactersForVoiceMap);
+      console.log(`🎙️  Voice assignments for pre-tagged book:`);
+      for (const [character, voice] of Object.entries(VOICE_MAP)) {
+        console.log(`   ${character} → ${voice}`);
+      }
+      console.log('');
+      
+      // Mark as dramatized
+      BOOK_METADATA.isDramatized = true;
+      BOOK_METADATA.dramatizationType = 'llm-only'; // Pre-tagged, not hybrid
+      BOOK_METADATA.charactersFound = characterNames.size;
+      
+    } catch (error) {
+      console.error('❌ Failed to extract characters from pre-tagged book:', error);
+      console.error('⚠️  Falling back to single-voice narration\n');
+      VOICE_MAP = {};
+    }
+  }
+  
   // Chunk the book using chapter-aware chunking
   console.log(hasVoiceTags ? '📢 Detected voice tags - using dramatized chapter chunking' : '📄 Using regular chapter chunking');
   
