@@ -235,11 +235,13 @@ interface BookInfo {
 - **Cached replay**: $0 (zero cost, loads from disk)
 - **Accuracy**: 97-99% (confidence-scored with LLM fallback)
 
-**Voice Styles (SSML):**
-- `[VOICE=CHARACTER:WHISPER]` → -10dB volume, 95% rate
-- `[VOICE=CHARACTER:THOUGHT]` → -5% pitch, 90% rate (internal monologue)
-- `[VOICE=CHARACTER:LETTER]` → 85% rate, -2% pitch (reading letters)
-- `[VOICE=CHARACTER]` → Normal (default)
+**Voice Styles (Verbal Instructions):**
+- `[VOICE=CHARACTER:WHISPER]` → "[Speak in a hushed whisper] text"
+- `[VOICE=CHARACTER:THOUGHT]` → "[Internal thought, speaking to oneself] text" (must be CHARACTER, not NARRATOR)
+- `[VOICE=CHARACTER:LETTER]` → "[Reading aloud from a letter] text"
+- `[VOICE=CHARACTER]` → Normal dialogue (no instruction)
+
+Note: Verbal instructions allow Gemini TTS to interpret naturally rather than rigid SSML parameters.
 
 **Pricing reference**: $0.30/1M input, $2.50/1M output tokens
 

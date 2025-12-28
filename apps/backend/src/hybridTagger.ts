@@ -8,6 +8,14 @@
  * 
  * Expected cost reduction: 60-80% vs pure LLM
  * Expected accuracy: 97-99%
+ * 
+ * INNER VOICE / THOUGHTS:
+ * - WITH quotes: "Did he lie?" she thought → Rule-based can detect
+ * - WITHOUT quotes: She wondered if he lied → LLM required (narrator paraphrase vs actual thought)
+ * - Must be CHARACTER voice, not NARRATOR: [VOICE=MARY:THOUGHT] not [VOICE=NARRATOR:THOUGHT]
+ * 
+ * Limitation: Unquoted internal thoughts are very hard for rule-based detection.
+ * These cases will trigger LLM fallback for proper attribution and style tagging.
  */
 
 import { CharacterProfile } from './llmCharacterAnalyzer.js';
@@ -87,9 +95,14 @@ export function extractDialogueParagraphs(text: string): string[] {
  * Simple rule-based dialogue detection and tagging
  * 
  * Patterns:
- * - Czech: poznamenala Lili, zvolal Ragowski
- * - English: said John, Mary replied
+ * - Dialogue: "text" said NAME, NAME replied "text"
+ * - Thoughts: "text" thought NAME, NAME wondered "text"
+ * - Czech: poznamenala Lili, zvolal Ragowski, pomyslela si Marie
+ * - English: said John, Mary replied, John thought
  * - Attribution before/after quotes
+ * 
+ * Note: Unquoted inner thoughts are HARD to detect with rules.
+ * These require LLM analysis for proper attribution.
  */
 export function applyRuleBasedTagging(
   text: string,
@@ -125,13 +138,15 @@ export function applyRuleBasedTagging(
     let speaker = lastSpeaker;
     let foundAttribution = false;
     
-    // Pattern 1: Czech verb + name
-    // "poznamenala Lili" → LILI
-    const czechPattern = /(zvolal|zvolala|poznamenal|poznamenala|řekl|řekla|odpověděl|odpověděla|prohlásil|prohlásila|dodal|dodala|podotkl|podotkla|zeptal|zeptala)\s+([A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ][a-záčďéěíňóřšťúůýž]+)/gi;
+    // Pattern 1: Czech verb + name (dialogue AND thoughts)
+    // "poznamenala Lili" → LILI, "pomyslela si Marie" → MARIE
+    const czechPattern = /(zvolal|zvolala|poznamenal|poznamenala|řekl|řekla|odpověděl|odpověděla|prohlásil|prohlásila|dodal|dodala|podotkl|podotkla|zeptal|zeptala|pomyslel|pomyslela|uvažoval|uvažovala|přemýšlel|přemýšlela)\s+(si\s+)?([A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ][a-záčďéěíňóřšťúůýž]+)/gi;
     const czechMatch = line.match(czechPattern);
     
     if (czechMatch) {
-      const potentialName = czechMatch[0].split(/\s+/)[1].toUpperCase();
+      // Extract name (last word in match, handling optional 'si')
+      const words = czechMatch[0].split(/\s+/);
+      const potentialName = words[words.length - 1].toUpperCase();
       if (characterNames.has(potentialName)) {
         speaker = potentialName;
         lastSpeaker = speaker;
@@ -140,10 +155,10 @@ export function applyRuleBasedTagging(
       }
     }
     
-    // Pattern 2: English said/asked + name
-    // "said John" → JOHN
+    // Pattern 2: English verb + name (dialogue AND thoughts)
+    // "said John" → JOHN, "thought Mary" → MARY
     if (!foundAttribution) {
-      const englishPattern = /(said|asked|replied|answered|shouted|whispered|muttered|exclaimed)\s+([A-Z][a-z]+)/g;
+      const englishPattern = /(said|asked|replied|answered|shouted|whispered|muttered|exclaimed|thought|wondered|pondered|mused|realized)\s+([A-Z][a-z]+)/g;
       const englishMatch = line.match(englishPattern);
       
       if (englishMatch) {
@@ -173,8 +188,15 @@ export function applyRuleBasedTagging(
       }
     }
     
-    // Add voice tag
-    taggedLines.push(`[VOICE=${speaker}]`);
+    // Detect if this is a thought or dialogue
+    const isThought = /\b(thought|wondered|pondered|mused|realized|pomyslel|pomyslela|uvažoval|uvažovala|přemýšlel|přemýšlela)\b/i.test(line);
+    
+    // Add voice tag with style
+    if (isThought && speaker !== 'NARRATOR') {
+      taggedLines.push(`[VOICE=${speaker}:THOUGHT]`);
+    } else {
+      taggedLines.push(`[VOICE=${speaker}]`);
+    }
     taggedLines.push(line);
   }
   

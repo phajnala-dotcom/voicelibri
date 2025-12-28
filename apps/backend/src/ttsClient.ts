@@ -83,20 +83,21 @@ export class TTSClient {
       throw new Error('Failed to get access token');
     }
 
-    // Apply SSML styling based on voice style
+    // Apply verbal style instructions for Gemini TTS
+    // Let the LLM interpret naturally rather than rigid SSML parameters
     let styledText = text;
     switch (style) {
       case 'whisper':
-        // Softer, slower for whispers
-        styledText = `<speak><prosody volume="-10dB" rate="95%">${text}</prosody></speak>`;
+        // Prefix with verbal instruction for whispered speech
+        styledText = `[Speak in a hushed whisper] ${text}`;
         break;
       case 'thought':
-        // Slightly lower pitch, slower for internal thoughts
-        styledText = `<speak><prosody pitch="-5%" rate="90%">${text}</prosody></speak>`;
+        // Internal monologue - introspective, private voice
+        styledText = `[Internal thought, speaking to oneself] ${text}`;
         break;
       case 'letter':
-        // Slower, slightly lower pitch for reading letters
-        styledText = `<speak><prosody rate="85%" pitch="-2%">${text}</prosody></speak>`;
+        // Reading written text - deliberate, measured pace
+        styledText = `[Reading aloud from a letter] ${text}`;
         break;
       case 'normal':
       default:

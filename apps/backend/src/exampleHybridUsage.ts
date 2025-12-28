@@ -10,7 +10,7 @@ import { fileURLToPath } from 'url';
 import { readFileSync } from 'fs';
 import { dramatizeFirstChapterHybrid } from './hybridDramatizer.js';
 import { GeminiConfig } from './llmCharacterAnalyzer.js';
-import { GeminiTTSClient } from './ttsClient.js';
+import { TTSClient } from './ttsClient.js';
 import { writeFileSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -58,7 +58,7 @@ async function main() {
   // Parse voice tags and generate audio
   console.log('\n⚡ STEP 2: Generate audio with voice styles...\n');
   
-  const ttsClient = new GeminiTTSClient({
+  const ttsClient = new TTSClient({
     projectId: geminiConfig.projectId,
     location: geminiConfig.location,
   });

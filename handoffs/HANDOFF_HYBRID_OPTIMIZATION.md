@@ -19,11 +19,13 @@
    - Confidence threshold tuning (default 0.85)
    - Fast-start mode for first chapter
 
-3. **SSML Voice Styles** (`ttsClient.ts`)
-   - `[VOICE=NAME:WHISPER]` → -10dB volume, 95% rate
-   - `[VOICE=NAME:THOUGHT]` → -5% pitch, 90% rate  
-   - `[VOICE=NAME:LETTER]` → 85% rate, -2% pitch
-   - `[VOICE=NAME]` → Normal (default)
+3. **Voice Styles** (`ttsClient.ts`)
+   - `[VOICE=NAME:WHISPER]` → "[Speak in a hushed whisper] text"
+   - `[VOICE=NAME:THOUGHT]` → "[Internal thought, speaking to oneself] text"
+   - `[VOICE=NAME:LETTER]` → "[Reading aloud from a letter] text"
+   - `[VOICE=NAME]` → Normal dialogue (default)
+   
+   Note: Verbal instructions let Gemini TTS interpret naturally, not rigid SSML parameters
 
 4. **Enhanced Metadata** (`audiobookManager.ts`)
    - `dramatizationType`: 'llm-only' | 'hybrid-optimized'
@@ -131,20 +133,53 @@ console.log(`Method breakdown:`, result.costBreakdown);
 
 ### Generate Audio with Styles
 ```typescript
-const ttsClient = new GeminiTTSClient(config);
+const ttsClient = new TTSClient(config);
 
 // Normal dialogue
-await ttsClient.synthesizeText(text, 'Algieba', 'normal');
+await ttsClient.synthesizeText('"I trust you," she said.', 'Zephyr', 'normal');
 
 // Whispered dialogue
-await ttsClient.synthesizeText(text, 'Algieba', 'whisper');
+await ttsClient.synthesizeText('"Don\'t wake the others,"', 'Algieba', 'whisper');
 
-// Internal thought
-await ttsClient.synthesizeText(text, 'Zephyr', 'thought');
+// Internal thought (CHARACTER voice, not narrator!)
+await ttsClient.synthesizeText('"Did he really lie to me?"', 'Zephyr', 'thought');
 
 // Reading a letter
-await ttsClient.synthesizeText(text, 'Puck', 'letter');
+await ttsClient.synthesizeText('Dear John, I hope this letter finds you well...', 'Puck', 'letter');
 ```
+
+### Tagged Text Examples
+
+**Correct Usage:**
+```
+[VOICE=NARRATOR]
+He approached her quietly.
+
+[VOICE=JOHN:WHISPER]
+"Don't wake the others," he whispered urgently.
+
+[VOICE=MARY:THOUGHT]
+"Did he really mean it?" she wondered to herself.
+
+[VOICE=MARY]
+"I trust you," she replied aloud.
+
+[VOICE=MARY:LETTER]
+"Dear John, I hope this letter finds you well. I've been thinking..."
+```
+
+**Wrong - Don't do this:**
+```
+❌ [VOICE=NARRATOR:THOUGHT]
+She wondered if he was telling the truth.
+
+(This is narrator paraphrase, not Mary's actual inner voice!)
+```
+
+**Inner Voice Detection:**
+- ✅ WITH quotes: `"Did he lie?" she thought` → Rule-based can detect → `[VOICE=MARY:THOUGHT]`
+- ⚠️ WITHOUT quotes: `She wondered if he lied` → LLM required (ambiguous: paraphrase vs thought)
+- ✅ Direct thought after context: `Did he lie?` (after establishing POV) → LLM can detect
 
 ---
 
