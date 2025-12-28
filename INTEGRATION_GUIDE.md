@@ -208,16 +208,27 @@ interface BookInfo {
 - **Full book tagging**: 2-5 minutes (all chapters)
 
 ### Costs (Gemini 2.5 Flash - per book):
+
+**WITHOUT optimization (current):**
 - Character extraction: ~$0.04 (120k input + 2k output tokens)
-- Chapter tagging (10 ch): ~$0.04 (50k input + 10k output tokens)
-- **Total first-time**: ~$0.08 per book (one-time cost)
+- Chapter tagging (10 ch): ~$0.28 (100k input + 100k output tokens)
+- **Total unoptimized**: ~$0.32 per book ⚠️
+- Note: Output tokens are ~10x more expensive than input!
+
+**WITH hybrid optimization (planned):**
+- Character extraction: ~$0.04 (keep LLM, one-time)
+- Non-dialogue chapters: $0 (regex detection)
+- Dialogue-only chapters: ~$0.01-0.02 (LLM on dialogue paragraphs only)
+- **Total optimized**: ~$0.05-0.07 per book ✅
 - **Cached replay**: $0 (zero cost, loads from disk)
-- **Pricing**: $0.30/1M input, $2.50/1M output tokens
+
+**Pricing reference**: $0.30/1M input, $2.50/1M output tokens
 
 ### Token Usage (typical 60k word book):
 - Character scan: ~120k input + 2k output
-- Per chapter: ~5k input + 1k output (10 chapters avg)
-- **Total**: ~170k input + 12k output tokens per book
+- Per chapter (unoptimized): ~10k input + 10k output
+- **Total unoptimized**: ~100k input + 100k output (expensive!)
+- **Total optimized**: ~150k input + 15k output (60-80% cost reduction)
 
 ---
 
