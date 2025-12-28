@@ -46,23 +46,81 @@ export interface ChunkingResult {
 /**
  * Extract voice segments from tagged text
  * 
- * Parses [VOICE=SPEAKER]...[/VOICE] blocks
+ * Supports BOTH formats:
+ * 1. Old format: [VOICE=SPEAKER]...[/VOICE]
+ * 2. New hybrid format: [VOICE=SPEAKER]\ntext\n[VOICE=NEXT]
  * 
  * @param text - Tagged text with voice markers
  * @returns Array of voice segments
  */
 export function extractVoiceSegments(text: string): VoiceSegment[] {
   const segments: VoiceSegment[] = [];
-  const regex = /\[VOICE=([^\]]+)\]([\s\S]*?)\[\/VOICE\]/g;
   
+  // First try OLD format with closing tags: [VOICE=X]...[/VOICE]
+  const oldFormatRegex = /\[VOICE=([^\]]+)\]([\s\S]*?)\[\/VOICE\]/g;
   let match;
-  while ((match = regex.exec(text)) !== null) {
+  while ((match = oldFormatRegex.exec(text)) !== null) {
     segments.push({
       speaker: match[1].trim(),
       text: match[2].trim(),
       startIndex: match.index,
       endIndex: match.index + match[0].length
     });
+  }
+  
+  // If we found old-format segments, return them
+  if (segments.length > 0) {
+    return segments;
+  }
+  
+  // Otherwise, parse NEW hybrid format: [VOICE=SPEAKER:STYLE?]\ntext\n[VOICE=NEXT]
+  const lines = text.split('\n');
+  let currentSpeaker: string | null = null;
+  let currentText: string[] = [];
+  let startIndex = 0;
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const voiceTagMatch = line.match(/^\[VOICE=([^\]]+)\]$/);
+    
+    if (voiceTagMatch) {
+      // Save previous segment
+      if (currentSpeaker && currentText.length > 0) {
+        const segmentText = currentText.join('\n').trim();
+        if (segmentText) {
+          segments.push({
+            speaker: currentSpeaker,
+            text: segmentText,
+            startIndex,
+            endIndex: startIndex + segmentText.length
+          });
+        }
+      }
+      
+      // Start new segment
+      // Extract speaker (may include style like "JOHN:WHISPER")
+      const speakerTag = voiceTagMatch[1].trim();
+      // Remove style suffix if present (e.g., "JOHN:WHISPER" → "JOHN")
+      currentSpeaker = speakerTag.split(':')[0];
+      currentText = [];
+      startIndex = text.indexOf(line) + line.length;
+    } else if (currentSpeaker) {
+      // Add line to current segment
+      currentText.push(line);
+    }
+  }
+  
+  // Save final segment
+  if (currentSpeaker && currentText.length > 0) {
+    const segmentText = currentText.join('\n').trim();
+    if (segmentText) {
+      segments.push({
+        speaker: currentSpeaker,
+        text: segmentText,
+        startIndex,
+        endIndex: startIndex + segmentText.length
+      });
+    }
   }
   
   return segments;

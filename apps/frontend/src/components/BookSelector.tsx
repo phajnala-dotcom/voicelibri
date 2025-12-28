@@ -19,6 +19,7 @@ export const BookSelector: React.FC<BookSelectorProps> = ({ onBookSelected, curr
   const [books, setBooks] = useState<Book[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [loading, setLoading] = useState(false);
+  const enableDramatization = true; // Always enabled
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Load available books
@@ -65,7 +66,7 @@ export const BookSelector: React.FC<BookSelectorProps> = ({ onBookSelected, curr
       const response = await fetch(`${API_BASE_URL}/api/book/select`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename }),
+        body: JSON.stringify({ filename, dramatize: enableDramatization }),
       });
 
       if (!response.ok) {
