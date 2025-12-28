@@ -16,7 +16,7 @@ import {
 import { processDramatizedText } from './dramatizedProcessor.js';
 import { processTaggedTextFile } from './dramatizedChunkerSimple.js';
 import { extractVoiceSegments, removeVoiceTags } from './dramatizedChunkerSimple.js';
-import { loadVoiceMap } from './voiceAssigner.js';
+import { loadVoiceMap, assignVoices, type Character } from './voiceAssigner.js';
 import { concatenateWavBuffers, addSilence } from './audioUtils.js';
 import { 
   generateAndSaveTempChunk,
@@ -77,6 +77,7 @@ let BOOK_INFO: ReturnType<typeof getBookInfo> | null = null;
 let BOOK_FORMAT: 'txt' | 'epub' | 'pdf' = 'txt';
 let CURRENT_BOOK_FILE: string = '';
 let ASSETS_DIR: string;
+let VOICE_MAP: Record<string, string> = {}; // NEW: Global voice map for dramatized books
 
 // Audio cache for generated chunks - key format: "chunkIndex:voiceName"
 const audioCache = new Map<string, Buffer>();
@@ -204,6 +205,20 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
       console.log(`   Rule-based: ${BOOK_METADATA.taggingMethodBreakdown!.ruleBased} chapters`);
       console.log(`   LLM fallback: ${BOOK_METADATA.taggingMethodBreakdown!.llmFallback} chapters`);
       console.log(`\n🎤 Characters: ${result.characters.map(c => c.name).join(', ')}`);
+      
+      // Create voice map from characters
+      // Convert CharacterProfile to Character format for voice assignment
+      const charactersForVoiceMap: Character[] = result.characters.map(cp => ({
+        name: cp.name,
+        gender: cp.gender === 'unknown' ? 'neutral' : cp.gender,
+        traits: cp.traits || []
+      }));
+      
+      VOICE_MAP = assignVoices(charactersForVoiceMap);
+      console.log(`🎙️  Voice assignments:`);
+      for (const [character, voice] of Object.entries(VOICE_MAP)) {
+        console.log(`   ${character} → ${voice}`);
+      }
       console.log('');
       
     } catch (error) {
@@ -881,10 +896,14 @@ app.post('/api/tts/chunk', async (req: Request, res: Response) => {
     const chunkText = BOOK_CHUNKS[chunkIndex];
     
     // PHASE 3: Generate and save to temp file
-    const voiceMapPath = path.join(ASSETS_DIR, 'dramatized_output', 'voice_map_poc.json');
-    const voiceMap = fs.existsSync(voiceMapPath) 
-      ? await loadVoiceMap(voiceMapPath)
-      : {};
+    // Use global VOICE_MAP from hybrid dramatization or load from file for pre-tagged books
+    let voiceMap = VOICE_MAP;
+    if (Object.keys(voiceMap).length === 0) {
+      const voiceMapPath = path.join(ASSETS_DIR, 'dramatized_output', 'voice_map_poc.json');
+      if (fs.existsSync(voiceMapPath)) {
+        voiceMap = await loadVoiceMap(voiceMapPath);
+      }
+    }
     
     const tempResult = await generateAndSaveTempChunk(
       chunkIndex,
