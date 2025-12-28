@@ -201,21 +201,23 @@ interface BookInfo {
 ## 📊 Performance Expectations
 
 ### Timing (for typical book):
-- Character scan: 15-20 seconds
-- Chapter tagging: 5-10 seconds per chapter
-- **First audio**: ~30 seconds (fast start mode)
-- **Full book**: 2-5 minutes (depends on chapter count)
+- Character scan: 15-20 seconds (full book analysis)
+- Chapter 1 tagging: 5-10 seconds
+- **First audio start**: ~30 seconds (fast start mode)
+- Background: Chapter 2+ tagging continues progressively
+- **Full book tagging**: 2-5 minutes (all chapters)
 
-### Costs (per book):
-- Character extraction: ~$0.009
-- Chapter tagging: ~$0.009
-- **Total**: ~$0.02 per book (one-time)
-- Cached replay: $0 (instant)
+### Costs (Gemini 2.5 Flash - per book):
+- Character extraction: ~$0.04 (120k input + 2k output tokens)
+- Chapter tagging (10 ch): ~$0.04 (50k input + 10k output tokens)
+- **Total first-time**: ~$0.08 per book (one-time cost)
+- **Cached replay**: $0 (zero cost, loads from disk)
+- **Pricing**: $0.30/1M input, $2.50/1M output tokens
 
-### Token Usage:
+### Token Usage (typical 60k word book):
 - Character scan: ~120k input + 2k output
-- Per chapter: ~5k input + 1k output
-- **Total**: ~150k tokens per book
+- Per chapter: ~5k input + 1k output (10 chapters avg)
+- **Total**: ~170k input + 12k output tokens per book
 
 ---
 
