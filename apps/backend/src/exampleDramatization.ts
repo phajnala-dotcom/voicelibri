@@ -34,7 +34,7 @@ async function exampleDramatizeBook() {
     gemini: {
       projectId: process.env.GOOGLE_CLOUD_PROJECT || 'your-project-id',
       location: 'us-central1',
-      model: 'gemini-2.0-flash-exp', // Latest model
+      model: 'gemini-2.5-flash', // Latest model
     },
     minDialogueLines: 3,
     maxCharacters: 10,

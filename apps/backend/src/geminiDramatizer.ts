@@ -403,7 +403,7 @@ export async function dramatizeBook(
   const config: DramatizationConfig = {
     gemini: {
       projectId: process.env.GOOGLE_CLOUD_PROJECT || '',
-      location: 'us-central1',
+      location: process.env.GOOGLE_CLOUD_LOCATION || 'us-central1',
     },
   };
   
@@ -439,7 +439,7 @@ export async function checkCache(bookPath: string): Promise<{
   const config: DramatizationConfig = {
     gemini: {
       projectId: process.env.GOOGLE_CLOUD_PROJECT || '',
-      location: 'us-central1',
+      location: process.env.GOOGLE_CLOUD_LOCATION || 'us-central1',
     },
   };
   

@@ -158,14 +158,14 @@ export interface LlmCharacterAnalyzer {
 export class GeminiCharacterAnalyzer implements LlmCharacterAnalyzer {
   private projectId: string;
   private location: string;
-  private model: string = 'gemini-2.0-flash-exp'; // Latest flash model
+  private model: string = 'gemini-2.5-flash'; // Latest flash model
   private auth: GoogleAuth;
   private endpoint: string;
   
   constructor(config: GeminiConfig) {
     this.projectId = config.projectId;
     this.location = config.location || 'us-central1';
-    this.model = config.model || 'gemini-2.0-flash-exp';
+    this.model = config.model || 'gemini-2.5-flash';
     this.auth = new GoogleAuth({
       scopes: ['https://www.googleapis.com/auth/cloud-platform'],
     });
