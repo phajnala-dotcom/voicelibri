@@ -101,6 +101,9 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
     throw new Error(`Book file not found: ${filename}`);
   }
   
+  // Clear voice map from previous book
+  VOICE_MAP = {};
+  
   // Determine format from extension
   const ext = path.extname(filename).toLowerCase();
   
