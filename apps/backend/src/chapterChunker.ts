@@ -75,7 +75,96 @@ function isSentenceEnding(word: string): boolean {
 
 /**
  * Validate that a voice segment doesn't exceed Gemini TTS hard limit
- * CRITICAL: Call this before every TTS synthesis
+ * If it does, split it into smaller segments
+ * 
+ * @param segment - Voice segment to validate
+ * @returns Array of valid segments (may be split if too large)
+ */
+export function validateAndSplitVoiceSegment(segment: VoiceSegment): VoiceSegment[] {
+  const bytes = Buffer.byteLength(segment.text, 'utf8');
+  
+  if (bytes <= GEMINI_TTS_HARD_LIMIT) {
+    return [segment]; // Segment is valid, return as-is
+  }
+  
+  console.log(`  ⚠️ Splitting large ${segment.speaker} segment: ${bytes} bytes → multiple chunks`);
+  
+  // Split large segment into smaller ones at sentence boundaries
+  const splitSegments: VoiceSegment[] = [];
+  const sentences = segment.text.split(/(?<=[.!?…])\s+/);
+  
+  let currentText = '';
+  let currentBytes = 0;
+  
+  for (const sentence of sentences) {
+    const sentenceBytes = Buffer.byteLength(sentence, 'utf8');
+    
+    // If single sentence exceeds limit, split by words
+    if (sentenceBytes > SAFE_CHUNK_TARGET && currentText === '') {
+      const words = sentence.split(/\s+/);
+      let wordChunk = '';
+      
+      for (const word of words) {
+        const testChunk = wordChunk ? `${wordChunk} ${word}` : word;
+        const testBytes = Buffer.byteLength(testChunk, 'utf8');
+        
+        if (testBytes >= SAFE_CHUNK_TARGET && wordChunk) {
+          splitSegments.push({
+            speaker: segment.speaker,
+            text: wordChunk.trim(),
+            startIndex: segment.startIndex,
+            endIndex: segment.endIndex,
+          });
+          wordChunk = word;
+        } else {
+          wordChunk = testChunk;
+        }
+      }
+      
+      if (wordChunk) {
+        currentText = wordChunk;
+        currentBytes = Buffer.byteLength(wordChunk, 'utf8');
+      }
+      continue;
+    }
+    
+    // Normal case: accumulate sentences
+    const testText = currentText ? `${currentText} ${sentence}` : sentence;
+    const testBytes = Buffer.byteLength(testText, 'utf8');
+    
+    if (testBytes >= SAFE_CHUNK_TARGET && currentText) {
+      // Save current chunk and start new one
+      splitSegments.push({
+        speaker: segment.speaker,
+        text: currentText.trim(),
+        startIndex: segment.startIndex,
+        endIndex: segment.endIndex,
+      });
+      currentText = sentence;
+      currentBytes = sentenceBytes;
+    } else {
+      currentText = testText;
+      currentBytes = testBytes;
+    }
+  }
+  
+  // Add remaining text
+  if (currentText.trim()) {
+    splitSegments.push({
+      speaker: segment.speaker,
+      text: currentText.trim(),
+      startIndex: segment.startIndex,
+      endIndex: segment.endIndex,
+    });
+  }
+  
+  console.log(`    → Split into ${splitSegments.length} segments`);
+  return splitSegments;
+}
+
+/**
+ * Legacy validation function - throws error for oversized segments
+ * @deprecated Use validateAndSplitVoiceSegment instead for automatic splitting
  * 
  * @param segment - Voice segment to validate
  * @throws Error if segment exceeds 4000 bytes
@@ -166,26 +255,27 @@ export function chunkChapter(
  * 
  * Algorithm:
  * 1. Extract voice segments
- * 2. Validate each segment ≤ 4000 bytes (CRITICAL)
+ * 2. Split any oversized segments (>4000 bytes) into smaller pieces
  * 3. Group segments into chunks ≤ 3500 bytes total
  * 4. Don't split voice segments (keep [VOICE=X]...[/VOICE] intact)
  * 
  * @param chapter - Chapter with voice tags
  * @returns Array of chunk texts with voice tags preserved
- * @throws Error if any voice segment exceeds 4000 bytes
  */
 export function chunkDramatizedChapter(chapter: Chapter): string[] {
-  const segments = extractVoiceSegments(chapter.text);
+  const rawSegments = extractVoiceSegments(chapter.text);
   
-  if (segments.length === 0) {
+  if (rawSegments.length === 0) {
     // No voice tags found - fallback to regular chunking
     console.warn(`  Chapter ${chapter.index}: Expected voice tags but none found, using regular chunking`);
     return chunkChapter(chapter);
   }
   
-  // CRITICAL: Validate each segment individually
-  for (const segment of segments) {
-    validateVoiceSegment(segment);
+  // Validate and split oversized segments
+  const segments: VoiceSegment[] = [];
+  for (const segment of rawSegments) {
+    const validSegments = validateAndSplitVoiceSegment(segment);
+    segments.push(...validSegments);
   }
   
   const chunks: string[] = [];

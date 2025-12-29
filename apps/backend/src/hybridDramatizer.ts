@@ -241,6 +241,93 @@ export async function dramatizeBookHybrid(
 }
 
 /**
+ * Streaming Dramatization Result for individual chapters
+ */
+export interface StreamingChapterResult {
+  chapterNumber: number;
+  taggedText: string;
+  method: 'auto-narrator' | 'rule-based' | 'llm-fallback';
+  confidence: number;
+  cost: number;
+}
+
+/**
+ * Streaming Dramatization Pipeline
+ * 
+ * Yields chapters one-by-one as they're dramatized, enabling:
+ * 1. Dramatize chapter 1 → yield → generate audio → start playback
+ * 2. Meanwhile continue dramatizing chapter 2, 3, etc.
+ * 
+ * @param bookText - Full book text for character analysis
+ * @param chapters - Array of chapter texts
+ * @param geminiConfig - Gemini API config
+ * @param onCharactersFound - Callback when character analysis completes
+ * @param confidenceThreshold - Minimum confidence for rule-based (default 0.85)
+ */
+export async function* dramatizeBookStreaming(
+  bookText: string,
+  chapters: string[],
+  geminiConfig: GeminiConfig,
+  onCharactersFound?: (characters: CharacterProfile[]) => void,
+  confidenceThreshold: number = 0.85
+): AsyncGenerator<StreamingChapterResult, { characters: CharacterProfile[]; totalCost: number }, undefined> {
+  
+  console.log('🎭 Starting STREAMING hybrid dramatization pipeline...');
+  console.log(`📚 Book: ${bookText.length} chars, ${chapters.length} chapters`);
+  
+  // Initialize Gemini analyzer
+  const analyzer = new GeminiCharacterAnalyzer(geminiConfig);
+  
+  // Step 1: Character scan (blocking - needed for all chapters)
+  console.log('🔍 Step 1: Analyzing full book for characters (LLM)...');
+  const characters = await analyzer.analyzeFullBook(bookText);
+  const characterScanCost = 0.04;
+  
+  console.log(`✅ Found ${characters.length} characters: ${characters.map((c: CharacterProfile) => c.name).join(', ')}`);
+  console.log(`💰 Character scan cost: $${characterScanCost.toFixed(4)}`);
+  
+  // Notify caller of characters (for voice assignment)
+  if (onCharactersFound) {
+    onCharactersFound(characters);
+  }
+  
+  // Step 2: Stream chapters one at a time
+  console.log('🏷️ Step 2: Streaming chapter dramatization...');
+  let totalCost = characterScanCost;
+  
+  for (let i = 0; i < chapters.length; i++) {
+    const chapterNum = i + 1;
+    console.log(`\n📖 Streaming Chapter ${chapterNum}/${chapters.length}...`);
+    
+    const result = await tagChapterHybrid(
+      chapters[i],
+      characters,
+      analyzer,
+      chapterNum,
+      confidenceThreshold
+    );
+    
+    totalCost += result.cost;
+    
+    // Yield this chapter immediately for audio generation
+    yield {
+      chapterNumber: chapterNum,
+      taggedText: result.taggedText,
+      method: result.method,
+      confidence: result.confidence,
+      cost: result.cost,
+    };
+  }
+  
+  console.log('\n' + '='.repeat(60));
+  console.log('🎉 STREAMING DRAMATIZATION COMPLETE');
+  console.log(`💰 Total cost: $${totalCost.toFixed(4)}`);
+  console.log('='.repeat(60) + '\n');
+  
+  return { characters, totalCost };
+}
+
+/**
  * Fast-start: Dramatize first chapter only for immediate playback
  */
 export async function dramatizeFirstChapterHybrid(

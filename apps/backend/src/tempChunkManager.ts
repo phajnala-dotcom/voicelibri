@@ -8,11 +8,16 @@
  * - Parallel chunk generation (2 at once)
  * 
  * Part of Phase 3: Audiobook Library & File-Based Generation
+ * 
+ * UPDATE: Now uses TRUE multi-speaker TTS via Gemini's multiSpeakerVoiceConfig
+ * - Max 2 speakers per API call (Gemini TTS limitation)
+ * - Uses twoSpeakerChunker for smart chunking
+ * - Single API call per chunk instead of multiple parallel calls
  */
 
 import fs from 'fs';
 import path from 'path';
-import { synthesizeText } from './ttsClient.js';
+import { synthesizeText, synthesizeMultiSpeaker, SpeakerConfig } from './ttsClient.js';
 import { extractVoiceSegments, removeVoiceTags } from './dramatizedChunkerSimple.js';
 import { concatenateWavBuffers, addSilence } from './audioUtils.js';
 import { validateVoiceSegment, GEMINI_TTS_HARD_LIMIT } from './chapterChunker.js';
@@ -24,6 +29,57 @@ import {
   sanitizeChapterTitle
 } from './audiobookManager.js';
 import { Chapter } from './bookChunker.js';
+import { formatForMultiSpeakerTTS, getUniqueSpeakers } from './twoSpeakerChunker.js';
+
+// ========================================
+// Voice Map Lookup Helper
+// ========================================
+
+/**
+ * Look up voice for a speaker, handling name format differences
+ * 
+ * Voice tags use UPPERCASE_WITH_UNDERSCORES (e.g., "JOSEPH_RAGOWSKI")
+ * VoiceMap uses normal case with spaces (e.g., "Joseph Ragowski")
+ * 
+ * @param speaker - Speaker name from voice tag (e.g., "JOSEPH_RAGOWSKI")
+ * @param voiceMap - Character to voice mapping (uses normal names)
+ * @param defaultVoice - Fallback voice if no match found
+ * @returns Voice name for TTS
+ */
+function lookupVoice(speaker: string, voiceMap: Record<string, string>, defaultVoice: string): string {
+  // NARRATOR always uses default voice
+  if (speaker === 'NARRATOR') {
+    return defaultVoice;
+  }
+  
+  // Direct lookup (exact match)
+  if (voiceMap[speaker]) {
+    return voiceMap[speaker];
+  }
+  
+  // Convert UPPERCASE_WITH_UNDERSCORES to Title Case with spaces
+  // e.g., "JOSEPH_RAGOWSKI" → "Joseph Ragowski"
+  const normalizedName = speaker
+    .split('_')
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
+  
+  if (voiceMap[normalizedName]) {
+    return voiceMap[normalizedName];
+  }
+  
+  // Try case-insensitive match
+  const lowerSpeaker = speaker.toLowerCase().replace(/_/g, ' ');
+  for (const [name, voice] of Object.entries(voiceMap)) {
+    if (name.toLowerCase() === lowerSpeaker) {
+      return voice;
+    }
+  }
+  
+  // Fallback to default voice
+  console.warn(`  ⚠️ No voice mapping found for "${speaker}" (normalized: "${normalizedName}"), using default`);
+  return defaultVoice;
+}
 
 // ========================================
 // Temp Chunk Generation
@@ -44,12 +100,12 @@ export interface TempChunkResult {
  * 
  * KEY FEATURES:
  * - Checks if temp file already exists (disk cache)
- * - Validates voice segments ≤ 4000 bytes before synthesis
- * - Parallel synthesis for multi-voice chunks
+ * - Uses TRUE multi-speaker TTS for multi-voice chunks (max 2 speakers per call)
+ * - Falls back to single-voice for chunks without voice tags
  * - Saves to temp file immediately after generation
  * 
  * @param chunkIndex - Global chunk index
- * @param chunkText - Text to synthesize
+ * @param chunkText - Text to synthesize (with [VOICE=] tags for multi-voice)
  * @param bookTitle - Sanitized book title
  * @param voiceMap - Character to voice mapping
  * @param defaultVoice - Default voice for narrator (default: 'Algieba')
@@ -87,35 +143,50 @@ export async function generateAndSaveTempChunk(
   
   if (voiceSegments.length > 0) {
     // MULTI-VOICE MODE: Chunk has voice tags
-    console.log(`  Multi-voice chunk: ${voiceSegments.length} segments`);
-    g
-    // CRITICAL: Validate each segment before synthesis
-    for (const segment of voiceSegments) {
-      validateVoiceSegment(segment);
+    // Using TRUE multi-speaker TTS via Gemini's multiSpeakerVoiceConfig
+    const uniqueSpeakers = [...new Set(voiceSegments.map(s => s.speaker))];
+    console.log(`  Multi-voice chunk: ${voiceSegments.length} segments, ${uniqueSpeakers.length} speakers`);
+    
+    // CRITICAL: Gemini TTS multi-speaker requires EXACTLY 2 speakers
+    if (uniqueSpeakers.length === 1) {
+      // Only 1 speaker - use single-voice synthesis
+      const speaker = uniqueSpeakers[0];
+      const voice = lookupVoice(speaker, voiceMap, defaultVoice);
+      console.log(`  📢 Single speaker chunk: ${speaker} → ${voice}`);
+      
+      // Concatenate all segment texts (they're all from the same speaker)
+      const combinedText = voiceSegments.map(s => s.text).join(' ');
+      audioBuffer = await synthesizeText(combinedText, voice);
+      
+    } else if (uniqueSpeakers.length > 2) {
+      console.warn(`  ⚠️ WARNING: ${uniqueSpeakers.length} speakers in chunk - this should not happen!`);
+      console.warn(`     Speakers: ${uniqueSpeakers.join(', ')}`);
+      console.warn(`     Chunk should have been split by twoSpeakerChunker. Falling back to simulation.`);
+      
+      // Fallback: Use old simulation approach (multiple single-voice calls)
+      audioBuffer = await generateMultiVoiceSimulated(voiceSegments, voiceMap, defaultVoice);
+    } else {
+      // TRUE MULTI-SPEAKER: Exactly 2 speakers - use Gemini's native multiSpeakerVoiceConfig
+      console.log(`  ✅ Using TRUE multi-speaker TTS (2 speakers)`);
+      
+      // Build speaker configs for this chunk
+      const speakerConfigs: SpeakerConfig[] = uniqueSpeakers.map(speaker => ({
+        speaker,
+        voiceName: lookupVoice(speaker, voiceMap, defaultVoice),
+      }));
+      
+      console.log(`     Speakers: ${speakerConfigs.map(s => `${s.speaker} → ${s.voiceName}`).join(', ')}`);
+      
+      // Format text for multi-speaker TTS: "Speaker: text" format
+      const formattedText = formatForMultiSpeakerTTS(voiceSegments);
+      const textBytes = Buffer.byteLength(formattedText, 'utf8');
+      console.log(`     Formatted text: ${textBytes} bytes`);
+      
+      // Single API call for all segments
+      audioBuffer = await synthesizeMultiSpeaker(formattedText, speakerConfigs);
     }
     
-    // Synthesize all segments in PARALLEL
-    const audioBuffers: Buffer[] = await Promise.all(
-      voiceSegments.map(async (segment) => {
-        // Get voice for this speaker
-        // NARRATOR uses global user-selected voice (defaultVoice), characters use VOICE_MAP
-        const speakerVoice = segment.speaker === 'NARRATOR'
-          ? defaultVoice // Use UI-selected voice for narrator
-          : voiceMap[segment.speaker] || defaultVoice;
-        
-        console.log(`    ${segment.speaker} -> ${speakerVoice} (${segment.text.length} chars, ${Buffer.byteLength(segment.text, 'utf8')} bytes)`);
-        
-        // Synthesize this segment
-        const segmentAudio = await synthesizeText(segment.text, speakerVoice);
-        
-        // Add 1 second pause after each segment
-        return addSilence(segmentAudio, 1000, 'end');
-      })
-    );
-    
-    // Concatenate all audio segments
-    audioBuffer = concatenateWavBuffers(audioBuffers);
-    console.log(`  ✓ Concatenated ${audioBuffers.length} segments -> ${audioBuffer.length} bytes`);
+    console.log(`  ✓ Generated ${audioBuffer.length} bytes`);
     
   } else {
     // SINGLE-VOICE MODE: No voice tags
@@ -154,6 +225,98 @@ export async function generateAndSaveTempChunk(
     fromCache: false,
     duration,
   };
+}
+
+/**
+ * SMART BATCHING: Generate multi-voice audio by batching into optimal API calls
+ * 
+ * Instead of making one API call per segment, this groups consecutive segments
+ * into batches that can use:
+ * - True multi-speaker TTS (when batch has exactly 2 speakers)
+ * - Single-voice TTS (when batch has 1 speaker)
+ * 
+ * Example: [A, A, B, A, C, C] → [[A,A,B,A], [C,C]] → multi-speaker(A,B) + single(C)
+ * 
+ * @param voiceSegments - Voice segments to synthesize
+ * @param voiceMap - Character to voice mapping
+ * @param defaultVoice - Default voice for narrator
+ * @returns Concatenated audio buffer
+ */
+async function generateMultiVoiceSimulated(
+  voiceSegments: Array<{ speaker: string; text: string }>,
+  voiceMap: Record<string, string>,
+  defaultVoice: string
+): Promise<Buffer> {
+  console.log(`  🔄 Smart batching: ${voiceSegments.length} segments`);
+  
+  // Group consecutive segments into batches where each batch has ≤2 unique speakers
+  const batches: Array<Array<{ speaker: string; text: string }>> = [];
+  let currentBatch: Array<{ speaker: string; text: string }> = [];
+  let currentSpeakers = new Set<string>();
+  
+  for (const segment of voiceSegments) {
+    // Check if adding this segment would exceed 2 speakers
+    const wouldExceed = !currentSpeakers.has(segment.speaker) && currentSpeakers.size >= 2;
+    
+    if (wouldExceed && currentBatch.length > 0) {
+      // Finalize current batch and start new one
+      batches.push([...currentBatch]);
+      currentBatch = [segment];
+      currentSpeakers = new Set([segment.speaker]);
+    } else {
+      currentBatch.push(segment);
+      currentSpeakers.add(segment.speaker);
+    }
+  }
+  
+  // Don't forget the last batch
+  if (currentBatch.length > 0) {
+    batches.push(currentBatch);
+  }
+  
+  console.log(`     Created ${batches.length} batches from ${voiceSegments.length} segments`);
+  
+  // Process each batch with the appropriate TTS method
+  const audioBuffers: Buffer[] = [];
+  
+  for (let i = 0; i < batches.length; i++) {
+    const batch = batches[i];
+    const batchSpeakers = [...new Set(batch.map(s => s.speaker))];
+    
+    let batchAudio: Buffer;
+    
+    if (batchSpeakers.length === 1) {
+      // Single speaker - use single-voice TTS
+      const speaker = batchSpeakers[0];
+      const voice = lookupVoice(speaker, voiceMap, defaultVoice);
+      const combinedText = batch.map(s => s.text).join(' ');
+      
+      console.log(`     Batch ${i + 1}/${batches.length}: Single-voice (${speaker} → ${voice})`);
+      batchAudio = await synthesizeText(combinedText, voice);
+      
+    } else {
+      // 2 speakers - use true multi-speaker TTS
+      const speakerConfigs: SpeakerConfig[] = batchSpeakers.map(speaker => ({
+        speaker,
+        voiceName: lookupVoice(speaker, voiceMap, defaultVoice),
+      }));
+      
+      const formattedText = formatForMultiSpeakerTTS(batch);
+      
+      console.log(`     Batch ${i + 1}/${batches.length}: Multi-speaker (${speakerConfigs.map(s => `${s.speaker}→${s.voiceName}`).join(', ')})`);
+      batchAudio = await synthesizeMultiSpeaker(formattedText, speakerConfigs);
+    }
+    
+    // Add small pause between batches (not after the last one)
+    if (i < batches.length - 1) {
+      batchAudio = addSilence(batchAudio, 300, 'end');
+    }
+    
+    audioBuffers.push(batchAudio);
+  }
+  
+  // Concatenate all batch audio
+  return concatenateWavBuffers(audioBuffers);
 }
 
 /**

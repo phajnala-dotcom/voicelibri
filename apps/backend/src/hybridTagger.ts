@@ -341,39 +341,75 @@ export function calculateConfidence(
 
 /**
  * Merge LLM-tagged dialogues back into full chapter with narration
+ * 
+ * The LLM returns text with [VOICE=X] tags, which may use single newlines
+ * between segments. This function ensures proper merging.
  */
 export function mergeWithNarration(
   originalText: string,
   taggedDialogues: string,
   characters: CharacterProfile[]
 ): string {
+  // If the LLM output already contains multiple VOICE tags properly formatted,
+  // just return it directly (with minor cleanup)
+  const voiceTagCount = (taggedDialogues.match(/\[VOICE=/g) || []).length;
+  
+  if (voiceTagCount > 1) {
+    // LLM already tagged the full text with multiple speakers
+    // Just ensure proper formatting
+    console.log(`  [mergeWithNarration] LLM returned ${voiceTagCount} voice tags - using directly`);
+    return taggedDialogues.trim();
+  }
+  
+  // Fallback: Original merging logic for partial tagging
+  console.log(`  [mergeWithNarration] Only ${voiceTagCount} voice tag(s) - attempting merge`);
+  
   // Split original into paragraphs
   const paragraphs = originalText.split(/\n\n+/);
   const result: string[] = [];
   
-  // Extract tagged dialogue segments
+  // Extract tagged dialogue segments - split by VOICE tag, not double newline
   const dialogueMap = new Map<string, string>();
-  const taggedParagraphs = taggedDialogues.split(/\n\n+/);
+  const segments = taggedDialogues.split(/(?=\[VOICE=)/);
   
-  for (const tagged of taggedParagraphs) {
+  for (const segment of segments) {
+    if (!segment.trim()) continue;
     // Extract original text without tags
-    const withoutTags = tagged.replace(/\[VOICE=[^\]]+\]\s*/g, '');
-    dialogueMap.set(withoutTags.trim(), tagged);
+    const withoutTags = segment.replace(/\[VOICE=[^\]]+\]\s*/g, '').trim();
+    if (withoutTags) {
+      dialogueMap.set(withoutTags, segment.trim());
+    }
   }
   
   // Merge back
   for (const para of paragraphs) {
     const trimmed = para.trim();
+    if (!trimmed) continue;
+    
     if (dialogueMap.has(trimmed)) {
       result.push(dialogueMap.get(trimmed)!);
     } else {
-      // Narration paragraph
-      if (result.length === 0 || !result[result.length - 1].includes('[VOICE=NARRATOR]')) {
-        result.push('[VOICE=NARRATOR]');
+      // Check if this paragraph is part of a longer tagged segment
+      let found = false;
+      for (const [key, value] of dialogueMap) {
+        if (key.includes(trimmed) || trimmed.includes(key)) {
+          result.push(value);
+          found = true;
+          break;
+        }
       }
-      result.push(para);
+      
+      if (!found) {
+        // Narration paragraph - add tag if needed
+        if (result.length === 0 || !result[result.length - 1].startsWith('[VOICE=NARRATOR]')) {
+          result.push(`[VOICE=NARRATOR]\n${para}`);
+        } else {
+          // Append to existing NARRATOR section
+          result[result.length - 1] += `\n${para}`;
+        }
+      }
     }
   }
   
-  return result.join('\n\n');
+  return result.join('\n');
 }

@@ -8,6 +8,14 @@ interface TTSConfig {
 }
 
 /**
+ * Speaker configuration for multi-speaker TTS
+ */
+export interface SpeakerConfig {
+  speaker: string;
+  voiceName: string;
+}
+
+/**
  * Creates a WAV file header and combines it with PCM audio data
  * @param pcmBuffer - Raw PCM audio data from Vertex AI
  * @returns Complete WAV file as Buffer
@@ -60,19 +68,21 @@ export class TTSClient {
   }
 
   /**
-   * Synthesizes text to audio using Gemini 2.5 Pro TTS via Vertex AI REST API
-   * This matches the behavior of Google AI Studio
-   * @param text - The text to synthesize (supports SSML with prosody tags)
+   * Synthesizes text to audio using Gemini TTS via Vertex AI REST API
+   * Single-speaker mode using voiceConfig
+   * 
+   * @param text - The text to synthesize
    * @param voiceName - The Gemini voice name to use (e.g., 'Algieba', 'Puck', 'Zephyr')
    * @param style - Voice style modifier: 'normal', 'whisper', 'thought', 'letter'
-   * @returns Buffer containing audio data (PCM/WAV format)
+   * @returns Buffer containing audio data (WAV format)
    */
   async synthesizeText(
     text: string, 
     voiceName: string = 'Algieba',
     style: 'normal' | 'whisper' | 'thought' | 'letter' = 'normal'
   ): Promise<Buffer> {
-    const model = 'gemini-2.5-flash-tts';
+    // Gemini TTS model (same model supports both single and multi-speaker)
+    const model = 'gemini-2.5-flash-preview-tts';
     const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/${this.projectId}/locations/${this.location}/publishers/google/models/${model}:generateContent`;
 
     // Get access token
@@ -84,29 +94,23 @@ export class TTSClient {
     }
 
     // Apply verbal style instructions for Gemini TTS
-    // Let the LLM interpret naturally rather than rigid SSML parameters
     let styledText = text;
     switch (style) {
       case 'whisper':
-        // Prefix with verbal instruction for whispered speech
         styledText = `[Speak in a hushed whisper] ${text}`;
         break;
       case 'thought':
-        // Internal monologue - introspective, private voice
         styledText = `[Internal thought, speaking to oneself] ${text}`;
         break;
       case 'letter':
-        // Reading written text - deliberate, measured pace
         styledText = `[Reading aloud from a letter] ${text}`;
         break;
       case 'normal':
       default:
-        // No modifications
         styledText = text;
         break;
     }
 
-    // TTS-specific request body (safety filters require invoiced billing account)
     const requestBody = {
       contents: {
         role: 'user',
@@ -115,6 +119,7 @@ export class TTSClient {
         }
       },
       generation_config: {
+        response_modalities: ['AUDIO'],
         speech_config: {
           voice_config: {
             prebuilt_voice_config: {
@@ -150,8 +155,6 @@ export class TTSClient {
       }
 
       const jsonResponse: any = await response.json();
-      
-      // Extract audio data from response
       const audioData = jsonResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
       
       if (!audioData) {
@@ -160,12 +163,9 @@ export class TTSClient {
       }
 
       console.log(`🎵 Audio data received, converting to WAV...`);
-      
-      // Convert base64 to Buffer (PCM audio data)
       const pcmBuffer = Buffer.from(audioData, 'base64');
       console.log(`📦 PCM buffer size: ${pcmBuffer.length} bytes`);
       
-      // Add WAV header to PCM data for browser compatibility
       const wavBuffer = await createWavBuffer(pcmBuffer);
       console.log(`✅ WAV conversion complete: ${wavBuffer.length} bytes`);
       
@@ -175,7 +175,116 @@ export class TTSClient {
       throw new Error(`Failed to synthesize text: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
+
+  /**
+   * Synthesizes multi-speaker text to audio using Gemini TTS
+   * 
+   * Uses the official multiSpeakerVoiceConfig for true multi-voice synthesis
+   * in a SINGLE API call (up to 2 speakers per call per API limitation).
+   * 
+   * Text format must use "Speaker: text" format, e.g.:
+   *   "NARRATOR: Once upon a time...
+   *    JOE: Hello there!"
+   * 
+   * @param text - Text with speaker labels
+   * @param speakers - Array of speaker configurations (max 2)
+   * @returns Buffer containing audio data (WAV format)
+   */
+  async synthesizeMultiSpeaker(
+    text: string,
+    speakers: SpeakerConfig[]
+  ): Promise<Buffer> {
+    if (speakers.length > 2) {
+      throw new Error('Gemini TTS supports maximum 2 speakers per API call');
+    }
+
+    if (speakers.length === 0) {
+      throw new Error('At least one speaker configuration is required');
+    }
+
+    const model = 'gemini-2.5-flash-tts';
+    const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/${this.projectId}/locations/${this.location}/publishers/google/models/${model}:generateContent`;
+
+    const client = await this.auth.getClient();
+    const accessToken = await client.getAccessToken();
+
+    if (!accessToken.token) {
+      throw new Error('Failed to get access token');
+    }
+
+    // Build multi-speaker voice config
+    const speakerVoiceConfigs = speakers.map(s => ({
+      speaker: s.speaker,
+      voice_config: {
+        prebuilt_voice_config: {
+          voice_name: s.voiceName
+        }
+      }
+    }));
+
+    const requestBody = {
+      contents: {
+        role: 'user',
+        parts: {
+          text: text
+        }
+      },
+      generation_config: {
+        response_modalities: ['AUDIO'],
+        speech_config: {
+          multi_speaker_voice_config: {
+            speaker_voice_configs: speakerVoiceConfigs
+          }
+        }
+      }
+    };
+
+    try {
+      console.log(`🎤 Multi-speaker TTS: ${text.length} chars, ${speakers.length} speakers: ${speakers.map(s => `${s.speaker}→${s.voiceName}`).join(', ')}`);
+      const startTime = Date.now();
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${accessToken.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+        signal: AbortSignal.timeout(180000), // 3 minute timeout for longer texts
+      });
+
+      const fetchTime = Date.now() - startTime;
+      console.log(`⏱️ Multi-speaker TTS response in ${fetchTime}ms`);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Vertex AI Multi-Speaker TTS Error:', errorText);
+        throw new Error(`Vertex AI API returned ${response.status}: ${errorText}`);
+      }
+
+      const jsonResponse: any = await response.json();
+      const audioData = jsonResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+
+      if (!audioData) {
+        console.error('Full response:', JSON.stringify(jsonResponse, null, 2));
+        throw new Error('No audio content received from multi-speaker TTS');
+      }
+
+      const pcmBuffer = Buffer.from(audioData, 'base64');
+      const wavBuffer = await createWavBuffer(pcmBuffer);
+      console.log(`✅ Multi-speaker audio: ${wavBuffer.length} bytes`);
+
+      return wavBuffer;
+    } catch (error) {
+      console.error('❌ Multi-speaker TTS Error:', error);
+      throw new Error(`Multi-speaker synthesis failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
 }
+
+// ========================================
+// Convenience functions (stateless)
+// ========================================
 
 export async function synthesizeText(text: string, voiceName: string = 'Algieba'): Promise<Buffer> {
   const projectId = process.env.GOOGLE_CLOUD_PROJECT;
@@ -185,15 +294,41 @@ export async function synthesizeText(text: string, voiceName: string = 'Algieba'
     throw new Error('GOOGLE_CLOUD_PROJECT is not set in environment variables');
   }
 
-  // GOOGLE_APPLICATION_CREDENTIALS should be set in .env and point to service account JSON file
   if (!process.env.GOOGLE_APPLICATION_CREDENTIALS) {
     throw new Error('GOOGLE_APPLICATION_CREDENTIALS is not set in environment variables');
   }
 
-  const ttsClient = new TTSClient({ 
-    projectId,
-    location,
-  });
-  
+  const ttsClient = new TTSClient({ projectId, location });
   return ttsClient.synthesizeText(text, voiceName);
+}
+
+/**
+ * Synthesize multi-speaker audio (up to 2 speakers per API call)
+ * 
+ * Text format: "Speaker: text" on each line
+ * Example:
+ *   NARRATOR: Once upon a time...
+ *   JOE: Hello there!
+ * 
+ * @param text - Text with speaker labels matching speaker configs
+ * @param speakers - Speaker configurations (max 2)
+ * @returns WAV audio buffer
+ */
+export async function synthesizeMultiSpeaker(
+  text: string,
+  speakers: SpeakerConfig[]
+): Promise<Buffer> {
+  const projectId = process.env.GOOGLE_CLOUD_PROJECT;
+  const location = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1';
+
+  if (!projectId) {
+    throw new Error('GOOGLE_CLOUD_PROJECT is not set in environment variables');
+  }
+
+  if (!process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    throw new Error('GOOGLE_APPLICATION_CREDENTIALS is not set in environment variables');
+  }
+
+  const ttsClient = new TTSClient({ projectId, location });
+  return ttsClient.synthesizeMultiSpeaker(text, speakers);
 }

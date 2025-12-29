@@ -285,7 +285,39 @@ ${cleanedText.substring(0, 250000)}`;
         jsonText = jsonText.replace(/^```json?\s*/, '').replace(/\s*```$/, '');
       }
       
-      const characters: CharacterProfile[] = JSON.parse(jsonText);
+      // Try to parse JSON, with recovery for truncated output
+      let characters: CharacterProfile[];
+      try {
+        characters = JSON.parse(jsonText);
+      } catch (parseError) {
+        console.warn('  ⚠️ JSON parse failed, attempting recovery...');
+        
+        // Try to recover from truncated JSON
+        // Find the last complete object before truncation
+        const lastCompleteObjectEnd = jsonText.lastIndexOf('},');
+        if (lastCompleteObjectEnd > 0) {
+          const recovered = jsonText.substring(0, lastCompleteObjectEnd + 1) + ']';
+          console.log(`  🔧 Attempting recovery with truncated JSON at position ${lastCompleteObjectEnd}`);
+          try {
+            characters = JSON.parse(recovered);
+            console.log(`  ✅ Recovery successful! Found ${characters.length} characters`);
+          } catch (recoveryError) {
+            // Try simpler recovery - just find valid JSON array start/end
+            const firstBracket = jsonText.indexOf('[');
+            const lastValidEnd = jsonText.lastIndexOf('}]');
+            if (firstBracket >= 0 && lastValidEnd > firstBracket) {
+              const simpleRecovery = jsonText.substring(firstBracket, lastValidEnd + 2);
+              characters = JSON.parse(simpleRecovery);
+              console.log(`  ✅ Simple recovery successful! Found ${characters.length} characters`);
+            } else {
+              throw recoveryError;
+            }
+          }
+        } else {
+          // Can't recover - re-throw original error
+          throw parseError;
+        }
+      }
       
       console.log(`  ✅ Found ${characters.length} characters: ${characters.map(c => c.name).join(', ')}`);
       
@@ -315,49 +347,69 @@ ${cleanedText.substring(0, 250000)}`;
       .map(c => `- ${c.name} (${c.gender})`)
       .join('\n');
     
-    const prompt = `You are tagging text for text-to-speech dramatization. Add [VOICE=CHARACTER] tags before each dialogue and narration segment.
+    const prompt = `You are tagging text for text-to-speech dramatization. Add [VOICE=CHARACTER] tags to separate dialogue from narration.
 
 CHARACTERS IN THIS BOOK:
 ${characterList}
 
-RULES:
-1. Use [VOICE=NARRATOR] for ALL narration (non-dialogue text, scene descriptions, etc.)
-2. Use [VOICE=CHARACTER_NAME] before each character's dialogue (quoted speech)
-3. To identify who speaks, look at dialogue attribution phrases like:
-   - English: "said John", "she whispered", "he shouted"
-   - Czech: "zvolal Joseph", "poznamenala Lili", "řekl", "zavrčel Ragowski"
-4. Character names in tags must match EXACTLY from the list above (case-sensitive!)
-5. If a character speaks but isn't in the list, use [VOICE=NARRATOR]
-6. Include ALL original text - do not remove or summarize anything
-7. Use UPPERCASE for character names in tags (e.g., [VOICE=LILI_SAFFRO])
-8. Replace spaces with underscores in character names (e.g., "Joseph Ragowski" → [VOICE=JOSEPH_RAGOWSKI])
+CRITICAL RULES FOR DIALOGUE VS NARRATOR:
+1. CHARACTER voice = ONLY the quoted speech itself (text inside „..." or "...")
+2. NARRATOR voice = EVERYTHING ELSE including:
+   - Scene descriptions and actions
+   - Dialogue ATTRIBUTION phrases like "zvolal", "řekla", "said John", "she whispered"
+   - Text AFTER the quote that describes how it was said (e.g., "zatímco si prohlížel...")
+   - Character descriptions and reactions
+3. When a sentence has dialogue AND attribution, SPLIT IT:
+   - BAD: [VOICE=JOHN] „Hello," he said with a smile.
+   - GOOD: [VOICE=JOHN] „Hello," [VOICE=NARRATOR] he said with a smile.
 
-EXAMPLE INPUT (English):
-The old man smiled. "Hello there," he said softly. She looked up. "Who are you?"
+TAG FORMAT:
+- Use UPPERCASE with underscores: [VOICE=JOSEPH_RAGOWSKI]
+- Match character names from list above exactly
 
-EXAMPLE OUTPUT (English):
+DETAILED EXAMPLES:
+
+EXAMPLE 1 - Attribution AFTER quote must be NARRATOR:
+INPUT: „Jen se podívejte," zvolal, zatímco si prohlížel mágů.
+OUTPUT:
+[VOICE=JOSEPH_RAGOWSKI]
+„Jen se podívejte,"
 [VOICE=NARRATOR]
-The old man smiled.
-[VOICE=OLD_MAN]
-"Hello there," he said softly.
+zvolal, zatímco si prohlížel mágů.
+
+EXAMPLE 2 - Multiple quotes by same character:
+INPUT: „První věta," řekl John. „Druhá věta!"
+OUTPUT:
+[VOICE=JOHN]
+„První věta,"
 [VOICE=NARRATOR]
-She looked up.
-[VOICE=WOMAN]
-"Who are you?"
+řekl John.
+[VOICE=JOHN]
+„Druhá věta!"
 
-EXAMPLE INPUT (Czech):
-Joseph Ragowski pozvedl hlas. „Jen se podívejte," zvolal. „Všichni vypadáte špatně!"
-„Ani ty nevypadáš dobře," poznamenala Lili.
+EXAMPLE 3 - Continuous narration:
+INPUT: Joseph pozvedl hlas. „Podívejte se," zvolal. Pak se rozhlédl.
+OUTPUT:
+[VOICE=NARRATOR]
+Joseph pozvedl hlas.
+[VOICE=JOSEPH]
+„Podívejte se,"
+[VOICE=NARRATOR]
+zvolal. Pak se rozhlédl.
 
-EXAMPLE OUTPUT (Czech):
+EXAMPLE 4 - Complete Czech paragraph:
+INPUT: Joseph Ragowski pozvedl hlas. „Jen se na sebe podívejte," zvolal, zatímco si zkoumavě prohlížel pětici mágů. „Všichni vypadáte jako mátohy!"
+OUTPUT:
 [VOICE=NARRATOR]
 Joseph Ragowski pozvedl hlas.
 [VOICE=JOSEPH_RAGOWSKI]
-„Jen se podívejte," zvolal. „Všichni vypadáte špatně!"
-[VOICE=LILI]
-„Ani ty nevypadáš dobře," poznamenala Lili.
+„Jen se na sebe podívejte,"
+[VOICE=NARRATOR]
+zvolal, zatímco si zkoumavě prohlížel pětici mágů.
+[VOICE=JOSEPH_RAGOWSKI]
+„Všichni vypadáte jako mátohy!"
 
-Now tag this chapter text:
+Now tag this chapter text. Remember: ONLY quoted text gets character voice, ALL attribution and description gets NARRATOR:
 
 ${chapterText}`;
     

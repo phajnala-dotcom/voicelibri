@@ -48,7 +48,8 @@ import {
   type Chapter 
 } from './bookChunker.js';
 import { chunkBookByChapters, type ChunkInfo } from './chapterChunker.js';
-import { dramatizeBookHybrid, dramatizeFirstChapterHybrid } from './hybridDramatizer.js';
+import { dramatizeBookHybrid } from './hybridDramatizer.js';
+import { streamingDramatize, dramatizeFirstChunk, StreamingChunk } from './streamingDramatizer.js';
 import { GeminiConfig } from './llmCharacterAnalyzer.js';
 import { audiobookWorker } from './audiobookWorker.js';
 import { dramatizeBook, checkCache } from './geminiDramatizer.js';
@@ -154,9 +155,10 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
   let hasVoiceTags = /\[VOICE=.*?\]/.test(BOOK_TEXT);
   
   // HYBRID DRAMATIZATION: Auto-tag dialogue with LLM
+  // Uses chunk-level streaming for fastest time-to-first-audio
   if (enableDramatization && !hasVoiceTags) {
-    console.log('\n🎭 HYBRID DRAMATIZATION ENABLED');
-    console.log('===============================');
+    console.log('\n🎭 CHUNK-LEVEL STREAMING DRAMATIZATION');
+    console.log('========================================');
     
     try {
       const geminiConfig: GeminiConfig = {
@@ -168,70 +170,82 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
         throw new Error('GOOGLE_CLOUD_PROJECT environment variable not set');
       }
       
-      console.log('⚡ Starting hybrid dramatization...');
+      console.log('⚡ Starting chunk-level streaming dramatization...');
       console.log(`   Book: ${BOOK_TEXT.length} chars, ${BOOK_CHAPTERS.length} chapters`);
       
-      const result = await dramatizeBookHybrid(
+      // Use streaming dramatization (processes chunks, not full chapters)
+      const streamingResult = streamingDramatize(
+        BOOK_CHAPTERS,
         BOOK_TEXT,
-        BOOK_CHAPTERS.map(ch => ch.text),
         geminiConfig,
-        0.85 // Confidence threshold
+        (progress) => {
+          // Progress callback - could be sent to frontend via WebSocket in future
+          if (progress.phase === 'character-scan') {
+            console.log('🔍 Scanning for characters...');
+          }
+        },
+        (characters) => {
+          // Create voice map as soon as characters are found
+          const charactersForVoiceMap: Character[] = characters
+            .filter(cp => cp.name !== 'NARRATOR')
+            .map(cp => ({
+              name: cp.name,
+              gender: cp.gender === 'unknown' ? 'neutral' : cp.gender,
+              traits: cp.traits || []
+            }));
+          
+          VOICE_MAP = assignVoices(charactersForVoiceMap, NARRATOR_VOICE);
+          console.log(`🎙️  Voice assignments (narrator: ${NARRATOR_VOICE}):`);
+          for (const [character, voice] of Object.entries(VOICE_MAP)) {
+            console.log(`   ${character} → ${voice}`);
+          }
+          console.log('');
+        }
       );
       
-      // Replace book chapters with tagged versions
-      for (let i = 0; i < BOOK_CHAPTERS.length; i++) {
-        BOOK_CHAPTERS[i].text = result.taggedChapters[i].taggedText;
+      // Collect all dramatized chunks
+      const dramatizedChunks: StreamingChunk[] = [];
+      
+      for await (const chunk of streamingResult) {
+        dramatizedChunks.push(chunk);
+        
+        // First chunk is ready! In future, could trigger immediate audio generation here
+        if (chunk.chunkIndex === 0) {
+          console.log('🎉 First chunk ready for audio generation!');
+        }
       }
       
-      // Rebuild full book text from tagged chapters
+      // Rebuild chapters from dramatized chunks
+      // Group chunks by chapter
+      const chunksByChapter = new Map<number, StreamingChunk[]>();
+      for (const chunk of dramatizedChunks) {
+        const existing = chunksByChapter.get(chunk.chapterIndex) || [];
+        existing.push(chunk);
+        chunksByChapter.set(chunk.chapterIndex, existing);
+      }
+      
+      // Update BOOK_CHAPTERS with dramatized text
+      for (const [chapterIdx, chunks] of chunksByChapter) {
+        // Combine chunks for this chapter
+        BOOK_CHAPTERS[chapterIdx].text = chunks.map(c => c.taggedText).join('\n');
+      }
+      
+      // Rebuild full book text
       BOOK_TEXT = BOOK_CHAPTERS.map(ch => ch.text).join('\n\n');
       hasVoiceTags = true;
       
-      // Update metadata with dramatization info
+      // Update metadata
       BOOK_METADATA.isDramatized = true;
-      BOOK_METADATA.dramatizationType = 'hybrid-optimized';
-      BOOK_METADATA.charactersFound = result.characters.length;
-      BOOK_METADATA.dramatizationCost = result.totalCost;
-      BOOK_METADATA.dramatizationConfidence = result.taggedChapters.reduce((sum, ch) => sum + ch.confidence, 0) / result.taggedChapters.length;
-      BOOK_METADATA.taggingMethodBreakdown = {
-        autoNarrator: result.taggedChapters.filter(ch => ch.method === 'auto-narrator').length,
-        ruleBased: result.taggedChapters.filter(ch => ch.method === 'rule-based').length,
-        llmFallback: result.taggedChapters.filter(ch => ch.method === 'llm-fallback').length,
-      };
+      BOOK_METADATA.dramatizationType = 'hybrid-streaming';
+      BOOK_METADATA.charactersFound = Object.keys(VOICE_MAP).length + 1; // +1 for NARRATOR
       
-      console.log('\n✅ HYBRID DRAMATIZATION COMPLETE');
-      console.log('==================================');
-      console.log(`💰 Total cost: $${result.totalCost.toFixed(4)}`);
-      console.log(`📊 Average confidence: ${(BOOK_METADATA.dramatizationConfidence! * 100).toFixed(1)}%`);
-      console.log(`👥 Characters found: ${result.characters.length}`);
-      console.log(`📈 Tagging methods:`);
-      console.log(`   Auto-narrator: ${BOOK_METADATA.taggingMethodBreakdown!.autoNarrator} chapters`);
-      console.log(`   Rule-based: ${BOOK_METADATA.taggingMethodBreakdown!.ruleBased} chapters`);
-      console.log(`   LLM fallback: ${BOOK_METADATA.taggingMethodBreakdown!.llmFallback} chapters`);
-      console.log(`\n🎤 Characters: ${result.characters.map(c => c.name).join(', ')}`);
-      
-      // Create voice map from characters
-      // Convert CharacterProfile to Character format for voice assignment
-      // Filter out NARRATOR - it's handled globally via NARRATOR_VOICE
-      const charactersForVoiceMap: Character[] = result.characters
-        .filter(cp => cp.name !== 'NARRATOR')
-        .map(cp => ({
-        name: cp.name,
-        gender: cp.gender === 'unknown' ? 'neutral' : cp.gender,
-        traits: cp.traits || []
-      }));
-      
-      // Use global narrator voice (set by frontend via /api/tts/chunk)
-      VOICE_MAP = assignVoices(charactersForVoiceMap, NARRATOR_VOICE);
-      console.log(`🎙️  Voice assignments (narrator: ${NARRATOR_VOICE}):`);
-      for (const [character, voice] of Object.entries(VOICE_MAP)) {
-        console.log(`   ${character} → ${voice}`);
-      }
-      console.log('');
+      console.log('\n✅ STREAMING DRAMATIZATION COMPLETE');
+      console.log(`📊 Total chunks: ${dramatizedChunks.length}`);
+      console.log(`👥 Characters: ${Object.keys(VOICE_MAP).length + 1}\n`);
       
     } catch (error) {
-      console.error('\n❌ HYBRID DRAMATIZATION FAILED');
-      console.error('================================');
+      console.error('\n❌ STREAMING DRAMATIZATION FAILED');
+      console.error('====================================');
       console.error(error);
       console.error('\n⚠️ Falling back to single-voice narration\n');
       hasVoiceTags = false;
