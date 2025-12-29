@@ -1,0 +1,12 @@
+OTHER EBOOKS FORMATS SUPPORT
+Implement most used ebooks formats throughout the app:
+- Mobi
+- AZW3, KFX
+- PDF
+- DOC, DOCX
+- HTML
+
+ADVANCED UI WITH LIBRARY
+UI with SOTA design and functionality including library UI.
+
+

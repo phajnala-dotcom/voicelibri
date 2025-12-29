@@ -177,7 +177,7 @@ const BookPlayer: React.FC = () => {
     return localStorage.getItem('preferredNarratorGender') || 'mužský';
   });
   const [selectedVoiceName, setSelectedVoiceName] = useState<string>(() => {
-    return localStorage.getItem('preferredNarratorVoice') || 'Algieba';
+    return localStorage.getItem('preferredNarratorVoice') || 'Achird'; // Default: Achird (first male voice)
   });
 
   const audioRef = useRef<HTMLAudioElement>(null);

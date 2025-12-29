@@ -88,7 +88,7 @@ export async function generateAndSaveTempChunk(
   if (voiceSegments.length > 0) {
     // MULTI-VOICE MODE: Chunk has voice tags
     console.log(`  Multi-voice chunk: ${voiceSegments.length} segments`);
-    
+    g
     // CRITICAL: Validate each segment before synthesis
     for (const segment of voiceSegments) {
       validateVoiceSegment(segment);
