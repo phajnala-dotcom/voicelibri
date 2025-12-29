@@ -29,7 +29,66 @@ import {
   sanitizeChapterTitle
 } from './audiobookManager.js';
 import { Chapter } from './bookChunker.js';
-import { formatForMultiSpeakerTTS, getUniqueSpeakers } from './twoSpeakerChunker.js';
+import { formatForMultiSpeakerTTS, getUniqueSpeakers, chunkForTwoSpeakers } from './twoSpeakerChunker.js';
+
+// ========================================
+// On-Demand Dramatization Helper
+// ========================================
+
+/**
+ * Dramatize a plain text chunk on-demand using LLM
+ * Called when chunk doesn't have voice tags but dramatization is enabled
+ * 
+ * @param plainText - Raw text without voice tags
+ * @returns Tagged text with [VOICE=] tags
+ */
+async function dramatizeChunkOnDemand(plainText: string): Promise<string> {
+  const characters = (global as any).DRAMATIZATION_CHARACTERS;
+  const geminiConfig = (global as any).DRAMATIZATION_CONFIG;
+  
+  if (!characters || !geminiConfig) {
+    console.log('  📝 No dramatization config, using plain text');
+    return `[VOICE=NARRATOR]\n${plainText}`;
+  }
+  
+  console.log('  🎭 On-demand dramatization...');
+  
+  try {
+    // Import the tagging function
+    const { GeminiCharacterAnalyzer } = await import('./llmCharacterAnalyzer.js');
+    const { hasDialogue, applyRuleBasedTagging, calculateConfidence, extractDialogueParagraphs, mergeWithNarration } = await import('./hybridTagger.js');
+    
+    const analyzer = new GeminiCharacterAnalyzer(geminiConfig);
+    
+    // Check if this chunk has any dialogue
+    if (!hasDialogue(plainText)) {
+      return `[VOICE=NARRATOR]\n${plainText}`;
+    }
+    
+    // Try rule-based first (free)
+    const { taggedText: ruleTagged, confidence } = applyRuleBasedTagging(plainText, characters);
+    const finalConfidence = calculateConfidence(ruleTagged, characters);
+    
+    if (finalConfidence >= 0.85) {
+      console.log(`    ✓ Rule-based tagging (confidence: ${(finalConfidence * 100).toFixed(0)}%)`);
+      return ruleTagged;
+    }
+    
+    // LLM fallback for complex dialogue
+    const dialogueParagraphs = extractDialogueParagraphs(plainText);
+    const dialogueText = dialogueParagraphs.length > 0 ? dialogueParagraphs.join('\n\n') : plainText;
+    
+    const llmTagged = await analyzer.tagChapterWithVoices(dialogueText, characters);
+    const mergedText = mergeWithNarration(plainText, llmTagged, characters);
+    
+    console.log(`    ✓ LLM tagging complete`);
+    return mergedText;
+    
+  } catch (error) {
+    console.error('  ❌ On-demand dramatization failed:', error);
+    return `[VOICE=NARRATOR]\n${plainText}`;
+  }
+}
 
 // ========================================
 // Voice Map Lookup Helper
@@ -159,12 +218,39 @@ export async function generateAndSaveTempChunk(
       audioBuffer = await synthesizeText(combinedText, voice);
       
     } else if (uniqueSpeakers.length > 2) {
-      console.warn(`  ⚠️ WARNING: ${uniqueSpeakers.length} speakers in chunk - this should not happen!`);
-      console.warn(`     Speakers: ${uniqueSpeakers.join(', ')}`);
-      console.warn(`     Chunk should have been split by twoSpeakerChunker. Falling back to simulation.`);
+      // More than 2 speakers - use twoSpeakerChunker to split and generate multiple audio pieces
+      console.log(`  📦 ${uniqueSpeakers.length} speakers in pre-tagged chunk - using twoSpeakerChunker`);
+      console.log(`     Speakers: ${uniqueSpeakers.join(', ')}`);
       
-      // Fallback: Use old simulation approach (multiple single-voice calls)
-      audioBuffer = await generateMultiVoiceSimulated(voiceSegments, voiceMap, defaultVoice);
+      // Split into 2-speaker sub-chunks
+      const twoSpeakerChunks = chunkForTwoSpeakers(chunkText);
+      console.log(`     Split into ${twoSpeakerChunks.length} sub-chunks`);
+      
+      // Generate audio for each sub-chunk and concatenate
+      const audioBuffers: Buffer[] = [];
+      for (const subChunk of twoSpeakerChunks) {
+        let subAudio: Buffer;
+        
+        if (subChunk.speakers.length === 1) {
+          // Single speaker
+          const voice = lookupVoice(subChunk.speakers[0], voiceMap, defaultVoice);
+          const text = subChunk.segments.map(s => s.text).join(' ');
+          subAudio = await synthesizeText(text, voice);
+        } else {
+          // 2 speakers - true multi-speaker
+          const speakerConfigs: SpeakerConfig[] = subChunk.speakers.map(speaker => ({
+            speaker,
+            voiceName: lookupVoice(speaker, voiceMap, defaultVoice),
+          }));
+          subAudio = await synthesizeMultiSpeaker(subChunk.formattedText, speakerConfigs);
+        }
+        
+        audioBuffers.push(subAudio);
+      }
+      
+      // Concatenate all audio buffers
+      audioBuffer = concatenateWavBuffers(audioBuffers);
+      console.log(`     ✓ Generated and concatenated ${audioBuffers.length} audio pieces`);
     } else {
       // TRUE MULTI-SPEAKER: Exactly 2 speakers - use Gemini's native multiSpeakerVoiceConfig
       console.log(`  ✅ Using TRUE multi-speaker TTS (2 speakers)`);
@@ -189,21 +275,96 @@ export async function generateAndSaveTempChunk(
     console.log(`  ✓ Generated ${audioBuffer.length} bytes`);
     
   } else {
-    // SINGLE-VOICE MODE: No voice tags
-    console.log(`  Single-voice chunk (${chunkText.length} chars)`);
+    // SINGLE-VOICE MODE: No voice tags detected
+    // Check if on-demand dramatization is enabled
+    const dramatizationEnabled = (global as any).DRAMATIZATION_ENABLED;
     
-    // Remove any stray voice tags (safety)
-    const cleanText = removeVoiceTags(chunkText);
-    const textBytes = Buffer.byteLength(cleanText, 'utf8');
-    
-    // Validate size
-    if (textBytes > GEMINI_TTS_HARD_LIMIT) {
-      throw new Error(
-        `Chunk ${chunkIndex} exceeds ${GEMINI_TTS_HARD_LIMIT}-byte limit: ${textBytes} bytes`
-      );
+    if (dramatizationEnabled) {
+      // ON-DEMAND DRAMATIZATION: Convert plain text to multi-voice
+      console.log(`  🎭 On-demand dramatization for chunk ${chunkIndex}...`);
+      
+      const dramatizedText = await dramatizeChunkOnDemand(chunkText);
+      const dramatizedSegments = extractVoiceSegments(dramatizedText);
+      
+      if (dramatizedSegments.length > 0) {
+        // Successfully dramatized - now generate multi-voice audio
+        const uniqueSpeakers = [...new Set(dramatizedSegments.map(s => s.speaker))];
+        console.log(`    ✓ Dramatized: ${dramatizedSegments.length} segments, ${uniqueSpeakers.length} speakers`);
+        
+        if (uniqueSpeakers.length === 1) {
+          // Single speaker after dramatization
+          const speaker = uniqueSpeakers[0];
+          const voice = lookupVoice(speaker, voiceMap, defaultVoice);
+          const combinedText = dramatizedSegments.map(s => s.text).join(' ');
+          audioBuffer = await synthesizeText(combinedText, voice);
+          
+        } else if (uniqueSpeakers.length === 2) {
+          // Perfect! True multi-speaker
+          const speakerConfigs: SpeakerConfig[] = uniqueSpeakers.map(speaker => ({
+            speaker,
+            voiceName: lookupVoice(speaker, voiceMap, defaultVoice),
+          }));
+          const formattedText = formatForMultiSpeakerTTS(dramatizedSegments);
+          audioBuffer = await synthesizeMultiSpeaker(formattedText, speakerConfigs);
+          
+        } else {
+          // More than 2 speakers - use twoSpeakerChunker to split and generate multiple audio pieces
+          console.log(`    📦 ${uniqueSpeakers.length} speakers - using twoSpeakerChunker`);
+          
+          // Split into 2-speaker sub-chunks
+          const twoSpeakerChunks = chunkForTwoSpeakers(dramatizedText);
+          console.log(`       Split into ${twoSpeakerChunks.length} sub-chunks`);
+          
+          // Generate audio for each sub-chunk and concatenate
+          const audioBuffers: Buffer[] = [];
+          for (const subChunk of twoSpeakerChunks) {
+            let subAudio: Buffer;
+            
+            if (subChunk.speakers.length === 1) {
+              // Single speaker
+              const voice = lookupVoice(subChunk.speakers[0], voiceMap, defaultVoice);
+              const text = subChunk.segments.map(s => s.text).join(' ');
+              subAudio = await synthesizeText(text, voice);
+            } else {
+              // 2 speakers - true multi-speaker
+              const speakerConfigs: SpeakerConfig[] = subChunk.speakers.map(speaker => ({
+                speaker,
+                voiceName: lookupVoice(speaker, voiceMap, defaultVoice),
+              }));
+              subAudio = await synthesizeMultiSpeaker(subChunk.formattedText, speakerConfigs);
+            }
+            
+            audioBuffers.push(subAudio);
+          }
+          
+          // Concatenate all audio buffers
+          audioBuffer = concatenateWavBuffers(audioBuffers);
+          console.log(`       ✓ Generated and concatenated ${audioBuffers.length} audio pieces`);
+        }
+      } else {
+        // Dramatization didn't produce voice tags - use single voice
+        console.log(`    📝 No dialogue found, using narrator voice`);
+        const cleanText = removeVoiceTags(chunkText);
+        audioBuffer = await synthesizeText(cleanText, defaultVoice);
+      }
+      
+    } else {
+      // SINGLE-VOICE MODE: No dramatization
+      console.log(`  Single-voice chunk (${chunkText.length} chars)`);
+      
+      // Remove any stray voice tags (safety)
+      const cleanText = removeVoiceTags(chunkText);
+      const textBytes = Buffer.byteLength(cleanText, 'utf8');
+      
+      // Validate size
+      if (textBytes > GEMINI_TTS_HARD_LIMIT) {
+        throw new Error(
+          `Chunk ${chunkIndex} exceeds ${GEMINI_TTS_HARD_LIMIT}-byte limit: ${textBytes} bytes`
+        );
+      }
+      
+      audioBuffer = await synthesizeText(cleanText, defaultVoice);
     }
-    
-    audioBuffer = await synthesizeText(cleanText, defaultVoice);
   }
   
   // 3. Save to temp file immediately

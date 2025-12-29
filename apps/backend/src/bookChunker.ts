@@ -76,7 +76,7 @@ export interface BookMetadata {
   
   // Hybrid dramatization metadata
   isDramatized?: boolean;
-  dramatizationType?: 'llm-only' | 'hybrid-optimized' | 'hybrid-streaming';
+  dramatizationType?: 'llm-only' | 'hybrid-optimized' | 'hybrid-streaming' | 'on-demand';
   charactersFound?: number;
   dramatizationCost?: number;
   dramatizationConfidence?: number;

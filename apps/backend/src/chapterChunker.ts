@@ -13,6 +13,7 @@
 
 import { Chapter } from './bookChunker.js';
 import { extractVoiceSegments, VoiceSegment } from './dramatizedChunkerSimple.js';
+import { chunkForTwoSpeakers, TwoSpeakerChunk } from './twoSpeakerChunker.js';
 
 // ========================================
 // Gemini TTS Limits (CRITICAL)
@@ -254,10 +255,9 @@ export function chunkChapter(
  * Chunk a dramatized chapter (with voice tags)
  * 
  * Algorithm:
- * 1. Extract voice segments
- * 2. Split any oversized segments (>4000 bytes) into smaller pieces
- * 3. Group segments into chunks ≤ 3500 bytes total
- * 4. Don't split voice segments (keep [VOICE=X]...[/VOICE] intact)
+ * 1. Use twoSpeakerChunker to ensure max 2 speakers per chunk (Gemini TTS limit)
+ * 2. Each chunk stays within byte limits
+ * 3. Chunks are formatted with [VOICE=X] tags for TTS processing
  * 
  * @param chapter - Chapter with voice tags
  * @returns Array of chunk texts with voice tags preserved
@@ -271,41 +271,19 @@ export function chunkDramatizedChapter(chapter: Chapter): string[] {
     return chunkChapter(chapter);
   }
   
-  // Validate and split oversized segments
-  const segments: VoiceSegment[] = [];
-  for (const segment of rawSegments) {
-    const validSegments = validateAndSplitVoiceSegment(segment);
-    segments.push(...validSegments);
-  }
+  // Use twoSpeakerChunker to ensure max 2 speakers per chunk
+  const twoSpeakerChunks = chunkForTwoSpeakers(chapter.text, {
+    maxBytes: SAFE_CHUNK_MAX,
+    minBytes: 0,  // Allow small chunks when 3rd speaker forces a split
+  }, chapter.index);
   
-  const chunks: string[] = [];
-  let currentChunkSegments: VoiceSegment[] = [];
-  let currentByteCount = 0;
+  // Convert TwoSpeakerChunk format back to tagged text format
+  const chunks: string[] = twoSpeakerChunks.map(chunk => {
+    // Rebuild [VOICE=X] tagged text from segments
+    return chunk.segments.map(seg => `[VOICE=${seg.speaker}]\n${seg.text}\n[/VOICE]`).join('\n');
+  });
   
-  for (const segment of segments) {
-    // Calculate segment bytes (including voice tags)
-    const segmentWithTags = `[VOICE=${segment.speaker}]\n${segment.text}\n[/VOICE]\n`;
-    const segmentBytes = Buffer.byteLength(segmentWithTags, 'utf8');
-    
-    // Check if adding this segment would exceed chunk limit
-    if (currentByteCount > 0 && currentByteCount + segmentBytes > SAFE_CHUNK_MAX) {
-      // Finalize current chunk
-      chunks.push(buildChunkFromSegments(currentChunkSegments));
-      currentChunkSegments = [segment];
-      currentByteCount = segmentBytes;
-    } else {
-      // Add segment to current chunk
-      currentChunkSegments.push(segment);
-      currentByteCount += segmentBytes;
-    }
-  }
-  
-  // Add final chunk
-  if (currentChunkSegments.length > 0) {
-    chunks.push(buildChunkFromSegments(currentChunkSegments));
-  }
-  
-  console.log(`  Chapter ${chapter.index} (dramatized) chunked: ${chunks.length} chunks from ${segments.length} voice segments`);
+  console.log(`  Chapter ${chapter.index} (dramatized) chunked: ${chunks.length} chunks from ${rawSegments.length} voice segments`);
   return chunks;
 }
 

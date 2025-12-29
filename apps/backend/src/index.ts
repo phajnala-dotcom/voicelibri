@@ -155,10 +155,10 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
   let hasVoiceTags = /\[VOICE=.*?\]/.test(BOOK_TEXT);
   
   // HYBRID DRAMATIZATION: Auto-tag dialogue with LLM
-  // Uses chunk-level streaming for fastest time-to-first-audio
+  // Fast startup: Only scan for characters now, dramatize chunks on-demand during TTS
   if (enableDramatization && !hasVoiceTags) {
-    console.log('\n🎭 CHUNK-LEVEL STREAMING DRAMATIZATION');
-    console.log('========================================');
+    console.log('\n🎭 ON-DEMAND DRAMATIZATION (Fast Startup)');
+    console.log('==========================================');
     
     try {
       const geminiConfig: GeminiConfig = {
@@ -170,84 +170,57 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
         throw new Error('GOOGLE_CLOUD_PROJECT environment variable not set');
       }
       
-      console.log('⚡ Starting chunk-level streaming dramatization...');
+      console.log('⚡ Quick character scan (dramatization happens on-demand during TTS)...');
       console.log(`   Book: ${BOOK_TEXT.length} chars, ${BOOK_CHAPTERS.length} chapters`);
       
-      // Use streaming dramatization (processes chunks, not full chapters)
-      const streamingResult = streamingDramatize(
-        BOOK_CHAPTERS,
-        BOOK_TEXT,
-        geminiConfig,
-        (progress) => {
-          // Progress callback - could be sent to frontend via WebSocket in future
-          if (progress.phase === 'character-scan') {
-            console.log('🔍 Scanning for characters...');
-          }
-        },
-        (characters) => {
-          // Create voice map as soon as characters are found
-          const charactersForVoiceMap: Character[] = characters
-            .filter(cp => cp.name !== 'NARRATOR')
-            .map(cp => ({
-              name: cp.name,
-              gender: cp.gender === 'unknown' ? 'neutral' : cp.gender,
-              traits: cp.traits || []
-            }));
-          
-          VOICE_MAP = assignVoices(charactersForVoiceMap, NARRATOR_VOICE);
-          console.log(`🎙️  Voice assignments (narrator: ${NARRATOR_VOICE}):`);
-          for (const [character, voice] of Object.entries(VOICE_MAP)) {
-            console.log(`   ${character} → ${voice}`);
-          }
-          console.log('');
-        }
-      );
+      // Import analyzer for character scan only
+      const { GeminiCharacterAnalyzer } = await import('./llmCharacterAnalyzer.js');
+      const analyzer = new GeminiCharacterAnalyzer(geminiConfig);
       
-      // Collect all dramatized chunks
-      const dramatizedChunks: StreamingChunk[] = [];
+      // Phase 1: Character scan (fast, ~5s)
+      console.log('🔍 Scanning for characters...');
+      const characters = await analyzer.analyzeFullBook(BOOK_TEXT);
       
-      for await (const chunk of streamingResult) {
-        dramatizedChunks.push(chunk);
-        
-        // First chunk is ready! In future, could trigger immediate audio generation here
-        if (chunk.chunkIndex === 0) {
-          console.log('🎉 First chunk ready for audio generation!');
-        }
+      console.log(`✅ Found ${characters.length} characters: ${characters.map(c => c.name).join(', ')}`);
+      
+      // Create voice map immediately
+      const charactersForVoiceMap: Character[] = characters
+        .filter(cp => cp.name !== 'NARRATOR')
+        .map(cp => ({
+          name: cp.name,
+          gender: cp.gender === 'unknown' ? 'neutral' : cp.gender,
+          traits: cp.traits || []
+        }));
+      
+      VOICE_MAP = assignVoices(charactersForVoiceMap, NARRATOR_VOICE);
+      console.log(`🎙️  Voice assignments (narrator: ${NARRATOR_VOICE}):`);
+      for (const [character, voice] of Object.entries(VOICE_MAP)) {
+        console.log(`   ${character} → ${voice}`);
       }
+      console.log('');
       
-      // Rebuild chapters from dramatized chunks
-      // Group chunks by chapter
-      const chunksByChapter = new Map<number, StreamingChunk[]>();
-      for (const chunk of dramatizedChunks) {
-        const existing = chunksByChapter.get(chunk.chapterIndex) || [];
-        existing.push(chunk);
-        chunksByChapter.set(chunk.chapterIndex, existing);
-      }
-      
-      // Update BOOK_CHAPTERS with dramatized text
-      for (const [chapterIdx, chunks] of chunksByChapter) {
-        // Combine chunks for this chapter
-        BOOK_CHAPTERS[chapterIdx].text = chunks.map(c => c.taggedText).join('\n');
-      }
-      
-      // Rebuild full book text
-      BOOK_TEXT = BOOK_CHAPTERS.map(ch => ch.text).join('\n\n');
-      hasVoiceTags = true;
+      // Store characters for on-demand dramatization
+      (global as any).DRAMATIZATION_CHARACTERS = characters;
+      (global as any).DRAMATIZATION_CONFIG = geminiConfig;
+      (global as any).DRAMATIZATION_ENABLED = true;
       
       // Update metadata
-      BOOK_METADATA.isDramatized = true;
-      BOOK_METADATA.dramatizationType = 'hybrid-streaming';
-      BOOK_METADATA.charactersFound = Object.keys(VOICE_MAP).length + 1; // +1 for NARRATOR
+      BOOK_METADATA.isDramatized = false; // Will be true after chunks are dramatized
+      BOOK_METADATA.dramatizationType = 'on-demand';
+      BOOK_METADATA.charactersFound = characters.length;
       
-      console.log('\n✅ STREAMING DRAMATIZATION COMPLETE');
-      console.log(`📊 Total chunks: ${dramatizedChunks.length}`);
-      console.log(`👥 Characters: ${Object.keys(VOICE_MAP).length + 1}\n`);
+      console.log('✅ Character scan complete - dramatization will happen during TTS\n');
+      
+      // Note: Chapters are NOT tagged yet - this happens on-demand in tempChunkManager
+      // We set hasVoiceTags=false so regular chunking is used, and dramatization
+      // happens per-chunk during TTS generation
       
     } catch (error) {
-      console.error('\n❌ STREAMING DRAMATIZATION FAILED');
-      console.error('====================================');
+      console.error('\n❌ CHARACTER SCAN FAILED');
+      console.error('========================');
       console.error(error);
       console.error('\n⚠️ Falling back to single-voice narration\n');
+      (global as any).DRAMATIZATION_ENABLED = false;
       hasVoiceTags = false;
     }
   }
