@@ -78,6 +78,7 @@ let BOOK_FORMAT: 'txt' | 'epub' | 'pdf' = 'txt';
 let CURRENT_BOOK_FILE: string = '';
 let ASSETS_DIR: string;
 let VOICE_MAP: Record<string, string> = {}; // NEW: Global voice map for dramatized books
+let NARRATOR_VOICE: string = 'Achird'; // Global narrator voice selection (default: Achird)
 
 // Audio cache for generated chunks - key format: "chunkIndex:voiceName"
 const audioCache = new Map<string, Buffer>();
@@ -211,14 +212,18 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
       
       // Create voice map from characters
       // Convert CharacterProfile to Character format for voice assignment
-      const charactersForVoiceMap: Character[] = result.characters.map(cp => ({
+      // Filter out NARRATOR - it's handled globally via NARRATOR_VOICE
+      const charactersForVoiceMap: Character[] = result.characters
+        .filter(cp => cp.name !== 'NARRATOR')
+        .map(cp => ({
         name: cp.name,
         gender: cp.gender === 'unknown' ? 'neutral' : cp.gender,
         traits: cp.traits || []
       }));
       
-      VOICE_MAP = assignVoices(charactersForVoiceMap);
-      console.log(`🎙️  Voice assignments:`);
+      // Use global narrator voice (set by frontend via /api/tts/chunk)
+      VOICE_MAP = assignVoices(charactersForVoiceMap, NARRATOR_VOICE);
+      console.log(`🎙️  Voice assignments (narrator: ${NARRATOR_VOICE}):`);
       for (const [character, voice] of Object.entries(VOICE_MAP)) {
         console.log(`   ${character} → ${voice}`);
       }
@@ -240,6 +245,9 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
     console.log('   Extracting characters from existing voice tags...');
     
     try {
+      // Import gender inference utility
+      const { inferGender } = await import('./hybridTagger.js');
+      
       // Extract all unique character names from voice tags in the book text
       const voiceTagRegex = /\[VOICE=([^:\]]+)(?::[^\]]+)?\]/g;
       const characterNames = new Set<string>();
@@ -251,17 +259,28 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
       
       console.log(`   Found ${characterNames.size} unique voices: ${Array.from(characterNames).join(', ')}`);
       
-      // Create character profiles (with neutral gender - voice assigner will pick diverse voices)
+      // Create character profiles with intelligent gender detection
       const charactersForVoiceMap: Character[] = Array.from(characterNames)
         .filter(name => name !== 'NARRATOR') // NARRATOR handled separately
-        .map(name => ({
-          name,
-          gender: 'neutral' as const,
-          traits: []
-        }));
+        .map(name => {
+          // Extract context around this character's mentions for gender inference
+          const contextRegex = new RegExp(`[^.]*${name}[^.]*\\.`, 'gi');
+          const contextMatches = BOOK_TEXT.match(contextRegex) || [];
+          const context = contextMatches.slice(0, 5).join(' '); // First 5 sentences with character
+          
+          const gender = inferGender(name, context);
+          console.log(`   ${name}: detected gender = ${gender}`);
+          
+          return {
+            name,
+            gender,
+            traits: []
+          };
+        });
       
-      VOICE_MAP = assignVoices(charactersForVoiceMap);
-      console.log(`🎙️  Voice assignments for pre-tagged book:`);
+      // Use global narrator voice (set by frontend via /api/tts/chunk)
+      VOICE_MAP = assignVoices(charactersForVoiceMap, NARRATOR_VOICE);
+      console.log(`🎙️  Voice assignments for pre-tagged book (narrator: ${NARRATOR_VOICE}):`);
       for (const [character, voice] of Object.entries(VOICE_MAP)) {
         console.log(`   ${character} → ${voice}`);
       }
@@ -844,7 +863,13 @@ app.post('/api/tts/chunk', async (req: Request, res: Response) => {
   try {
     const { chunkIndex, voiceName = 'Algieba', bookFile } = req.body;
 
-    // CRITICAL: Ensure a book is loaded before processing chunks
+    // CRITICAL: Ensure a book is loadchird', bookFile } = req.body;
+
+    // Update global narrator voice (used for character voice assignment)
+    if (voiceName && voiceName !== NARRATOR_VOICE) {
+      console.log(`🎙️ Narrator voice updated: ${NARRATOR_VOICE} → ${voiceName}`);
+      NARRATOR_VOICE = voiceName;
+    }
     if (!BOOK_METADATA || !BOOK_CHUNKS || BOOK_CHUNKS.length === 0) {
       console.error('❌ No book loaded! BOOK_METADATA:', !!BOOK_METADATA, 'BOOK_CHUNKS:', BOOK_CHUNKS?.length || 0);
       return res.status(400).json({

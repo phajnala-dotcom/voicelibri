@@ -41,16 +41,22 @@ export interface VoiceMap {
  *    - Pitch match (age inference)
  *    - Trait characteristics
  * 3. Ensure each character gets a UNIQUE voice (no duplicates)
+ * 4. Exclude narrator's voice from character assignments (if provided)
  * 
  * @param characters - Array of character profiles from LLM analysis
+ * @param narratorVoiceName - Optional narrator voice to exclude from character assignments
  * @returns VoiceMap object with character -> voice mappings
  */
-export function assignVoices(characters: Character[]): VoiceMap {
-  const voiceMap: VoiceMap = {
-    NARRATOR: 'USER_SELECTED' // Placeholder - replaced by UI selection at runtime
-  };
+export function assignVoices(characters: Character[], narratorVoiceName?: string): VoiceMap {
+  const voiceMap: VoiceMap = {};
   
   const usedVoices = new Set<string>();
+  
+  // Exclude narrator's voice from character assignments
+  if (narratorVoiceName && narratorVoiceName !== 'USER_SELECTED') {
+    usedVoices.add(narratorVoiceName);
+    console.log(`[VoiceAssigner] Narrator voice "${narratorVoiceName}" excluded from character assignments`);
+  }
   
   // Sort characters by number of dialogue examples (main characters first)
   const sortedCharacters = [...characters].sort((a, b) => {

@@ -256,10 +256,11 @@ export class GeminiCharacterAnalyzer implements LlmCharacterAnalyzer {
 
 IMPORTANT RULES:
 1. Include ONLY characters who speak dialogue (have quoted speech)
-2. Minimum 3 dialogue lines to qualify as a character
+2. Minimum 1 dialogue line to qualify as a character (even a single line counts!)
 3. Maximum 10 characters total (prioritize main/important characters)
 4. Always include NARRATOR as first character
-5. Use character names exactly as they appear in the book
+5. Use character names exactly as they appear in dialogue attributions (e.g., "said John", "poznamenala Lili")
+6. Look for names after dialogue in attribution phrases like: "zvolal", "poznamenala", "řekl", "zavrčel"
 
 For each character, provide:
 - name: Exact name from book (or "NARRATOR" for narration)
@@ -311,7 +312,6 @@ ${cleanedText.substring(0, 250000)}`;
     console.log(`  🏷️  Tagging chapter (${(chapterText.length / 1000).toFixed(1)}k chars)...`);
     
     const characterList = characters
-      .filter(c => c.name !== 'NARRATOR')
       .map(c => `- ${c.name} (${c.gender})`)
       .join('\n');
     
@@ -321,17 +321,21 @@ CHARACTERS IN THIS BOOK:
 ${characterList}
 
 RULES:
-1. Use [VOICE=NARRATOR] for all narration (non-dialogue text)
-2. Use [VOICE=CHARACTER_NAME] before each character's dialogue
-3. Character names must match EXACTLY from the list above
-4. Include ALL original text - do not remove or summarize anything
-5. Split text into segments by speaker (narrator vs characters)
-6. Use UPPERCASE for character names in tags
+1. Use [VOICE=NARRATOR] for ALL narration (non-dialogue text, scene descriptions, etc.)
+2. Use [VOICE=CHARACTER_NAME] before each character's dialogue (quoted speech)
+3. To identify who speaks, look at dialogue attribution phrases like:
+   - English: "said John", "she whispered", "he shouted"
+   - Czech: "zvolal Joseph", "poznamenala Lili", "řekl", "zavrčel Ragowski"
+4. Character names in tags must match EXACTLY from the list above (case-sensitive!)
+5. If a character speaks but isn't in the list, use [VOICE=NARRATOR]
+6. Include ALL original text - do not remove or summarize anything
+7. Use UPPERCASE for character names in tags (e.g., [VOICE=LILI_SAFFRO])
+8. Replace spaces with underscores in character names (e.g., "Joseph Ragowski" → [VOICE=JOSEPH_RAGOWSKI])
 
-EXAMPLE INPUT:
+EXAMPLE INPUT (English):
 The old man smiled. "Hello there," he said softly. She looked up. "Who are you?"
 
-EXAMPLE OUTPUT:
+EXAMPLE OUTPUT (English):
 [VOICE=NARRATOR]
 The old man smiled.
 [VOICE=OLD_MAN]
@@ -340,6 +344,18 @@ The old man smiled.
 She looked up.
 [VOICE=WOMAN]
 "Who are you?"
+
+EXAMPLE INPUT (Czech):
+Joseph Ragowski pozvedl hlas. „Jen se podívejte," zvolal. „Všichni vypadáte špatně!"
+„Ani ty nevypadáš dobře," poznamenala Lili.
+
+EXAMPLE OUTPUT (Czech):
+[VOICE=NARRATOR]
+Joseph Ragowski pozvedl hlas.
+[VOICE=JOSEPH_RAGOWSKI]
+„Jen se podívejte," zvolal. „Všichni vypadáte špatně!"
+[VOICE=LILI]
+„Ani ty nevypadáš dobře," poznamenala Lili.
 
 Now tag this chapter text:
 
@@ -354,6 +370,8 @@ ${chapterText}`;
         cleaned = cleaned.replace(/^```[a-z]*\s*/, '').replace(/\s*```$/, '');
       }
       
+      // Debug: Log first 500 chars of tagged text to verify tagging
+      console.log(`  📝 Tagged output preview: ${cleaned.substring(0, 500)}...`);
       console.log(`  ✅ Chapter tagged`);
       return cleaned;
     } catch (error) {

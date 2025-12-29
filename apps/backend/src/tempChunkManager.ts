@@ -98,7 +98,8 @@ export async function generateAndSaveTempChunk(
     const audioBuffers: Buffer[] = await Promise.all(
       voiceSegments.map(async (segment) => {
         // Get voice for this speaker
-        const speakerVoice = voiceMap[segment.speaker] === 'USER_SELECTED'
+        // NARRATOR uses global user-selected voice (defaultVoice), characters use VOICE_MAP
+        const speakerVoice = segment.speaker === 'NARRATOR'
           ? defaultVoice // Use UI-selected voice for narrator
           : voiceMap[segment.speaker] || defaultVoice;
         

@@ -34,6 +34,78 @@ export interface VoiceStyle {
 }
 
 /**
+ * Infer gender from character name and context
+ * 
+ * Methods:
+ * 1. Character name patterns (Marie, John, etc.)
+ * 2. Pronoun usage in surrounding text (he/she, his/her)
+ * 3. Gendered verb forms (Czech: řekl/řekla, pomyslel/pomyslela)
+ * 4. Gendered adjectives (Czech: byl/byla, měl/měla)
+ * 
+ * @param characterName - Character name to analyze
+ * @param contextText - Surrounding text for context analysis
+ * @returns 'male', 'female', or 'neutral'
+ */
+export function inferGender(characterName: string, contextText: string = ''): 'male' | 'female' | 'neutral' {
+  const name = characterName.toLowerCase();
+  const context = contextText.toLowerCase();
+  
+  // Method 1: Czech name endings (very reliable)
+  // Czech female names typically end in -a, -e
+  // Czech male names typically end in consonants or -o
+  const czechFemaleEndings = /a$|e$/i;
+  const czechMaleEndings = /[bcčdďfghjklmnňpqrřsštťvwxzž]$/i;
+  
+  // Check if it's a Czech-looking name (contains Czech characters or is capitalized properly)
+  const isCzechName = /[áčďéěíňóřšťúůýž]/i.test(name) || /^[A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ][a-záčďéěíňóřšťúůýž]+$/.test(characterName);
+  
+  if (isCzechName) {
+    if (czechFemaleEndings.test(name) && !name.match(/ska$/)) {
+      // Most Czech female names end in -a or -e (but not surnames ending in -ska which can be ambiguous)
+      return 'female';
+    }
+    if (czechMaleEndings.test(name)) {
+      return 'male';
+    }
+  }
+  
+  // Method 2: Common international name patterns
+  const femaleNames = /^(marie|maria|mary|lili|lily|sarah|anna|eve|elizabeth|kate|susan|jane|lisa|linda|barbara|margaret|dorothy|helen|nancy|karen|betty|sandra|ashley|kimberly|donna|emily|michelle|carol|amanda|melissa|saffro)/i;
+  const maleNames = /^(joseph|ragowski|joe|john|james|robert|michael|william|david|richard|charles|thomas|christopher|daniel|paul|mark|donald|george|kenneth|steven|edward|brian|ronald|anthony|kevin|jason|matthew|gary|timothy)/i;
+  
+  if (femaleNames.test(name)) return 'female';
+  if (maleNames.test(name)) return 'male';
+  
+  // Method 3: Pronoun analysis in context
+  const malePronouns = (context.match(/\b(he|him|his|jeho|mu|jej)\b/gi) || []).length;
+  const femalePronouns = (context.match(/\b(she|her|hers|její|jí)\b/gi) || []).length;
+  
+  if (femalePronouns > malePronouns * 1.5) return 'female';
+  if (malePronouns > femalePronouns * 1.5) return 'male';
+  
+  // Method 4: Czech gendered verb forms (past tense) - MOST RELIABLE
+  // Male: řekl, zvolal, poznamenal, odpověděl, prohlásil, dodal, podotkl, zeptal, pomyslel, uvažoval, zavrčel
+  // Female: řekla, zvolala, poznamenala, odpověděla, prohlásila, dodala, podotkla, zeptala, pomyslela, uvažovala
+  const czechMaleVerbs = (context.match(/\b(řekl|zvolal|poznamenal|odpověděl|prohlásil|dodal|podotkl|zeptal|pomyslel|uvažoval|přemýšlel|zavrčel|vzal|byl|měl|viděl|šel|přišel|začal|skončil)\b/gi) || []).length;
+  const czechFemaleVerbs = (context.match(/\b(řekla|zvolala|poznamenala|odpověděla|prohlásila|dodala|podotkla|zeptala|pomyslela|uvažovala|přemýšlela|vzala|byla|měla|viděla|šla|přišla|začala|skončila)\b/gi) || []).length;
+  
+  if (czechFemaleVerbs > czechMaleVerbs) return 'female';
+  if (czechMaleVerbs > czechFemaleVerbs) return 'male';
+  
+  // Method 5: Czech gendered adjectives (l-participle)
+  // Male: byl, měl, viděl, šel
+  // Female: byla, měla, viděla, šla
+  const czechMaleAdjectives = (context.match(/\b(mladý|starý|velký|malý|dobrý|zlý|krásný|ošklivý)\b/gi) || []).length;
+  const czechFemaleAdjectives = (context.match(/\b(mladá|stará|velká|malá|dobrá|zlá|krásná|ošklivá)\b/gi) || []).length;
+  
+  if (czechFemaleAdjectives > czechMaleAdjectives) return 'female';
+  if (czechMaleAdjectives > czechFemaleAdjectives) return 'male';
+  
+  // Default: neutral if no clear pattern
+  return 'neutral';
+}
+
+/**
  * Parse voice tag with optional style modifier
  * Examples: [VOICE=JOHN], [VOICE=JOHN:WHISPER], [VOICE=NARRATOR:THOUGHT]
  */
@@ -57,7 +129,7 @@ export function hasDialogue(text: string): boolean {
   // Check for various quote marks
   const quotePatterns = [
     /["']([^"']+)["']/,        // English: "text" or 'text'
-    /[„"]([^„"]+)[""]/,         // Czech: „text" or "text"
+    /\u201E([^\u201E\u201C]+)\u201C/,  // Czech: „text" (U+201E opening, U+201C closing)
     /[»«]([^»«]+)[»«]/,         // French/German guillemets
   ];
   
@@ -70,7 +142,7 @@ export function hasDialogue(text: string): boolean {
 export function countDialogues(text: string): number {
   const patterns = [
     /["']([^"']+)["']/g,
-    /[„"]([^„"]+)[""]/g,
+    /\u201E([^\u201E\u201C]+)\u201C/g,  // Czech: „text" (U+201E opening, U+201C closing)
     /[»«]([^»«]+)[»«]/g,
   ];
   
