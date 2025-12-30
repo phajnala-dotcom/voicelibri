@@ -257,10 +257,11 @@ export class GeminiCharacterAnalyzer implements LlmCharacterAnalyzer {
 IMPORTANT RULES:
 1. Include ONLY characters who speak dialogue (have quoted speech)
 2. Minimum 1 dialogue line to qualify as a character (even a single line counts!)
-3. Maximum 10 characters total (prioritize main/important characters)
+3. Include ALL speaking characters - there is no maximum limit
 4. Always include NARRATOR as first character
 5. Use character names exactly as they appear in dialogue attributions (e.g., "said John", "poznamenala Lili")
 6. Look for names after dialogue in attribution phrases like: "zvolal", "poznamenala", "řekl", "zavrčel"
+7. Order characters by importance (most dialogue first)
 
 For each character, provide:
 - name: Exact name from book (or "NARRATOR" for narration)

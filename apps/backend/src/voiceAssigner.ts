@@ -21,6 +21,8 @@ export interface Character {
   gender: 'male' | 'female' | 'neutral';
   traits: string[];
   dialogueExamples?: string[];
+  ageRange?: string;  // 'child', 'young adult', 'adult', 'elderly'
+  dialogueCount?: number;  // For sorting by importance
 }
 
 /**
@@ -58,10 +60,10 @@ export function assignVoices(characters: Character[], narratorVoiceName?: string
     console.log(`[VoiceAssigner] Narrator voice "${narratorVoiceName}" excluded from character assignments`);
   }
   
-  // Sort characters by number of dialogue examples (main characters first)
+  // Sort characters by dialogue count (main characters first)
   const sortedCharacters = [...characters].sort((a, b) => {
-    const aDialogue = a.dialogueExamples?.length || 0;
-    const bDialogue = b.dialogueExamples?.length || 0;
+    const aDialogue = a.dialogueCount || a.dialogueExamples?.length || 0;
+    const bDialogue = b.dialogueCount || b.dialogueExamples?.length || 0;
     return bDialogue - aDialogue;
   });
   
@@ -70,13 +72,14 @@ export function assignVoices(characters: Character[], narratorVoiceName?: string
       char.name,
       char.gender,
       char.traits,
-      Array.from(usedVoices)
+      Array.from(usedVoices),
+      char.ageRange  // Pass age range for pitch selection
     );
     
     voiceMap[char.name] = voice.name;
     usedVoices.add(voice.name);
     
-    console.log(`[VoiceAssigner] ${char.name} (${char.gender}, ${char.traits.join(', ')}) -> ${voice.name} (${voice.pitch} pitch, ${voice.characteristic})`);
+    console.log(`[VoiceAssigner] ${char.name} (${char.gender}, age:${char.ageRange || 'unknown'}, ${char.traits.join(', ')}) -> ${voice.name} (${voice.pitch} pitch, ${voice.characteristic})`);
   }
   
   return voiceMap;

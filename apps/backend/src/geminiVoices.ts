@@ -76,72 +76,173 @@ export function getVoicesByPitch(pitch: 'low' | 'medium' | 'high'): GeminiVoice[
 }
 
 /**
+ * Semantic trait clusters - maps related concepts to voice characteristics
+ * Uses semantic similarity rather than exact matching
+ */
+const TRAIT_SEMANTIC_CLUSTERS: Record<string, string[]> = {
+  // Voice characteristic -> semantically related traits
+  'deep': ['deep', 'bass', 'resonant', 'booming', 'rich', 'low voice', 'hluboký'],
+  'authoritative': ['authoritative', 'commanding', 'leader', 'powerful', 'dominant', 'boss', 'master', 'lord', 'king', 'emperor', 'general', 'captain', 'chief', 'director', 'vůdce', 'pán'],
+  'mature': ['mature', 'elderly', 'old', 'aged', 'wise', 'experienced', 'senior', 'veteran', 'ancient', 'stará', 'starý', 'babička', 'dědeček', 'grandmother', 'grandfather'],
+  'calm': ['calm', 'peaceful', 'serene', 'tranquil', 'composed', 'relaxed', 'zen', 'meditative', 'klidný', 'klidná'],
+  'gentle': ['gentle', 'soft', 'tender', 'kind', 'caring', 'nurturing', 'sweet', 'mild', 'jemný', 'laskavý'],
+  'serious': ['serious', 'stern', 'grave', 'solemn', 'stoic', 'formal', 'strict', 'vážný', 'přísný'],
+  'warm': ['warm', 'friendly', 'welcoming', 'affectionate', 'loving', 'cordial', 'hospitable', 'vřelý', 'přátelský'],
+  'youthful': ['youthful', 'young', 'child', 'kid', 'teen', 'teenager', 'boy', 'girl', 'juvenile', 'dítě', 'mladý', 'mladá', 'chlapec', 'dívka'],
+  'energetic': ['energetic', 'lively', 'dynamic', 'vibrant', 'spirited', 'enthusiastic', 'animated', 'excited', 'energický'],
+  'playful': ['playful', 'mischievous', 'fun', 'humorous', 'witty', 'prankster', 'joker', 'hravý', 'vtipný'],
+  'bright': ['bright', 'cheerful', 'happy', 'optimistic', 'sunny', 'radiant', 'joyful', 'veselý', 'radostný'],
+  'elegant': ['elegant', 'refined', 'sophisticated', 'graceful', 'noble', 'aristocratic', 'lady', 'gentleman', 'elegantní', 'vznešený', 'paní', 'dáma'],
+  'professional': ['professional', 'businesslike', 'competent', 'efficient', 'skilled', 'expert', 'profesionální'],
+  'confident': ['confident', 'bold', 'assertive', 'self-assured', 'fearless', 'brave', 'courageous', 'sebevědomý', 'odvážný'],
+  'strong': ['strong', 'powerful', 'mighty', 'robust', 'tough', 'hardy', 'silný', 'mocný'],
+  'smooth': ['smooth', 'silky', 'flowing', 'fluid', 'sleek', 'polished', 'hladký'],
+  'crisp': ['crisp', 'clear', 'precise', 'sharp', 'articulate', 'distinct', 'jasný', 'zřetelný'],
+  'melodic': ['melodic', 'musical', 'lyrical', 'harmonious', 'singing', 'melodický', 'zpěvný'],
+  'soft': ['soft', 'quiet', 'hushed', 'whispered', 'delicate', 'faint', 'tichý', 'jemný'],
+  'neutral': ['neutral', 'balanced', 'even', 'moderate', 'impartial', 'neutrální', 'vyvážený'],
+  'clear': ['clear', 'lucid', 'transparent', 'intelligible', 'understandable', 'srozumitelný'],
+  'friendly': ['friendly', 'amiable', 'approachable', 'likable', 'pleasant', 'nice', 'milý', 'sympatický'],
+  'dynamic': ['dynamic', 'active', 'vigorous', 'forceful', 'powerful', 'intense', 'dynamický'],
+  'steady': ['steady', 'stable', 'consistent', 'reliable', 'dependable', 'trustworthy', 'spolehlivý'],
+  'pleasant': ['pleasant', 'agreeable', 'enjoyable', 'likeable', 'charming', 'appealing', 'příjemný'],
+  'refined': ['refined', 'cultured', 'polished', 'cultivated', 'tasteful', 'rafinovaný'],
+  'light': ['light', 'airy', 'ethereal', 'delicate', 'feathery', 'lehký', 'vzdušný'],
+  'cheerful': ['cheerful', 'happy', 'jolly', 'merry', 'bubbly', 'upbeat', 'veselý'],
+};
+
+/**
+ * Age range to preferred pitch mapping
+ */
+const AGE_TO_PITCH: Record<string, 'low' | 'medium' | 'high'> = {
+  'child': 'high',
+  'young adult': 'medium',
+  'adult': 'medium',
+  'elderly': 'low',
+};
+
+/**
+ * Calculate semantic similarity score between trait and voice characteristic
+ * Returns 0-1 score based on semantic cluster matching
+ */
+function calculateTraitScore(trait: string, voiceCharacteristic: string): number {
+  const traitLower = trait.toLowerCase();
+  const charLower = voiceCharacteristic.toLowerCase();
+  
+  // Exact match = perfect score
+  if (traitLower === charLower) return 1.0;
+  
+  // Check if trait is in the semantic cluster for this characteristic
+  const cluster = TRAIT_SEMANTIC_CLUSTERS[charLower];
+  if (cluster) {
+    // Check for substring matches in cluster
+    for (const synonym of cluster) {
+      if (traitLower.includes(synonym) || synonym.includes(traitLower)) {
+        return 0.8; // Strong semantic match
+      }
+    }
+  }
+  
+  // Check reverse - if characteristic is in trait's cluster
+  for (const [characteristic, synonyms] of Object.entries(TRAIT_SEMANTIC_CLUSTERS)) {
+    if (synonyms.some(s => traitLower.includes(s) || s.includes(traitLower))) {
+      if (characteristic === charLower) {
+        return 0.8;
+      }
+    }
+  }
+  
+  // Partial string match
+  if (traitLower.includes(charLower) || charLower.includes(traitLower)) {
+    return 0.5;
+  }
+  
+  return 0;
+}
+
+/**
  * Smart voice selection for character based on profile
+ * Uses intelligent semantic matching with traits, age, and scoring
  * 
- * @param characterName - Character name
+ * @param characterName - Character name (used for name-based hints like "stará paní")
  * @param gender - Character gender
  * @param traits - Character traits (e.g., ['calm', 'mature', 'authoritative'])
  * @param excludeVoices - Voices to exclude (e.g., narrator voice, already used voices)
+ * @param ageRange - Optional age range for pitch selection
  * @returns Best matching voice
  */
 export function selectVoiceForCharacter(
   characterName: string,
   gender: 'male' | 'female' | 'neutral',
   traits: string[] = [],
-  excludeVoices: string[] = []
+  excludeVoices: string[] = [],
+  ageRange?: string
 ): GeminiVoice {
   // Filter by gender
   let candidates = gender === 'neutral' 
     ? GEMINI_VOICES 
     : GEMINI_VOICES.filter(v => v.gender === gender);
   
-  // Exclude voices (narrator, already used)
-  candidates = candidates.filter(v => !excludeVoices.includes(v.name));
+  // Exclude already used voices
+  let availableCandidates = candidates.filter(v => !excludeVoices.includes(v.name));
   
-  if (candidates.length === 0) {
-    throw new Error(`No available voices for gender: ${gender}`);
+  // If all voices of this gender are used, allow reuse (for books with many characters)
+  if (availableCandidates.length === 0) {
+    console.log(`[VoiceSelect] All ${gender} voices used, allowing reuse for ${characterName}`);
+    availableCandidates = candidates;
   }
   
-  // Match traits to characteristics
-  const traitLower = traits.map(t => t.toLowerCase());
-  
-  // Try exact match first
-  for (const trait of traitLower) {
-    const match = candidates.find(v => v.characteristic.toLowerCase() === trait);
-    if (match) return match;
+  if (availableCandidates.length === 0) {
+    // Fallback to any voice if no gender match
+    availableCandidates = GEMINI_VOICES.filter(v => !excludeVoices.includes(v.name));
+    if (availableCandidates.length === 0) {
+      availableCandidates = GEMINI_VOICES; // Last resort: reuse any voice
+    }
   }
   
-  // Age-based selection
-  if (traitLower.includes('young') || traitLower.includes('child')) {
-    const highPitch = candidates.filter(v => v.pitch === 'high');
-    if (highPitch.length > 0) return highPitch[0];
-  }
+  // Combine character name with traits for matching
+  // This allows "Stará paní" in name to influence voice selection
+  const allTraits = [...traits, ...characterName.split(/\s+/)];
   
-  if (traitLower.includes('mature') || traitLower.includes('elderly') || traitLower.includes('old')) {
-    const lowPitch = candidates.filter(v => v.pitch === 'low');
-    if (lowPitch.length > 0) return lowPitch[0];
-  }
+  // Score each candidate voice
+  const scoredCandidates = availableCandidates.map(voice => {
+    let score = 0;
+    
+    // 1. Trait matching (semantic)
+    for (const trait of allTraits) {
+      const traitScore = calculateTraitScore(trait, voice.characteristic);
+      score += traitScore * 2; // Weight trait matches highly
+    }
+    
+    // 2. Age/pitch matching
+    if (ageRange) {
+      const preferredPitch = AGE_TO_PITCH[ageRange.toLowerCase()];
+      if (preferredPitch && voice.pitch === preferredPitch) {
+        score += 1.5; // Bonus for age-appropriate pitch
+      }
+    }
+    
+    // 3. Infer age from traits/name
+    const allTraitsLower = allTraits.map(t => t.toLowerCase()).join(' ');
+    if (/stará|starý|elderly|old|aged|babička|dědeček|grandmother|grandfather/.test(allTraitsLower)) {
+      if (voice.pitch === 'low') score += 1.5;
+    } else if (/mladý|mladá|young|child|kid|boy|girl|dítě|teen/.test(allTraitsLower)) {
+      if (voice.pitch === 'high') score += 1.5;
+    }
+    
+    // 4. Small random factor to add variety when scores are equal
+    score += Math.random() * 0.1;
+    
+    return { voice, score };
+  });
   
-  // Authority/strength
-  if (traitLower.includes('authoritative') || traitLower.includes('strong') || traitLower.includes('powerful')) {
-    const strong = candidates.find(v => 
-      v.characteristic === 'authoritative' || 
-      v.characteristic === 'strong' ||
-      v.characteristic === 'confident'
-    );
-    if (strong) return strong;
-  }
+  // Sort by score (highest first)
+  scoredCandidates.sort((a, b) => b.score - a.score);
   
-  // Calm/gentle
-  if (traitLower.includes('calm') || traitLower.includes('gentle') || traitLower.includes('soft')) {
-    const calm = candidates.find(v => 
-      v.characteristic === 'calm' || 
-      v.characteristic === 'gentle' ||
-      v.characteristic === 'soft'
-    );
-    if (calm) return calm;
-  }
+  const selected = scoredCandidates[0].voice;
+  const topScore = scoredCandidates[0].score;
   
-  // Default: return first available
-  return candidates[0];
+  console.log(`[VoiceSelect] ${characterName}: score=${topScore.toFixed(2)} -> ${selected.name} (${selected.characteristic}, ${selected.pitch})`);
+  
+  return selected;
 }
