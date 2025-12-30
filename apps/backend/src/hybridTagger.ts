@@ -340,6 +340,89 @@ export function calculateConfidence(
 }
 
 /**
+ * Post-process tagged text to ensure narration (non-quoted text) is tagged as NARRATOR
+ * 
+ * Fixes cases where LLM incorrectly includes narration within character segments:
+ * BAD: [VOICE=RAGOWSKI] „Dialogue" Ragowski se rozhlédl.
+ * GOOD: [VOICE=RAGOWSKI] „Dialogue" [VOICE=NARRATOR] Ragowski se rozhlédl.
+ * 
+ * @param taggedText - Text with [VOICE=] tags
+ * @returns Text with narration properly tagged as NARRATOR
+ */
+function postProcessNarration(taggedText: string): string {
+  // Split by voice tags, keeping the tags
+  const parts = taggedText.split(/(\[VOICE=[^\]]+\])/);
+  const result: string[] = [];
+  let currentSpeaker = 'NARRATOR';
+  
+  for (const part of parts) {
+    const voiceTagMatch = part.match(/^\[VOICE=([^\]]+)\]$/);
+    
+    if (voiceTagMatch) {
+      currentSpeaker = voiceTagMatch[1];
+      // Don't add the tag yet, we'll add it when processing content
+      continue;
+    }
+    
+    // This is content - check if it needs to be split
+    const content = part.trim();
+    if (!content) continue;
+    
+    if (currentSpeaker === 'NARRATOR') {
+      // Already narrator, just add
+      if (result.length === 0 || !result[result.length - 1].startsWith('[VOICE=NARRATOR]')) {
+        result.push(`[VOICE=NARRATOR]\n${content}`);
+      } else {
+        result[result.length - 1] += `\n${content}`;
+      }
+    } else {
+      // Character speaker - check if content has narration mixed in
+      // Pattern: find quoted dialogue vs non-quoted narration
+      const quotePattern = /([„""''«»])([^„""''«»]*?)([„""''«»])/g;
+      
+      let lastIndex = 0;
+      let match;
+      const subParts: Array<{ type: 'dialogue' | 'narration'; text: string }> = [];
+      
+      while ((match = quotePattern.exec(content)) !== null) {
+        // Text before this quote is narration
+        const beforeQuote = content.substring(lastIndex, match.index).trim();
+        if (beforeQuote) {
+          subParts.push({ type: 'narration', text: beforeQuote });
+        }
+        
+        // The quote itself is dialogue
+        subParts.push({ type: 'dialogue', text: match[0] });
+        
+        lastIndex = match.index + match[0].length;
+      }
+      
+      // Text after last quote is narration
+      const afterQuotes = content.substring(lastIndex).trim();
+      if (afterQuotes) {
+        subParts.push({ type: 'narration', text: afterQuotes });
+      }
+      
+      // If no quotes found at all, everything is dialogue (character's unquoted speech/thoughts)
+      if (subParts.length === 0) {
+        subParts.push({ type: 'dialogue', text: content });
+      }
+      
+      // Now output with correct tags
+      for (const subPart of subParts) {
+        if (subPart.type === 'narration') {
+          result.push(`[VOICE=NARRATOR]\n${subPart.text}`);
+        } else {
+          result.push(`[VOICE=${currentSpeaker}]\n${subPart.text}`);
+        }
+      }
+    }
+  }
+  
+  return result.join('\n');
+}
+
+/**
  * Merge LLM-tagged dialogues back into full chapter with narration
  * 
  * The LLM returns text with [VOICE=X] tags, which may use single newlines
@@ -351,14 +434,14 @@ export function mergeWithNarration(
   characters: CharacterProfile[]
 ): string {
   // If the LLM output already contains multiple VOICE tags properly formatted,
-  // just return it directly (with minor cleanup)
+  // post-process to ensure narration is tagged correctly
   const voiceTagCount = (taggedDialogues.match(/\[VOICE=/g) || []).length;
   
   if (voiceTagCount > 1) {
     // LLM already tagged the full text with multiple speakers
-    // Just ensure proper formatting
-    console.log(`  [mergeWithNarration] LLM returned ${voiceTagCount} voice tags - using directly`);
-    return taggedDialogues.trim();
+    // Post-process to ensure narration within character segments is tagged as NARRATOR
+    console.log(`  [mergeWithNarration] LLM returned ${voiceTagCount} voice tags - post-processing for narration`);
+    return postProcessNarration(taggedDialogues.trim());
   }
   
   // Fallback: Original merging logic for partial tagging
