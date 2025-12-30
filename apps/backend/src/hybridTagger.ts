@@ -164,6 +164,54 @@ export function extractDialogueParagraphs(text: string): string[] {
 }
 
 /**
+ * Split a line into segments of dialogue and narration
+ * Handles mixed lines like: 'Narration „dialogue" more narration „more dialogue"'
+ * 
+ * @returns Array of segments with type (dialogue/narration) and text
+ */
+function splitLineIntoSegments(line: string): Array<{ type: 'dialogue' | 'narration'; text: string }> {
+  const segments: Array<{ type: 'dialogue' | 'narration'; text: string }> = [];
+  
+  // Pattern matches Czech „…" and other quote styles
+  // Captures: text before quote, quote content, text after
+  const quotePattern = /([^„""''«»]*?)([„""''«»])([^„""''«»]*?)([„""''«»])/g;
+  
+  let lastIndex = 0;
+  let match;
+  
+  while ((match = quotePattern.exec(line)) !== null) {
+    const [fullMatch, beforeQuote, openQuote, quoteContent, closeQuote] = match;
+    
+    // Add narration before this quote (if any)
+    const narrationBefore = line.substring(lastIndex, match.index) + beforeQuote;
+    if (narrationBefore.trim()) {
+      segments.push({ type: 'narration', text: narrationBefore.trim() });
+    }
+    
+    // Add the dialogue
+    const dialogue = openQuote + quoteContent + closeQuote;
+    if (dialogue.trim()) {
+      segments.push({ type: 'dialogue', text: dialogue.trim() });
+    }
+    
+    lastIndex = match.index + fullMatch.length;
+  }
+  
+  // Add remaining text after last quote (narration)
+  const remaining = line.substring(lastIndex);
+  if (remaining.trim()) {
+    segments.push({ type: 'narration', text: remaining.trim() });
+  }
+  
+  // If no quotes found, entire line is narration
+  if (segments.length === 0 && line.trim()) {
+    segments.push({ type: 'narration', text: line.trim() });
+  }
+  
+  return segments;
+}
+
+/**
  * Simple rule-based dialogue detection and tagging
  * 
  * Patterns:
@@ -172,6 +220,9 @@ export function extractDialogueParagraphs(text: string): string[] {
  * - Czech: poznamenala Lili, zvolal Ragowski, pomyslela si Marie
  * - English: said John, Mary replied, John thought
  * - Attribution before/after quotes
+ * 
+ * IMPORTANT: Narration ABOUT a character (e.g., "Ragowski se rozhlédl...")
+ * is tagged as NARRATOR, not the character. Only quoted speech gets character tags.
  * 
  * Note: Unquoted inner thoughts are HARD to detect with rules.
  * These require LLM analysis for proper attribution.
@@ -187,7 +238,7 @@ export function applyRuleBasedTagging(
   
   const lines = text.split('\n');
   const taggedLines: string[] = [];
-  let lastSpeaker = 'NARRATOR';
+  let lastDialogueSpeaker = 'NARRATOR'; // Track last speaker for dialogue continuity
   let successfulAttributions = 0;
   let totalDialogues = 0;
   
@@ -196,7 +247,7 @@ export function applyRuleBasedTagging(
     
     // Check if line has dialogue
     if (!hasDialogue(line)) {
-      // Narration
+      // Pure narration line - always NARRATOR
       if (taggedLines.length === 0 || !taggedLines[taggedLines.length - 1].startsWith('[VOICE=NARRATOR]')) {
         taggedLines.push('[VOICE=NARRATOR]');
       }
@@ -204,72 +255,92 @@ export function applyRuleBasedTagging(
       continue;
     }
     
-    totalDialogues++;
+    // Line has dialogue - split into segments and process each
+    const segments = splitLineIntoSegments(line);
     
-    // Try to find speaker attribution
-    let speaker = lastSpeaker;
+    // Find speaker attribution for this line's dialogue
+    let dialogueSpeaker = lastDialogueSpeaker;
     let foundAttribution = false;
     
     // Pattern 1: Czech verb + name (dialogue AND thoughts)
     // "poznamenala Lili" → LILI, "pomyslela si Marie" → MARIE
-    const czechPattern = /(zvolal|zvolala|poznamenal|poznamenala|řekl|řekla|odpověděl|odpověděla|prohlásil|prohlásila|dodal|dodala|podotkl|podotkla|zeptal|zeptala|pomyslel|pomyslela|uvažoval|uvažovala|přemýšlel|přemýšlela)\s+(si\s+)?([A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ][a-záčďéěíňóřšťúůýž]+)/gi;
-    const czechMatch = line.match(czechPattern);
+    const czechPattern = /(zvolal|zvolala|poznamenal|poznamenala|řekl|řekla|odpověděl|odpověděla|prohlásil|prohlásila|dodal|dodala|podotkl|podotkla|zeptal|zeptala|pomyslel|pomyslela|uvažoval|uvažovala|přemýšlel|přemýšlela|zavrčel|zavrčela|kázal|kázala|pravil|pravila)\s+(si\s+)?([A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ][a-záčďéěíňóřšťúůýž]+)/gi;
+    const czechMatches = [...line.matchAll(czechPattern)];
     
-    if (czechMatch) {
-      // Extract name (last word in match, handling optional 'si')
-      const words = czechMatch[0].split(/\s+/);
-      const potentialName = words[words.length - 1].toUpperCase();
-      if (characterNames.has(potentialName)) {
-        speaker = potentialName;
-        lastSpeaker = speaker;
-        foundAttribution = true;
-        successfulAttributions++;
+    if (czechMatches.length > 0) {
+      // Get the LAST attribution (closest to the most recent dialogue)
+      for (const match of czechMatches) {
+        const words = match[0].split(/\s+/);
+        const potentialName = words[words.length - 1].toUpperCase();
+        if (characterNames.has(potentialName)) {
+          dialogueSpeaker = potentialName;
+          lastDialogueSpeaker = dialogueSpeaker;
+          foundAttribution = true;
+          successfulAttributions++;
+        }
+      }
+    }
+    
+    // Pattern 1b: Czech NAME + verb (name before speech verb)
+    // "Ragowski řekl" → RAGOWSKI, "Joseph pravil" → JOSEPH
+    if (!foundAttribution) {
+      const czechNameFirstPattern = /([A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ][a-záčďéěíňóřšťúůýž]+)\s+(pozvedl|pozvedla|zvolal|zvolala|řekl|řekla|odpověděl|odpověděla|prohlásil|prohlásila|dodal|dodala|podotkl|podotkla|zeptal|zeptala|kázal|kázala|pravil|pravila)\s+(hlas)?/gi;
+      const czechNameFirstMatches = [...line.matchAll(czechNameFirstPattern)];
+      
+      if (czechNameFirstMatches.length > 0) {
+        for (const match of czechNameFirstMatches) {
+          const potentialName = match[1].toUpperCase();
+          if (characterNames.has(potentialName)) {
+            dialogueSpeaker = potentialName;
+            lastDialogueSpeaker = dialogueSpeaker;
+            foundAttribution = true;
+            successfulAttributions++;
+          }
+        }
       }
     }
     
     // Pattern 2: English verb + name (dialogue AND thoughts)
-    // "said John" → JOHN, "thought Mary" → MARY
     if (!foundAttribution) {
       const englishPattern = /(said|asked|replied|answered|shouted|whispered|muttered|exclaimed|thought|wondered|pondered|mused|realized)\s+([A-Z][a-z]+)/g;
-      const englishMatch = line.match(englishPattern);
+      const englishMatches = [...line.matchAll(englishPattern)];
       
-      if (englishMatch) {
-        const potentialName = englishMatch[0].split(/\s+/)[1].toUpperCase();
-        if (characterNames.has(potentialName)) {
-          speaker = potentialName;
-          lastSpeaker = speaker;
-          foundAttribution = true;
-          successfulAttributions++;
+      if (englishMatches.length > 0) {
+        for (const match of englishMatches) {
+          const potentialName = match[0].split(/\s+/)[1].toUpperCase();
+          if (characterNames.has(potentialName)) {
+            dialogueSpeaker = potentialName;
+            lastDialogueSpeaker = dialogueSpeaker;
+            foundAttribution = true;
+            successfulAttributions++;
+          }
         }
       }
     }
     
-    // Pattern 3: Name at start of line (before quote)
-    if (!foundAttribution) {
-      const nameFirstPattern = /^([A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ][a-záčďéěíňóřšťúůýž]+)\s+/;
-      const nameMatch = line.match(nameFirstPattern);
+    // Now process each segment with correct speaker
+    // CRITICAL: Narration segments ALWAYS get NARRATOR, even if they mention a character
+    let lastTaggedSpeaker = '';
+    
+    for (const segment of segments) {
+      totalDialogues++;
       
-      if (nameMatch) {
-        const potentialName = nameMatch[1].toUpperCase();
-        if (characterNames.has(potentialName)) {
-          speaker = potentialName;
-          lastSpeaker = speaker;
-          foundAttribution = true;
-          successfulAttributions++;
+      if (segment.type === 'narration') {
+        // ALWAYS use NARRATOR for narration, regardless of character mentions
+        if (lastTaggedSpeaker !== 'NARRATOR') {
+          taggedLines.push('[VOICE=NARRATOR]');
+          lastTaggedSpeaker = 'NARRATOR';
         }
+        taggedLines.push(segment.text);
+      } else {
+        // Dialogue segment - use attributed speaker
+        if (lastTaggedSpeaker !== dialogueSpeaker) {
+          taggedLines.push(`[VOICE=${dialogueSpeaker}]`);
+          lastTaggedSpeaker = dialogueSpeaker;
+        }
+        taggedLines.push(segment.text);
       }
     }
-    
-    // Detect if this is a thought or dialogue
-    const isThought = /\b(thought|wondered|pondered|mused|realized|pomyslel|pomyslela|uvažoval|uvažovala|přemýšlel|přemýšlela)\b/i.test(line);
-    
-    // Add voice tag with style
-    if (isThought && speaker !== 'NARRATOR') {
-      taggedLines.push(`[VOICE=${speaker}:THOUGHT]`);
-    } else {
-      taggedLines.push(`[VOICE=${speaker}]`);
-    }
-    taggedLines.push(line);
   }
   
   // Calculate confidence
