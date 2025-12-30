@@ -677,11 +677,18 @@ app.get('/api/books', (req: Request, res: Response) => {
 // Select a different book
 app.post('/api/book/select', async (req: Request, res: Response) => {
   try {
-    const { filename } = req.body;
+    const { filename, narratorVoice } = req.body;
     
     console.log(`📞 /api/book/select called with filename: "${filename}"`);
     console.log(`   Current book: "${CURRENT_BOOK_FILE || 'none'}"`);
     console.log(`   Request from: ${req.headers.origin || 'unknown origin'}`);
+    
+    // CRITICAL: Update narrator voice BEFORE loadBookFile() runs voice assignment
+    if (narratorVoice && typeof narratorVoice === 'string') {
+      const oldVoice = NARRATOR_VOICE;
+      NARRATOR_VOICE = narratorVoice;
+      console.log(`🎙️ Narrator voice set: ${oldVoice} → ${narratorVoice}`);
+    }
     
     if (!filename || typeof filename !== 'string') {
       return res.status(400).json({
