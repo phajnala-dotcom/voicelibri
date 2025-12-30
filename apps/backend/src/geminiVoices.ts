@@ -113,6 +113,10 @@ const TRAIT_SEMANTIC_CLUSTERS: Record<string, string[]> = {
 
 /**
  * Age range to preferred pitch mapping
+ * NOTE: Pitch values are RELATIVE within gender (low female ≠ low male)
+ * - Female "low" voices: Achernar, Gacrux, Sulafat (mature/professional)
+ * - Male "low" voices: Algieba, Alnilam, Iapetus, Rasalgethi, Schedar (deep/authoritative)
+ * This works correctly because we filter by gender first, then apply pitch preference
  */
 const AGE_TO_PITCH: Record<string, 'low' | 'medium' | 'high'> = {
   'child': 'high',
