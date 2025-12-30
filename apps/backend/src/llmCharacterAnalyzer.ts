@@ -190,7 +190,7 @@ export class GeminiCharacterAnalyzer implements LlmCharacterAnalyzer {
       }],
       generationConfig: {
         temperature: 0.1, // Low temperature for consistent output
-        maxOutputTokens: 8192,
+        maxOutputTokens: 32768, // Increased to prevent JSON truncation for books with many characters
         topP: 0.95,
       }
     };

@@ -259,6 +259,10 @@ function stripHtml(html: string): string {
   text = text.replace(/&#39;/g, "'");
   text = text.replace(/&apos;/g, "'");
   
+  // Decode numeric HTML entities (&#160; &#8211; etc.)
+  text = text.replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(parseInt(dec, 10)));
+  text = text.replace(/&#x([0-9a-fA-F]+);/g, (match, hex) => String.fromCharCode(parseInt(hex, 16)));
+  
   // Clean up whitespace
   text = text.replace(/\s+/g, ' ');
   text = text.trim();

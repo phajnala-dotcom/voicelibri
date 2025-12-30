@@ -130,50 +130,92 @@ export class TTSClient {
       }
     };
 
-    try {
-      const styleDesc = style !== 'normal' ? ` [${style.toUpperCase()}]` : '';
-      console.log(`🎤 TTS API call - Text: ${text.length} chars, Voice: ${voiceName}${styleDesc}`);
-      const startTime = Date.now();
-      
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${accessToken.token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(120000), // 120 second timeout
-      });
+    const maxRetries = 3;
+    let lastError: Error | null = null;
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        if (attempt > 0) {
+          // Exponential backoff: 2s, 4s, 8s
+          const delay = Math.pow(2, attempt) * 1000;
+          console.log(`  🔄 Retry ${attempt}/${maxRetries} after ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+        
+        const styleDesc = style !== 'normal' ? ` [${style.toUpperCase()}]` : '';
+        console.log(`🎤 TTS API call - Text: ${text.length} chars, Voice: ${voiceName}${styleDesc}`);
+        const startTime = Date.now();
+        
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken.token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(requestBody),
+          signal: AbortSignal.timeout(120000), // 120 second timeout
+        });
 
-      const fetchTime = Date.now() - startTime;
-      console.log(`⏱️ TTS API response received in ${fetchTime}ms`);
+        const fetchTime = Date.now() - startTime;
+        console.log(`⏱️ TTS API response received in ${fetchTime}ms`);
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Vertex AI API Error:', errorText);
-        throw new Error(`Vertex AI API returned ${response.status}: ${errorText}`);
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('Vertex AI API Error:', errorText);
+          
+          // Retry on 500 errors (server-side issues)
+          if (response.status >= 500 && attempt < maxRetries) {
+            lastError = new Error(`Vertex AI API returned ${response.status}: ${errorText}`);
+            continue;
+          }
+          
+          throw new Error(`Vertex AI API returned ${response.status}: ${errorText}`);
+        }
+
+        const jsonResponse: any = await response.json();
+        const audioData = jsonResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+        
+        if (!audioData) {
+          // Check for safety block
+          const finishReason = jsonResponse.candidates?.[0]?.finishReason;
+          if (finishReason === 'SAFETY' && attempt < maxRetries) {
+            console.warn('  ⚠️ TTS blocked by safety filter, retrying...');
+            lastError = new Error('Safety filter blocked response');
+            continue;
+          }
+          
+          console.error('Full response:', JSON.stringify(jsonResponse, null, 2));
+          throw new Error('No audio content received from Vertex AI API');
+        }
+
+        console.log(`🎵 Audio data received, converting to WAV...`);
+        const pcmBuffer = Buffer.from(audioData, 'base64');
+        console.log(`📦 PCM buffer size: ${pcmBuffer.length} bytes`);
+        
+        const wavBuffer = await createWavBuffer(pcmBuffer);
+        console.log(`✅ WAV conversion complete: ${wavBuffer.length} bytes`);
+        
+        return wavBuffer;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        
+        // Retry on network/timeout errors
+        if (attempt < maxRetries && (
+          lastError.message.includes('500') ||
+          lastError.message.includes('timeout') ||
+          lastError.message.includes('ECONNRESET') ||
+          lastError.message.includes('fetch failed')
+        )) {
+          continue;
+        }
+        
+        console.error('❌ Vertex AI TTS Error:', error);
+        throw new Error(`Failed to synthesize text: ${lastError.message}`);
       }
-
-      const jsonResponse: any = await response.json();
-      const audioData = jsonResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-      
-      if (!audioData) {
-        console.error('Full response:', JSON.stringify(jsonResponse, null, 2));
-        throw new Error('No audio content received from Vertex AI API');
-      }
-
-      console.log(`🎵 Audio data received, converting to WAV...`);
-      const pcmBuffer = Buffer.from(audioData, 'base64');
-      console.log(`📦 PCM buffer size: ${pcmBuffer.length} bytes`);
-      
-      const wavBuffer = await createWavBuffer(pcmBuffer);
-      console.log(`✅ WAV conversion complete: ${wavBuffer.length} bytes`);
-      
-      return wavBuffer;
-    } catch (error) {
-      console.error('❌ Vertex AI TTS Error:', error);
-      throw new Error(`Failed to synthesize text: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
+    
+    // All retries exhausted
+    throw new Error(`Failed to synthesize text after ${maxRetries} retries: ${lastError?.message || 'Unknown error'}`);
   }
 
   /**
@@ -239,46 +281,89 @@ export class TTSClient {
       }
     };
 
-    try {
-      console.log(`🎤 Multi-speaker TTS: ${text.length} chars, ${speakers.length} speakers: ${speakers.map(s => `${s.speaker}→${s.voiceName}`).join(', ')}`);
-      const startTime = Date.now();
+    const maxRetries = 3;
+    let lastError: Error | null = null;
+    
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        if (attempt > 0) {
+          // Exponential backoff: 2s, 4s, 8s
+          const delay = Math.pow(2, attempt) * 1000;
+          console.log(`  🔄 Multi-speaker retry ${attempt}/${maxRetries} after ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+        
+        console.log(`🎤 Multi-speaker TTS: ${text.length} chars, ${speakers.length} speakers: ${speakers.map(s => `${s.speaker}→${s.voiceName}`).join(', ')}`);
+        const startTime = Date.now();
 
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${accessToken.token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-        signal: AbortSignal.timeout(180000), // 3 minute timeout for longer texts
-      });
+        const response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${accessToken.token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(requestBody),
+          signal: AbortSignal.timeout(180000), // 3 minute timeout for longer texts
+        });
 
-      const fetchTime = Date.now() - startTime;
-      console.log(`⏱️ Multi-speaker TTS response in ${fetchTime}ms`);
+        const fetchTime = Date.now() - startTime;
+        console.log(`⏱️ Multi-speaker TTS response in ${fetchTime}ms`);
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Vertex AI Multi-Speaker TTS Error:', errorText);
-        throw new Error(`Vertex AI API returned ${response.status}: ${errorText}`);
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('Vertex AI Multi-Speaker TTS Error:', errorText);
+          
+          // Retry on 500 errors
+          if (response.status >= 500 && attempt < maxRetries) {
+            lastError = new Error(`Vertex AI API returned ${response.status}: ${errorText}`);
+            continue;
+          }
+          
+          throw new Error(`Vertex AI API returned ${response.status}: ${errorText}`);
+        }
+
+        const jsonResponse: any = await response.json();
+        const audioData = jsonResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+
+        if (!audioData) {
+          // Check for safety block
+          const finishReason = jsonResponse.candidates?.[0]?.finishReason;
+          if (finishReason === 'SAFETY' && attempt < maxRetries) {
+            console.warn('  ⚠️ Multi-speaker TTS blocked by safety filter, retrying...');
+            lastError = new Error('Safety filter blocked response');
+            continue;
+          }
+          
+          console.error('Full response:', JSON.stringify(jsonResponse, null, 2));
+          throw new Error('No audio content received from multi-speaker TTS');
+        }
+
+        const pcmBuffer = Buffer.from(audioData, 'base64');
+        const wavBuffer = await createWavBuffer(pcmBuffer);
+        console.log(`✅ Multi-speaker audio: ${wavBuffer.length} bytes`);
+
+        return wavBuffer;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        
+        // Retry on network/timeout/500 errors
+        if (attempt < maxRetries && (
+          lastError.message.includes('500') ||
+          lastError.message.includes('timeout') ||
+          lastError.message.includes('ECONNRESET') ||
+          lastError.message.includes('fetch failed') ||
+          lastError.message.includes('Safety filter')
+        )) {
+          continue;
+        }
+        
+        console.error('❌ Multi-speaker TTS Error:', error);
+        throw new Error(`Multi-speaker synthesis failed: ${lastError.message}`);
       }
-
-      const jsonResponse: any = await response.json();
-      const audioData = jsonResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-
-      if (!audioData) {
-        console.error('Full response:', JSON.stringify(jsonResponse, null, 2));
-        throw new Error('No audio content received from multi-speaker TTS');
-      }
-
-      const pcmBuffer = Buffer.from(audioData, 'base64');
-      const wavBuffer = await createWavBuffer(pcmBuffer);
-      console.log(`✅ Multi-speaker audio: ${wavBuffer.length} bytes`);
-
-      return wavBuffer;
-    } catch (error) {
-      console.error('❌ Multi-speaker TTS Error:', error);
-      throw new Error(`Multi-speaker synthesis failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
+    
+    // All retries exhausted
+    throw new Error(`Multi-speaker synthesis failed after ${maxRetries} retries: ${lastError?.message || 'Unknown error'}`);
   }
 }
 

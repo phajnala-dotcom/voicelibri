@@ -98,7 +98,14 @@ async function dramatizeChunkOnDemand(plainText: string): Promise<string> {
  * Look up voice for a speaker, handling name format differences
  * 
  * Voice tags use UPPERCASE_WITH_UNDERSCORES (e.g., "JOSEPH_RAGOWSKI")
- * VoiceMap uses normal case with spaces (e.g., "Joseph Ragowski")
+ * VoiceMap uses normal case with spaces (e.g., "Joseph Ragowski" or just "Ragowski")
+ * 
+ * Matching strategy (in order):
+ * 1. Exact match
+ * 2. Normalized name (JOSEPH_RAGOWSKI → Joseph Ragowski)
+ * 3. Case-insensitive match
+ * 4. Partial match - any word in speaker matches any word in voiceMap key
+ *    (handles "JOSEPH_RAGOWSKI" matching "Ragowski" or "Joseph")
  * 
  * @param speaker - Speaker name from voice tag (e.g., "JOSEPH_RAGOWSKI")
  * @param voiceMap - Character to voice mapping (uses normal names)
@@ -127,11 +134,44 @@ function lookupVoice(speaker: string, voiceMap: Record<string, string>, defaultV
     return voiceMap[normalizedName];
   }
   
-  // Try case-insensitive match
+  // Try case-insensitive exact match
   const lowerSpeaker = speaker.toLowerCase().replace(/_/g, ' ');
   for (const [name, voice] of Object.entries(voiceMap)) {
     if (name.toLowerCase() === lowerSpeaker) {
       return voice;
+    }
+  }
+  
+  // Partial match: any word in speaker matches any word in voiceMap key
+  // This handles "JOSEPH_RAGOWSKI" matching "Ragowski" or "Joseph Ragowski" matching "Joe"
+  const speakerWords = lowerSpeaker.split(' ');
+  for (const [name, voice] of Object.entries(voiceMap)) {
+    const nameWords = name.toLowerCase().split(' ');
+    // Check if any speaker word matches any name word (partial match)
+    for (const sw of speakerWords) {
+      for (const nw of nameWords) {
+        // Match if one contains the other (handles "Joe" matching "Joseph")
+        if (sw.length >= 3 && nw.length >= 3 && (sw.includes(nw) || nw.includes(sw))) {
+          console.log(`  🔗 Partial match: "${speaker}" → "${name}" → ${voice}`);
+          return voice;
+        }
+        // Exact word match
+        if (sw === nw && sw.length >= 3) {
+          console.log(`  🔗 Word match: "${speaker}" → "${name}" → ${voice}`);
+          return voice;
+        }
+      }
+    }
+  }
+  
+  // Last resort: check if speaker's last word (likely surname) matches any key
+  const lastName = speakerWords[speakerWords.length - 1];
+  if (lastName.length >= 3) {
+    for (const [name, voice] of Object.entries(voiceMap)) {
+      if (name.toLowerCase().includes(lastName)) {
+        console.log(`  🔗 Surname match: "${speaker}" → "${name}" → ${voice}`);
+        return voice;
+      }
     }
   }
   
