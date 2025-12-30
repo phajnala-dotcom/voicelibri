@@ -473,9 +473,9 @@ export function mergeWithNarration(
   
   if (voiceTagCount > 1) {
     // LLM already tagged the full text with multiple speakers
-    // Post-process to ensure narration within character segments is tagged as NARRATOR
-    console.log(`  [mergeWithNarration] LLM returned ${voiceTagCount} voice tags - post-processing for narration`);
-    return postProcessNarration(taggedDialogues.trim());
+    // Bypass post-processing: assume all segments are properly tagged
+    console.log(`  [mergeWithNarration] LLM returned ${voiceTagCount} voice tags - bypassing postProcessNarration`);
+    return taggedDialogues.trim();
   }
   
   // Fallback: Original merging logic for partial tagging

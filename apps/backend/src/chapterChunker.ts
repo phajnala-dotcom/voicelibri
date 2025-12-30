@@ -29,7 +29,7 @@ export const GEMINI_TTS_HARD_LIMIT = 4000;
  * Target bytes per chunk (for optimal generation time vs buffer)
  * ~2500 bytes = ~60s generation time, ~3-4 min audio
  */
-export const SAFE_CHUNK_TARGET = 2500;
+export const SAFE_CHUNK_TARGET = 3500;
 
 /**
  * Maximum bytes per chunk (safety margin below hard limit)
@@ -38,7 +38,7 @@ export const SAFE_CHUNK_TARGET = 2500;
  * - UTF-8 encoding differences
  * - Edge cases in segment boundaries
  */
-export const SAFE_CHUNK_MAX = 3500;
+export const SAFE_CHUNK_MAX = 3500; // (unchanged, but now matches target)
 
 // ========================================
 // Chunk Metadata

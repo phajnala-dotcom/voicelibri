@@ -118,36 +118,43 @@ async function dramatizeTextCore(plainText: string): Promise<string> {
   const geminiConfig = (global as any).DRAMATIZATION_CONFIG;
   
   if (!characters || !geminiConfig) {
+    console.log('[Dramatization Debug] No characters or geminiConfig, returning narrator only.');
     return `[VOICE=NARRATOR]\n${plainText}`;
   }
-  
+
   try {
     const { GeminiCharacterAnalyzer } = await import('./llmCharacterAnalyzer.js');
     const { hasDialogue, applyRuleBasedTagging, calculateConfidence, extractDialogueParagraphs, mergeWithNarration } = await import('./hybridTagger.js');
-    
+
     // Check if this chunk has any dialogue
     if (!hasDialogue(plainText)) {
+      console.log('[Dramatization Debug] No dialogue detected, returning narrator only.');
       return `[VOICE=NARRATOR]\n${plainText}`;
     }
-    
+
     // Try rule-based first (free, instant)
     const { taggedText: ruleTagged } = applyRuleBasedTagging(plainText, characters);
     const finalConfidence = calculateConfidence(ruleTagged, characters);
-    
+    console.log('[Dramatization Debug] Rule-based taggedText:', ruleTagged);
+    console.log('[Dramatization Debug] Rule-based confidence:', finalConfidence);
+
     if (finalConfidence >= 0.85) {
+      console.log('[Dramatization Debug] Using rule-based tagging.');
       return ruleTagged;
     }
-    
+
     // LLM fallback for complex dialogue
     const analyzer = new GeminiCharacterAnalyzer(geminiConfig);
     const dialogueParagraphs = extractDialogueParagraphs(plainText);
     const dialogueText = dialogueParagraphs.length > 0 ? dialogueParagraphs.join('\n\n') : plainText;
-    
+
     const llmTagged = await analyzer.tagChapterWithVoices(dialogueText, characters);
+    console.log('[Dramatization Debug] LLM-tagged output:', llmTagged);
     const mergedText = mergeWithNarration(plainText, llmTagged, characters);
-    
+    console.log('[Dramatization Debug] Merged output:', mergedText);
+
     return mergedText;
-    
+
   } catch (error) {
     console.error('  ❌ Dramatization failed:', error);
     return `[VOICE=NARRATOR]\n${plainText}`;

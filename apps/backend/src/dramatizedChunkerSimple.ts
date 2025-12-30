@@ -165,7 +165,7 @@ export function removeVoiceTags(text: string): string {
  */
 export function chunkTaggedText(
   taggedText: string,
-  targetBytesPerChunk: number = 200
+  targetBytesPerChunk: number = 3500
 ): ChunkingResult {
   const segments = extractVoiceSegments(taggedText);
   
@@ -314,7 +314,7 @@ export async function saveChunks(
 export async function processTaggedTextFile(
   taggedTextPath: string,
   outputDir?: string,
-  targetBytesPerChunk: number = 200
+  targetBytesPerChunk: number = 3500
 ): Promise<ChunkingResult> {
   console.log('[DramatizedChunkerSimple] Loading tagged text...');
   const taggedText = await fs.readFile(taggedTextPath, 'utf-8');

@@ -82,7 +82,7 @@ export class TTSClient {
     style: 'normal' | 'whisper' | 'thought' | 'letter' = 'normal'
   ): Promise<Buffer> {
     // Gemini TTS model (same model supports both single and multi-speaker)
-    const model = 'gemini-2.5-flash-preview-tts';
+    const model = 'gemini-2.5-pro-tts';
     const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/${this.projectId}/locations/${this.location}/publishers/google/models/${model}:generateContent`;
 
     // Get access token
