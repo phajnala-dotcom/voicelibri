@@ -27,7 +27,12 @@ import {
   consolidateChapterSmart,
   deleteAllTempChunks,
   deleteChapterTempChunks,
-  extractChunkFromConsolidated
+  extractChunkFromConsolidated,
+  // Pre-dramatization pipeline
+  clearDramatizationCache,
+  startPreDramatization,
+  stopPreDramatization,
+  getDramatizationCacheStats
 } from './tempChunkManager.js';
 import { 
   sanitizeBookTitle,
@@ -105,6 +110,12 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
   
   // Clear voice map from previous book
   VOICE_MAP = {};
+  
+  // Clear dramatization cache from previous book
+  clearDramatizationCache();
+  
+  // Stop any ongoing background generation
+  stopContinuousGeneration();
   
   // Determine format from extension
   const ext = path.extname(filename).toLowerCase();
@@ -964,6 +975,15 @@ app.post('/api/tts/chunk', async (req: Request, res: Response) => {
       if (fs.existsSync(voiceMapPath)) {
         voiceMap = await loadVoiceMap(voiceMapPath);
       }
+    }
+    
+    // Start pre-dramatization pipeline for upcoming chunks (for uninterrupted playback)
+    // This runs in background and pre-dramatizes chunks ahead of TTS
+    const dramatizationEnabled = (global as any).DRAMATIZATION_ENABLED;
+    if (dramatizationEnabled && BOOK_CHUNKS.length > 0) {
+      const lookAhead = 5; // Dramatize 5 chunks ahead
+      startPreDramatization(BOOK_CHUNKS, chunkIndex + 1, lookAhead)
+        .catch(err => console.error('❌ Pre-dramatization failed:', err));
     }
     
     const tempResult = await generateAndSaveTempChunk(

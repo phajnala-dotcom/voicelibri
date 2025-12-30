@@ -13,6 +13,12 @@
  * - Max 2 speakers per API call (Gemini TTS limitation)
  * - Uses twoSpeakerChunker for smart chunking
  * - Single API call per chunk instead of multiple parallel calls
+ * 
+ * PIPELINE ARCHITECTURE (for uninterrupted playback):
+ * - Pre-dramatization runs ahead of TTS in background
+ * - Dramatized text cached in memory
+ * - TTS checks cache first → instant if pre-dramatized
+ * - 3 parallel processes: dramatization → TTS → playback
  */
 
 import fs from 'fs';
@@ -32,62 +38,273 @@ import { Chapter } from './bookChunker.js';
 import { formatForMultiSpeakerTTS, getUniqueSpeakers, chunkForTwoSpeakers } from './twoSpeakerChunker.js';
 
 // ========================================
-// On-Demand Dramatization Helper
+// Pre-Dramatization Pipeline Cache
 // ========================================
 
 /**
- * Dramatize a plain text chunk on-demand using LLM
- * Called when chunk doesn't have voice tags but dramatization is enabled
- * 
+ * In-memory cache for pre-dramatized chunk text
+ * Key: chunkIndex, Value: dramatized text with voice tags
+ */
+const dramatizationCache = new Map<number, string>();
+
+/**
+ * Track which chunks are currently being dramatized (to avoid duplicates)
+ */
+const dramatizationInProgress = new Set<number>();
+
+/**
+ * Flag to control pre-dramatization pipeline
+ */
+let preDramatizationRunning = false;
+let preDramatizationAbort: AbortController | null = null;
+
+/**
+ * Clear dramatization cache (called when loading new book)
+ */
+export function clearDramatizationCache(): void {
+  dramatizationCache.clear();
+  dramatizationInProgress.clear();
+  if (preDramatizationAbort) {
+    preDramatizationAbort.abort();
+    preDramatizationAbort = null;
+  }
+  preDramatizationRunning = false;
+  console.log('🧹 Dramatization cache cleared');
+}
+
+/**
+ * Check if a chunk has been pre-dramatized
+ */
+export function isDramatized(chunkIndex: number): boolean {
+  return dramatizationCache.has(chunkIndex);
+}
+
+/**
+ * Get pre-dramatized text from cache
+ */
+export function getDramatizedText(chunkIndex: number): string | undefined {
+  return dramatizationCache.get(chunkIndex);
+}
+
+/**
+ * Store dramatized text in cache
+ */
+export function cacheDramatizedText(chunkIndex: number, taggedText: string): void {
+  dramatizationCache.set(chunkIndex, taggedText);
+}
+
+/**
+ * Get cache statistics for debugging
+ */
+export function getDramatizationCacheStats(): { cached: number; inProgress: number; running: boolean } {
+  return {
+    cached: dramatizationCache.size,
+    inProgress: dramatizationInProgress.size,
+    running: preDramatizationRunning,
+  };
+}
+
+// ========================================
+// Core Dramatization Logic (shared)
+// ========================================
+
+/**
+ * Core dramatization logic - used by both on-demand and pre-dramatization
  * @param plainText - Raw text without voice tags
  * @returns Tagged text with [VOICE=] tags
  */
-async function dramatizeChunkOnDemand(plainText: string): Promise<string> {
+async function dramatizeTextCore(plainText: string): Promise<string> {
   const characters = (global as any).DRAMATIZATION_CHARACTERS;
   const geminiConfig = (global as any).DRAMATIZATION_CONFIG;
   
   if (!characters || !geminiConfig) {
-    console.log('  📝 No dramatization config, using plain text');
     return `[VOICE=NARRATOR]\n${plainText}`;
   }
   
-  console.log('  🎭 On-demand dramatization...');
-  
   try {
-    // Import the tagging function
     const { GeminiCharacterAnalyzer } = await import('./llmCharacterAnalyzer.js');
     const { hasDialogue, applyRuleBasedTagging, calculateConfidence, extractDialogueParagraphs, mergeWithNarration } = await import('./hybridTagger.js');
-    
-    const analyzer = new GeminiCharacterAnalyzer(geminiConfig);
     
     // Check if this chunk has any dialogue
     if (!hasDialogue(plainText)) {
       return `[VOICE=NARRATOR]\n${plainText}`;
     }
     
-    // Try rule-based first (free)
-    const { taggedText: ruleTagged, confidence } = applyRuleBasedTagging(plainText, characters);
+    // Try rule-based first (free, instant)
+    const { taggedText: ruleTagged } = applyRuleBasedTagging(plainText, characters);
     const finalConfidence = calculateConfidence(ruleTagged, characters);
     
     if (finalConfidence >= 0.85) {
-      console.log(`    ✓ Rule-based tagging (confidence: ${(finalConfidence * 100).toFixed(0)}%)`);
       return ruleTagged;
     }
     
     // LLM fallback for complex dialogue
+    const analyzer = new GeminiCharacterAnalyzer(geminiConfig);
     const dialogueParagraphs = extractDialogueParagraphs(plainText);
     const dialogueText = dialogueParagraphs.length > 0 ? dialogueParagraphs.join('\n\n') : plainText;
     
     const llmTagged = await analyzer.tagChapterWithVoices(dialogueText, characters);
     const mergedText = mergeWithNarration(plainText, llmTagged, characters);
     
-    console.log(`    ✓ LLM tagging complete`);
     return mergedText;
     
   } catch (error) {
-    console.error('  ❌ On-demand dramatization failed:', error);
+    console.error('  ❌ Dramatization failed:', error);
     return `[VOICE=NARRATOR]\n${plainText}`;
   }
+}
+
+// ========================================
+// Pre-Dramatization Pipeline
+// ========================================
+
+/**
+ * Start pre-dramatization pipeline in background
+ * Dramatizes chunks ahead of playback for uninterrupted audio
+ * 
+ * @param chunks - All book chunks (plain text)
+ * @param startIndex - Index to start from (usually current playback + 1)
+ * @param lookAhead - How many chunks to dramatize ahead (default: 5)
+ */
+export async function startPreDramatization(
+  chunks: string[],
+  startIndex: number = 0,
+  lookAhead: number = 5
+): Promise<void> {
+  if (preDramatizationRunning) {
+    console.log('  ⏩ Pre-dramatization already running');
+    return;
+  }
+  
+  const dramatizationEnabled = (global as any).DRAMATIZATION_ENABLED;
+  if (!dramatizationEnabled) {
+    console.log('  📝 Dramatization not enabled, skipping pre-dramatization');
+    return;
+  }
+  
+  preDramatizationRunning = true;
+  preDramatizationAbort = new AbortController();
+  
+  console.log(`🎭 Starting pre-dramatization pipeline from chunk ${startIndex} (look-ahead: ${lookAhead})`);
+  
+  try {
+    let currentIndex = startIndex;
+    
+    while (currentIndex < chunks.length && !preDramatizationAbort.signal.aborted) {
+      // Only dramatize up to lookAhead chunks ahead
+      const cachedCount = dramatizationCache.size;
+      if (cachedCount - startIndex >= lookAhead) {
+        // Wait a bit and check again
+        await new Promise(resolve => setTimeout(resolve, 500));
+        continue;
+      }
+      
+      // Skip if already cached or in progress
+      if (dramatizationCache.has(currentIndex) || dramatizationInProgress.has(currentIndex)) {
+        currentIndex++;
+        continue;
+      }
+      
+      // Skip if chunk already has voice tags
+      if (/\[VOICE=.*?\]/.test(chunks[currentIndex])) {
+        currentIndex++;
+        continue;
+      }
+      
+      // Mark as in progress
+      dramatizationInProgress.add(currentIndex);
+      
+      console.log(`  🔮 Pre-dramatizing chunk ${currentIndex}...`);
+      const startTime = Date.now();
+      
+      try {
+        const taggedText = await dramatizeTextCore(chunks[currentIndex]);
+        dramatizationCache.set(currentIndex, taggedText);
+        
+        const elapsed = Date.now() - startTime;
+        console.log(`  ✅ Pre-dramatized chunk ${currentIndex} (${elapsed}ms, cache: ${dramatizationCache.size})`);
+      } catch (error) {
+        console.error(`  ❌ Pre-dramatization failed for chunk ${currentIndex}:`, error);
+        // Store fallback narrator-only text
+        dramatizationCache.set(currentIndex, `[VOICE=NARRATOR]\n${chunks[currentIndex]}`);
+      } finally {
+        dramatizationInProgress.delete(currentIndex);
+      }
+      
+      currentIndex++;
+    }
+    
+    if (!preDramatizationAbort.signal.aborted) {
+      console.log(`🎭 Pre-dramatization complete: ${dramatizationCache.size} chunks cached`);
+    }
+  } catch (error) {
+    console.error('❌ Pre-dramatization pipeline error:', error);
+  } finally {
+    preDramatizationRunning = false;
+    preDramatizationAbort = null;
+  }
+}
+
+/**
+ * Stop pre-dramatization pipeline
+ */
+export function stopPreDramatization(): void {
+  if (preDramatizationAbort) {
+    console.log('🛑 Stopping pre-dramatization pipeline');
+    preDramatizationAbort.abort();
+  }
+}
+
+// ========================================
+// On-Demand Dramatization Helper
+// ========================================
+
+/**
+ * Dramatize a plain text chunk on-demand using LLM
+ * First checks cache from pre-dramatization pipeline
+ * 
+ * @param chunkIndex - Index of the chunk (for cache lookup)
+ * @param plainText - Raw text without voice tags
+ * @returns Tagged text with [VOICE=] tags
+ */
+async function dramatizeChunkOnDemand(chunkIndex: number, plainText: string): Promise<string> {
+  // Check pre-dramatization cache first
+  const cached = dramatizationCache.get(chunkIndex);
+  if (cached) {
+    console.log(`  ⚡ Using pre-dramatized text from cache (chunk ${chunkIndex})`);
+    return cached;
+  }
+  
+  // Wait if this chunk is currently being pre-dramatized
+  if (dramatizationInProgress.has(chunkIndex)) {
+    console.log(`  ⏳ Waiting for pre-dramatization of chunk ${chunkIndex}...`);
+    const maxWait = 30000; // 30s max wait
+    const startWait = Date.now();
+    
+    while (dramatizationInProgress.has(chunkIndex) && Date.now() - startWait < maxWait) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
+    const cached = dramatizationCache.get(chunkIndex);
+    if (cached) {
+      console.log(`  ⚡ Pre-dramatization completed, using cached text`);
+      return cached;
+    }
+  }
+  
+  // On-demand dramatization (cache miss)
+  console.log(`  🎭 On-demand dramatization for chunk ${chunkIndex}...`);
+  const startTime = Date.now();
+  
+  const taggedText = await dramatizeTextCore(plainText);
+  
+  // Cache for future use
+  dramatizationCache.set(chunkIndex, taggedText);
+  
+  const elapsed = Date.now() - startTime;
+  console.log(`  ✓ On-demand dramatization complete (${elapsed}ms)`);
+  
+  return taggedText;
 }
 
 // ========================================
@@ -321,9 +538,10 @@ export async function generateAndSaveTempChunk(
     
     if (dramatizationEnabled) {
       // ON-DEMAND DRAMATIZATION: Convert plain text to multi-voice
-      console.log(`  🎭 On-demand dramatization for chunk ${chunkIndex}...`);
+      // Uses pre-dramatization cache if available (for uninterrupted playback)
+      console.log(`  🎭 Dramatization for chunk ${chunkIndex}...`);
       
-      const dramatizedText = await dramatizeChunkOnDemand(chunkText);
+      const dramatizedText = await dramatizeChunkOnDemand(chunkIndex, chunkText);
       const dramatizedSegments = extractVoiceSegments(dramatizedText);
       
       if (dramatizedSegments.length > 0) {
