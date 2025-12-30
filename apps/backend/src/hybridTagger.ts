@@ -164,6 +164,51 @@ export function extractDialogueParagraphs(text: string): string[] {
 }
 
 /**
+ * Split text content into dialogue (quoted) and narration (unquoted) segments
+ * 
+ * This is the CORE function that ensures narration is always separated from dialogue.
+ * Used by both rule-based tagging and LLM output processing.
+ * 
+ * @param content - Text that may contain mixed dialogue and narration
+ * @returns Array of segments with type (dialogue/narration) and text
+ */
+function splitIntoDialogueNarration(content: string): Array<{ type: 'dialogue' | 'narration'; text: string }> {
+  const segments: Array<{ type: 'dialogue' | 'narration'; text: string }> = [];
+  
+  // Pattern matches Czech „…" and other quote styles
+  const quotePattern = /([„""''«»])([^„""''«»]*?)([„""''«»])/g;
+  
+  let lastIndex = 0;
+  let match;
+  
+  while ((match = quotePattern.exec(content)) !== null) {
+    // Text before this quote is narration
+    const beforeQuote = content.substring(lastIndex, match.index).trim();
+    if (beforeQuote) {
+      segments.push({ type: 'narration', text: beforeQuote });
+    }
+    
+    // The quote itself is dialogue
+    segments.push({ type: 'dialogue', text: match[0] });
+    
+    lastIndex = match.index + match[0].length;
+  }
+  
+  // Text after last quote is narration
+  const afterQuotes = content.substring(lastIndex).trim();
+  if (afterQuotes) {
+    segments.push({ type: 'narration', text: afterQuotes });
+  }
+  
+  // If no quotes found at all, entire content is narration
+  if (segments.length === 0 && content.trim()) {
+    segments.push({ type: 'narration', text: content.trim() });
+  }
+  
+  return segments;
+}
+
+/**
  * Simple rule-based dialogue detection and tagging
  * 
  * Patterns:
@@ -172,6 +217,9 @@ export function extractDialogueParagraphs(text: string): string[] {
  * - Czech: poznamenala Lili, zvolal Ragowski, pomyslela si Marie
  * - English: said John, Mary replied, John thought
  * - Attribution before/after quotes
+ * 
+ * CRITICAL: Lines with mixed dialogue/narration are split into segments.
+ * Narration (unquoted text) ALWAYS gets NARRATOR tag.
  * 
  * Note: Unquoted inner thoughts are HARD to detect with rules.
  * These require LLM analysis for proper attribution.
@@ -260,16 +308,35 @@ export function applyRuleBasedTagging(
       }
     }
     
+    // CRITICAL: Split line into dialogue/narration segments
+    // This ensures narration (text outside quotes) ALWAYS gets NARRATOR tag
+    const segments = splitIntoDialogueNarration(line);
+    
     // Detect if this is a thought or dialogue
     const isThought = /\b(thought|wondered|pondered|mused|realized|pomyslel|pomyslela|uvažoval|uvažovala|přemýšlel|přemýšlela)\b/i.test(line);
     
-    // Add voice tag with style
-    if (isThought && speaker !== 'NARRATOR') {
-      taggedLines.push(`[VOICE=${speaker}:THOUGHT]`);
-    } else {
-      taggedLines.push(`[VOICE=${speaker}]`);
-    }
-    taggedLines.push(line);
+    // Tag each segment appropriately
+    let lastTaggedSpeaker = '';
+    for (const segment of segments) {
+      if (segment.type === 'narration') {
+        // Narration ALWAYS gets NARRATOR
+        if (lastTaggedSpeaker !== 'NARRATOR') {
+          taggedLines.push('[VOICE=NARRATOR]');
+          lastTaggedSpeaker = 'NARRATOR';
+        }
+        taggedLines.push(segment.text);
+      } else {
+        // Dialogue gets the attributed speaker
+        const voiceTag = isThought && speaker !== 'NARRATOR' 
+          ? `[VOICE=${speaker}:THOUGHT]` 
+          : `[VOICE=${speaker}]`;
+        if (lastTaggedSpeaker !== speaker) {
+          taggedLines.push(voiceTag);
+          lastTaggedSpeaker = speaker;
+        }
+        taggedLines.push(segment.text);
+      }
+    };
   }
   
   // Calculate confidence
@@ -342,9 +409,8 @@ export function calculateConfidence(
 /**
  * Post-process tagged text to ensure narration (non-quoted text) is tagged as NARRATOR
  * 
- * Fixes cases where LLM incorrectly includes narration within character segments:
- * BAD: [VOICE=RAGOWSKI] „Dialogue" Ragowski se rozhlédl.
- * GOOD: [VOICE=RAGOWSKI] „Dialogue" [VOICE=NARRATOR] Ragowski se rozhlédl.
+ * Safety net for LLM output - uses the same splitIntoDialogueNarration() logic
+ * as the rule-based tagger for consistency.
  * 
  * @param taggedText - Text with [VOICE=] tags
  * @returns Text with narration properly tagged as NARRATOR
@@ -359,12 +425,10 @@ function postProcessNarration(taggedText: string): string {
     const voiceTagMatch = part.match(/^\[VOICE=([^\]]+)\]$/);
     
     if (voiceTagMatch) {
-      currentSpeaker = voiceTagMatch[1];
-      // Don't add the tag yet, we'll add it when processing content
+      currentSpeaker = voiceTagMatch[1].split(':')[0]; // Handle style suffix like :THOUGHT
       continue;
     }
     
-    // This is content - check if it needs to be split
     const content = part.trim();
     if (!content) continue;
     
@@ -376,44 +440,14 @@ function postProcessNarration(taggedText: string): string {
         result[result.length - 1] += `\n${content}`;
       }
     } else {
-      // Character speaker - check if content has narration mixed in
-      // Pattern: find quoted dialogue vs non-quoted narration
-      const quotePattern = /([„""''«»])([^„""''«»]*?)([„""''«»])/g;
+      // Character speaker - use shared function to split dialogue/narration
+      const segments = splitIntoDialogueNarration(content);
       
-      let lastIndex = 0;
-      let match;
-      const subParts: Array<{ type: 'dialogue' | 'narration'; text: string }> = [];
-      
-      while ((match = quotePattern.exec(content)) !== null) {
-        // Text before this quote is narration
-        const beforeQuote = content.substring(lastIndex, match.index).trim();
-        if (beforeQuote) {
-          subParts.push({ type: 'narration', text: beforeQuote });
-        }
-        
-        // The quote itself is dialogue
-        subParts.push({ type: 'dialogue', text: match[0] });
-        
-        lastIndex = match.index + match[0].length;
-      }
-      
-      // Text after last quote is narration
-      const afterQuotes = content.substring(lastIndex).trim();
-      if (afterQuotes) {
-        subParts.push({ type: 'narration', text: afterQuotes });
-      }
-      
-      // If no quotes found at all, everything is dialogue (character's unquoted speech/thoughts)
-      if (subParts.length === 0) {
-        subParts.push({ type: 'dialogue', text: content });
-      }
-      
-      // Now output with correct tags
-      for (const subPart of subParts) {
-        if (subPart.type === 'narration') {
-          result.push(`[VOICE=NARRATOR]\n${subPart.text}`);
+      for (const segment of segments) {
+        if (segment.type === 'narration') {
+          result.push(`[VOICE=NARRATOR]\n${segment.text}`);
         } else {
-          result.push(`[VOICE=${currentSpeaker}]\n${subPart.text}`);
+          result.push(`[VOICE=${currentSpeaker}]\n${segment.text}`);
         }
       }
     }
