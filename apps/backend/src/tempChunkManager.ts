@@ -245,8 +245,7 @@ export async function startPreDramatization(
       console.log(`🎭 Pre-dramatization complete: ${dramatizationCache.size} chunks cached`);
     }
   } catch (error) {
-    console.error('❌ Pre-dramatization pipeline error:', error);
-  } finally {
+  // (Removed redundant chunking log)
     preDramatizationRunning = false;
     preDramatizationAbort = null;
   }
@@ -463,13 +462,15 @@ export async function generateAndSaveTempChunk(
   // 2. Generate TTS audio
   const voiceSegments = extractVoiceSegments(chunkText);
   let audioBuffer: Buffer;
-  
+  let taggedTextToPersist: string | null = null;
+  // If chunkText already has voice tags, that's the tagged text; otherwise, it may be dramatized below
   if (voiceSegments.length > 0) {
     // MULTI-VOICE MODE: Chunk has voice tags
     // Using TRUE multi-speaker TTS via Gemini's multiSpeakerVoiceConfig
     const uniqueSpeakers = [...new Set(voiceSegments.map(s => s.speaker))];
     console.log(`  Multi-voice chunk: ${voiceSegments.length} segments, ${uniqueSpeakers.length} speakers`);
-    
+    // Persist the tagged text (with [VOICE=] tags) for this chunk
+    taggedTextToPersist = chunkText;
     // CRITICAL: Gemini TTS multi-speaker requires EXACTLY 2 speakers
     if (uniqueSpeakers.length === 1) {
       // Only 1 speaker - use single-voice synthesis
@@ -493,23 +494,29 @@ export async function generateAndSaveTempChunk(
       // Generate audio for each sub-chunk and concatenate
       const audioBuffers: Buffer[] = [];
       for (const subChunk of twoSpeakerChunks) {
-        let subAudio: Buffer;
+        let subBuffer: Buffer;
         
         if (subChunk.speakers.length === 1) {
           // Single speaker
           const voice = lookupVoice(subChunk.speakers[0], voiceMap, defaultVoice);
           const text = subChunk.segments.map(s => s.text).join(' ');
-          subAudio = await synthesizeText(text, voice);
+          subBuffer = await synthesizeText(text, voice);
         } else {
           // 2 speakers - true multi-speaker
           const speakerConfigs: SpeakerConfig[] = subChunk.speakers.map(speaker => ({
             speaker,
             voiceName: lookupVoice(speaker, voiceMap, defaultVoice),
           }));
-          subAudio = await synthesizeMultiSpeaker(subChunk.formattedText, speakerConfigs);
+          console.log(
+            `\n==================== TTS SUB-CHUNK ====================\n` +
+            `SPEAKER CONFIGS:\n${JSON.stringify(speakerConfigs, null, 2)}\n` +
+            `FORMATTED TEXT:\n-----\n${subChunk.formattedText}\n-----\n` +
+            `=======================================================\n`
+          );
+          subBuffer = await synthesizeMultiSpeaker(subChunk.formattedText, speakerConfigs);
         }
         
-        audioBuffers.push(subAudio);
+        audioBuffers.push(subBuffer);
       }
       
       // Concatenate all audio buffers
@@ -525,14 +532,16 @@ export async function generateAndSaveTempChunk(
         voiceName: lookupVoice(speaker, voiceMap, defaultVoice),
       }));
       
-      console.log(`     Speakers: ${speakerConfigs.map(s => `${s.speaker} → ${s.voiceName}`).join(', ')}`);
-      
       // Format text for multi-speaker TTS: "Speaker: text" format
       const formattedText = formatForMultiSpeakerTTS(voiceSegments);
       const textBytes = Buffer.byteLength(formattedText, 'utf8');
-      console.log(`     Formatted text: ${textBytes} bytes`);
-      
-      // Single API call for all segments
+      console.log(
+        `\n==================== TTS MULTI-SPEAKER ====================\n` +
+        `SPEAKER CONFIGS:\n${JSON.stringify(speakerConfigs, null, 2)}\n` +
+        `FORMATTED TEXT:\n-----\n${formattedText}\n-----\n` +
+        `BYTES: ${textBytes}\n` +
+        `========================================================\n`
+      );
       audioBuffer = await synthesizeMultiSpeaker(formattedText, speakerConfigs);
     }
     
@@ -542,15 +551,14 @@ export async function generateAndSaveTempChunk(
     // SINGLE-VOICE MODE: No voice tags detected
     // Check if on-demand dramatization is enabled
     const dramatizationEnabled = (global as any).DRAMATIZATION_ENABLED;
-    
     if (dramatizationEnabled) {
       // ON-DEMAND DRAMATIZATION: Convert plain text to multi-voice
       // Uses pre-dramatization cache if available (for uninterrupted playback)
       console.log(`  🎭 Dramatization for chunk ${chunkIndex}...`);
-      
       const dramatizedText = await dramatizeChunkOnDemand(chunkIndex, chunkText);
       const dramatizedSegments = extractVoiceSegments(dramatizedText);
-      
+      // Persist the dramatized (tagged) text for this chunk
+      taggedTextToPersist = dramatizedText;
       if (dramatizedSegments.length > 0) {
         // Successfully dramatized - now generate multi-voice audio
         const uniqueSpeakers = [...new Set(dramatizedSegments.map(s => s.speaker))];
@@ -637,14 +645,11 @@ export async function generateAndSaveTempChunk(
   if (!fs.existsSync(tempDir)) {
     fs.mkdirSync(tempDir, { recursive: true });
   }
-  
   fs.writeFileSync(tempFile, audioBuffer);
   
   const elapsedMs = Date.now() - startTime;
   const duration = estimateAudioDuration(audioBuffer);
-  
   console.log(`✅ Saved temp chunk ${chunkIndex}: ${tempFile} (${audioBuffer.length} bytes, ~${duration.toFixed(1)}s audio, ${elapsedMs}ms generation)`);
-  
   return {
     audioBuffer,
     tempFilePath: tempFile,
@@ -731,6 +736,13 @@ async function generateMultiVoiceSimulated(
       
       console.log(`     Batch ${i + 1}/${batches.length}: Multi-speaker (${speakerConfigs.map(s => `${s.speaker}→${s.voiceName}`).join(', ')})`);
       batchAudio = await synthesizeMultiSpeaker(formattedText, speakerConfigs);
+          // Log for batching
+          console.log(
+            `\n==================== TTS BATCH ====================\n` +
+            `SPEAKER CONFIGS:\n${JSON.stringify(speakerConfigs, null, 2)}\n` +
+            `FORMATTED TEXT:\n-----\n${formattedText}\n-----\n` +
+            `========================================================\n`
+          );
     }
     
     // Add small pause between batches (not after the last one)

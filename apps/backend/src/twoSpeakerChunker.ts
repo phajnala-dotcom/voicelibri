@@ -41,7 +41,7 @@ export interface TwoSpeakerChunkConfig {
 }
 
 const DEFAULT_CONFIG: TwoSpeakerChunkConfig = {
-  maxBytes: 3600,   // 4000 byte hard limit - 400 byte sentence completion allowance
+  maxBytes: 3300,   // 4000 byte hard limit - 700 byte sentence completion allowance (for very long sentences)
   minBytes: 0,      // No minimum - allow small chunks when 3rd speaker forces a split
 };
 
@@ -71,9 +71,11 @@ export function getUniqueSpeakers(segments: VoiceSegment[]): string[] {
  * Check if adding a segment would exceed 2 speakers
  */
 function wouldExceedTwoSpeakers(currentSpeakers: string[], newSpeaker: string): boolean {
+  // Always count NARRATOR as a unique voice
   if (currentSpeakers.includes(newSpeaker)) {
     return false;
   }
+  // If adding this speaker would make 3 unique voices, return true
   return currentSpeakers.length >= 2;
 }
 
@@ -120,48 +122,37 @@ function splitSegmentAtSentence(
   if (textBytes <= maxBytes) {
     return [segment, null];
   }
-  
-  // Find a sentence boundary that fits
-  // Start looking from approximate character position (bytes ≈ chars for ASCII)
+
+  // 1. Try to split at sentence boundary
   const approxCharLimit = Math.floor(maxBytes * 0.9); // Leave some margin
   const splitPoint = findSentenceBoundary(text, approxCharLimit);
-  
-  if (splitPoint <= 0) {
-    // No good split point found, fall back to word boundary
-    const words = text.split(/\s+/);
-    let currentLength = 0;
-    let wordIndex = 0;
-    
-    for (let i = 0; i < words.length; i++) {
-      const wordBytes = Buffer.byteLength(words[i] + ' ', 'utf8');
-      if (currentLength + wordBytes > maxBytes) {
-        break;
-      }
-      currentLength += wordBytes;
-      wordIndex = i + 1;
-    }
-    
-    if (wordIndex === 0) {
-      // Can't even fit one word, just return the segment
-      return [segment, null];
-    }
-    
-    const beforeText = words.slice(0, wordIndex).join(' ');
-    const afterText = words.slice(wordIndex).join(' ');
-    
+  if (splitPoint > 0) {
+    const beforeText = text.slice(0, splitPoint).trim();
+    const afterText = text.slice(splitPoint).trim();
     return [
       { ...segment, text: beforeText, endIndex: segment.startIndex + beforeText.length },
-      afterText ? { ...segment, text: afterText, startIndex: segment.startIndex + beforeText.length + 1 } : null
+      afterText ? { ...segment, text: afterText, startIndex: segment.startIndex + splitPoint } : null
     ];
   }
-  
-  const beforeText = text.slice(0, splitPoint).trim();
-  const afterText = text.slice(splitPoint).trim();
-  
-  return [
-    { ...segment, text: beforeText, endIndex: segment.startIndex + beforeText.length },
-    afterText ? { ...segment, text: afterText, startIndex: segment.startIndex + splitPoint } : null
-  ];
+
+  // Fallback: try to split at last word boundary within maxBytes
+  let lastSpace = -1;
+  let bytes = 0;
+  for (let i = 0; i < text.length; i++) {
+    bytes += Buffer.byteLength(text[i], 'utf8');
+    if (bytes > maxBytes) break;
+    if (text[i] === ' ') lastSpace = i;
+  }
+  if (lastSpace > 0) {
+    const beforeText = text.slice(0, lastSpace).trim();
+    const afterText = text.slice(lastSpace).trim();
+    return [
+      { ...segment, text: beforeText, endIndex: segment.startIndex + beforeText.length },
+      afterText ? { ...segment, text: afterText, startIndex: segment.startIndex + lastSpace } : null
+    ];
+  }
+  // If no word boundary, throw error
+  throw new Error(`Segment too large and cannot be split at a sentence or word boundary. Speaker: ${segment.speaker}, text: "${segment.text}"`);
 }
 
 /**
@@ -208,17 +199,28 @@ export function chunkForTwoSpeakers(
   let currentBytes = 0;
   let pendingSegments: VoiceSegment[] = [...allSegments];
   
+  // Use a queue to ensure all segments are processed and split as needed
   while (pendingSegments.length > 0) {
     const segment = pendingSegments.shift()!;
     const segmentText = `${segment.speaker}: ${segment.text}`;
     const segmentBytes = Buffer.byteLength(segmentText, 'utf8') + 1; // +1 for newline
-    
-    // Check if this segment would exceed limits
+
+    // If the segment is too large to fit in a chunk, split it at sentence boundary only
+    if (segmentBytes > config.maxBytes) {
+      try {
+        const [before, after] = splitSegmentAtSentence(segment, config.maxBytes);
+        if (before) pendingSegments.unshift(before);
+        if (after) pendingSegments.splice(1, 0, after); // preserve order
+        continue;
+      } catch (err) {
+        // If a single sentence is too long, throw error
+        throw new Error(`Cannot split segment for speaker ${segment.speaker}: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
+    // If adding this segment would exceed 2 speakers, finalize current chunk and process segment in next chunk
     const wouldExceedSpeakers = wouldExceedTwoSpeakers(currentSpeakers, segment.speaker);
-    const wouldExceedBytes = currentBytes + segmentBytes > config.maxBytes;
-    
-    if (currentSegments.length > 0 && (wouldExceedSpeakers || wouldExceedBytes)) {
-      // Finalize current chunk
+    if (currentSegments.length > 0 && wouldExceedSpeakers) {
       chunks.push({
         index: chunks.length,
         formattedText: formatForMultiSpeakerTTS(currentSegments),
@@ -227,52 +229,33 @@ export function chunkForTwoSpeakers(
         byteCount: currentBytes,
         chapterIndex,
       });
-      
-      // Reset for new chunk
       currentSegments = [];
       currentSpeakers = [];
       currentBytes = 0;
-    }
-    
-    // Check if segment itself is too large
-    if (segmentBytes > config.maxBytes) {
-      // Split the segment at sentence boundary
-      const remainingBytes = config.maxBytes - currentBytes;
-      const [before, after] = splitSegmentAtSentence(segment, remainingBytes > config.minBytes ? remainingBytes : config.maxBytes);
-      
-      if (before) {
-        // Add the 'before' part to current or new chunk
-        if (currentSegments.length === 0 || !wouldExceedTwoSpeakers(currentSpeakers, before.speaker)) {
-          currentSegments.push(before);
-          if (!currentSpeakers.includes(before.speaker)) {
-            currentSpeakers.push(before.speaker);
-          }
-          currentBytes += Buffer.byteLength(`${before.speaker}: ${before.text}`, 'utf8') + 1;
-        } else {
-          // Finalize current chunk first
-          chunks.push({
-            index: chunks.length,
-            formattedText: formatForMultiSpeakerTTS(currentSegments),
-            speakers: [...currentSpeakers],
-            segments: [...currentSegments],
-            byteCount: currentBytes,
-            chapterIndex,
-          });
-          
-          currentSegments = [before];
-          currentSpeakers = [before.speaker];
-          currentBytes = Buffer.byteLength(`${before.speaker}: ${before.text}`, 'utf8') + 1;
-        }
-      }
-      
-      if (after) {
-        // Put 'after' back to process
-        pendingSegments.unshift(after);
-      }
-      
+      // Re-queue this segment for the next chunk
+      pendingSegments.unshift(segment);
       continue;
     }
-    
+
+    // If adding this segment would exceed byte limit, finalize current chunk and process segment in next chunk
+    const wouldExceedBytes = currentBytes + segmentBytes > config.maxBytes;
+    if (currentSegments.length > 0 && wouldExceedBytes) {
+      chunks.push({
+        index: chunks.length,
+        formattedText: formatForMultiSpeakerTTS(currentSegments),
+        speakers: [...currentSpeakers],
+        segments: [...currentSegments],
+        byteCount: currentBytes,
+        chapterIndex,
+      });
+      currentSegments = [];
+      currentSpeakers = [];
+      currentBytes = 0;
+      // Re-queue this segment for the next chunk
+      pendingSegments.unshift(segment);
+      continue;
+    }
+
     // Add segment to current chunk
     currentSegments.push(segment);
     if (!currentSpeakers.includes(segment.speaker)) {
@@ -283,14 +266,33 @@ export function chunkForTwoSpeakers(
   
   // Finalize last chunk
   if (currentSegments.length > 0) {
-    chunks.push({
-      index: chunks.length,
-      formattedText: formatForMultiSpeakerTTS(currentSegments),
-      speakers: [...currentSpeakers],
-      segments: [...currentSegments],
-      byteCount: currentBytes,
-      chapterIndex,
-    });
+    // Failsafe: If more than 2 speakers, log error and trim to first 2
+    if (currentSpeakers.length > 2) {
+      console.error(
+        `Chunk with >2 speakers detected! Speakers: ${currentSpeakers.join(", ")}. Trimming to first 2.`,
+        { segments: currentSegments }
+      );
+      // Only keep segments with first 2 speakers
+      const allowedSpeakers = currentSpeakers.slice(0, 2);
+      const filteredSegments = currentSegments.filter(s => allowedSpeakers.includes(s.speaker));
+      chunks.push({
+        index: chunks.length,
+        formattedText: formatForMultiSpeakerTTS(filteredSegments),
+        speakers: [...allowedSpeakers],
+        segments: [...filteredSegments],
+        byteCount: filteredSegments.reduce((sum, s) => sum + Buffer.byteLength(`${s.speaker}: ${s.text}`, 'utf8') + 1, 0),
+        chapterIndex,
+      });
+    } else {
+      chunks.push({
+        index: chunks.length,
+        formattedText: formatForMultiSpeakerTTS(currentSegments),
+        speakers: [...currentSpeakers],
+        segments: [...currentSegments],
+        byteCount: currentBytes,
+        chapterIndex,
+      });
+    }
   }
   
   // Re-index chunks

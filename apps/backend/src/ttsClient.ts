@@ -15,6 +15,14 @@ export interface SpeakerConfig {
   voiceName: string;
 }
 
+// Note: TTS functions return Buffer directly (simplified - no metadata extraction needed)
+
+/**
+ * Gemini TTS model to use
+ * Using 'gemini-2.5-flash-tts' (stable) - switch to 'gemini-2.5-flash-preview-tts' when rate limits allow
+ */
+const TTS_MODEL = 'gemini-2.5-flash-tts';
+
 /**
  * Creates a WAV file header and combines it with PCM audio data
  * @param pcmBuffer - Raw PCM audio data from Vertex AI
@@ -81,9 +89,7 @@ export class TTSClient {
     voiceName: string = 'Algieba',
     style: 'normal' | 'whisper' | 'thought' | 'letter' = 'normal'
   ): Promise<Buffer> {
-    // Gemini TTS model (same model supports both single and multi-speaker)
-    const model = 'gemini-2.5-pro-tts';
-    const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/${this.projectId}/locations/${this.location}/publishers/google/models/${model}:generateContent`;
+    const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/${this.projectId}/locations/${this.location}/publishers/google/models/${TTS_MODEL}:generateContent`;
 
     // Get access token
     const client = await this.auth.getClient();
@@ -174,6 +180,7 @@ export class TTSClient {
 
         const jsonResponse: any = await response.json();
         const audioData = jsonResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+        // ...existing code...
         
         if (!audioData) {
           // Check for safety block
@@ -244,8 +251,7 @@ export class TTSClient {
       throw new Error('At least one speaker configuration is required');
     }
 
-    const model = 'gemini-2.5-flash-tts';
-    const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/${this.projectId}/locations/${this.location}/publishers/google/models/${model}:generateContent`;
+    const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/${this.projectId}/locations/${this.location}/publishers/google/models/${TTS_MODEL}:generateContent`;
 
     const client = await this.auth.getClient();
     const accessToken = await client.getAccessToken();
@@ -264,11 +270,27 @@ export class TTSClient {
       }
     }));
 
+    // According to official Gemini TTS docs:
+    // - TTS models do NOT support systemInstruction field
+    // - Style/voice guidance must be embedded IN the prompt text itself
+    // - Keep it short and direct to avoid slowing down generation
+    
+    // Build speaker mapping for the prompt
+    const speakerList = speakers.map(s => s.speaker).join(', ');
+    
+    // Two-part instruction: 1) Voice switching rule  2) Artistic delivery
+    const directorsNotes = `VOICE RULE: SWITCH VOICE IMMEDIATELY AT EACH SPEAKER LABEL! Labels: ${speakerList}
+STYLE: Read as a world-class voice artist with immersive, expressive, yet natural elocution, rich variety of expressive means, expressing the speakers emotions, story events and environment by highly adaptive prosody.
+
+`;
+    
+    const textWithGuidance = directorsNotes + text;
+
     const requestBody = {
       contents: {
         role: 'user',
         parts: {
-          text: text
+          text: textWithGuidance
         }
       },
       generation_config: {
@@ -279,6 +301,14 @@ export class TTSClient {
           }
         }
       }
+      // Safety settings - requires monthly invoiced billing to use
+      // See: https://cloud.google.com/billing/docs/how-to/invoiced-billing
+      // safety_settings: [
+      //   { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_ONLY_HIGH' },
+      //   { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' },
+      //   { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' },
+      //   { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_ONLY_HIGH' }
+      // ]
     };
 
     const maxRetries = 3;
@@ -324,6 +354,7 @@ export class TTSClient {
 
         const jsonResponse: any = await response.json();
         const audioData = jsonResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+        // ...existing code...
 
         if (!audioData) {
           // Check for safety block
