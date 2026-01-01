@@ -1,5 +1,49 @@
 # LLM Dramatization - Integration Guide
 
+---
+
+## 🎭 Dramatized Chunking & Gemini TTS Integration (Critical for Multi-Voice Audio)
+
+### Overview
+The backend supports dramatized, multi-voice audiobook generation using Gemini TTS. To comply with Gemini's API:
+- **Each TTS chunk must contain at most 2 unique speakers** (e.g., NARRATOR + 1 character, or 2 characters).
+- **Each chunk must not exceed 3600 bytes** (4000 byte Gemini limit minus 400 bytes for sentence completion).
+- **Chunks must not break mid-sentence in any case**.
+- **All input text and all speakers must be preserved**—no lines or speakers are lost, even after splitting.
+- **Any chunk must be part of a single chapter of a book, i.e. cannot cross a chapter.**
+
+### Pipeline
+1. **Tagging:** Text is tagged with `[VOICE=CHARACTER]` markers by the dramatizer (LLM or hybrid).
+2. **Chunking:** `chunkForTwoSpeakers` (in `twoSpeakerChunker.ts`) splits tagged text into chunks:
+   - Respects 2-speaker-per-chunk rule.
+   - Respects byte limit.
+   - Splits at sentence, word, or character boundaries as needed.
+   - Guarantees all input is preserved and output is valid for Gemini TTS.
+3. **TTS:** Chunks are formatted as `Speaker: text` and sent to Gemini TTS multiSpeakerVoiceConfig.
+
+### Integration Points
+- **Chunking is invoked in:**
+  - `tempChunkManager.ts` (audio generation)
+  - `chapterChunker.ts` (chapter-level chunking)
+  - Any place multi-voice TTS is required
+- **Test suite:** `twoSpeakerChunker.test.ts` verifies:
+  - No chunk has >2 speakers
+  - No chunk exceeds byte limit
+  - All speakers and lines are present in output
+
+### Edge Cases & Guarantees
+- Segments too large for a chunk are recursively split (sentence → word → character) until they fit.
+- The chunking loop always finalizes the current chunk before adding a segment that would exceed the speaker or byte limit.
+- After splitting, both parts are re-queued and processed in order.
+- No segment or speaker is ever dropped or skipped.
+
+### How to Extend or Debug
+- Update `twoSpeakerChunker.ts` to adjust chunking rules.
+- Add/modify tests in `twoSpeakerChunker.test.ts` to cover new edge cases.
+- Use logs in chunking and TTS layers to trace chunk boundaries and speaker assignments.
+
+---
+
 ## ✅ Completed Modules
 
 ### 1. Text Cleaner (`textCleaner.ts`)

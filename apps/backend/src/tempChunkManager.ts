@@ -32,7 +32,11 @@ import {
   getChapterPath, 
   getTempFolder,
   createAudiobookFolder,
-  sanitizeChapterTitle
+  sanitizeChapterTitle,
+  saveChapterBoundaries,
+  loadChapterBoundaries,
+  ChapterBoundaries,
+  SubChunkBoundary
 } from './audiobookManager.js';
 import { Chapter } from './bookChunker.js';
 import { formatForMultiSpeakerTTS, getUniqueSpeakers, chunkForTwoSpeakers } from './twoSpeakerChunker.js';
@@ -1204,4 +1208,405 @@ export function deleteChapterTempChunks(bookTitle: string, chunkIndices: number[
   }
   
   return deletedCount;
+}
+// ========================================
+// NEW: Sub-chunk Generation (Parallel Pipeline)
+// ========================================
+
+import { getSubChunkPath, listChapterSubChunks } from './audiobookManager.js';
+import { TwoSpeakerChunk } from './twoSpeakerChunker.js';
+
+/**
+ * Result of sub-chunk generation
+ */
+export interface SubChunkResult {
+  chapterIndex: number;
+  subChunkIndex: number;
+  audioBuffer: Buffer;
+  filePath: string;
+  fromCache: boolean;
+  duration: number;
+}
+
+// ========================================
+// GENERATION LOCK: Prevent duplicate TTS calls
+// ========================================
+
+// Map of "chapterIndex:subChunkIndex" -> Promise<SubChunkResult>
+// If a generation is in progress, other callers wait for the same promise
+const generationInProgress: Map<string, Promise<SubChunkResult>> = new Map();
+
+/**
+ * Get lock key for a sub-chunk
+ */
+function getSubChunkLockKey(chapterIndex: number, subChunkIndex: number): string {
+  return `${chapterIndex}:${subChunkIndex}`;
+}
+
+/**
+ * Generate TTS audio for a single sub-chunk and save to temp file
+ * 
+ * NEW NAMING: subchunk_CCC_SSS.wav (chapter_subchunk)
+ * THREAD-SAFE: Uses lock to prevent duplicate TTS calls for same sub-chunk
+ * 
+ * @param bookTitle - Sanitized book title
+ * @param chapterIndex - Chapter index (0-based)
+ * @param subChunk - Sub-chunk data from twoSpeakerChunker
+ * @param voiceMap - Character to voice mapping
+ * @param defaultVoice - Default voice for narrator
+ * @returns Sub-chunk result with audio buffer and metadata
+ */
+export async function generateSubChunk(
+  bookTitle: string,
+  chapterIndex: number,
+  subChunk: TwoSpeakerChunk,
+  voiceMap: Record<string, string> = {},
+  defaultVoice: string = 'Algieba'
+): Promise<SubChunkResult> {
+  const subChunkIndex = subChunk.index;
+  const lockKey = getSubChunkLockKey(chapterIndex, subChunkIndex);
+  const tempFile = getSubChunkPath(bookTitle, chapterIndex, subChunkIndex);
+  
+  // 1. Check if sub-chunk file already exists (resume capability)
+  if (fs.existsSync(tempFile)) {
+    console.log(`💾 Sub-chunk ${chapterIndex}:${subChunkIndex} exists, loading from disk`);
+    const audioBuffer = fs.readFileSync(tempFile);
+    const duration = estimateAudioDuration(audioBuffer);
+    
+    return {
+      chapterIndex,
+      subChunkIndex,
+      audioBuffer,
+      filePath: tempFile,
+      fromCache: true,
+      duration,
+    };
+  }
+  
+  // 2. CHECK LOCK: If generation is in progress, wait for it
+  if (generationInProgress.has(lockKey)) {
+    console.log(`⏳ Sub-chunk ${chapterIndex}:${subChunkIndex} generation in progress, waiting...`);
+    return generationInProgress.get(lockKey)!;
+  }
+  
+  // 3. ACQUIRE LOCK: Create promise and store it
+  const generationPromise = (async (): Promise<SubChunkResult> => {
+    try {
+      const startTime = Date.now();
+      console.log(`🎤 Generating sub-chunk ${chapterIndex}:${subChunkIndex} (${subChunk.speakers.join(', ')})...`);
+      
+      // Generate TTS audio based on speaker count
+      let audioBuffer: Buffer;
+      
+      if (subChunk.speakers.length === 1) {
+        // Single speaker - use single-voice synthesis
+        const speaker = subChunk.speakers[0];
+        const voice = lookupVoice(speaker, voiceMap, defaultVoice);
+        const text = subChunk.segments.map(s => s.text).join(' ');
+        
+        console.log(`  📢 Single speaker: ${speaker} → ${voice}`);
+        audioBuffer = await synthesizeText(text, voice);
+        
+      } else {
+        // 2 speakers - use true multi-speaker TTS
+        const speakerConfigs: SpeakerConfig[] = subChunk.speakers.map(speaker => ({
+          speaker,
+          voiceName: lookupVoice(speaker, voiceMap, defaultVoice),
+        }));
+        
+        console.log(`  🎭 Multi-speaker: ${speakerConfigs.map(s => `${s.speaker}→${s.voiceName}`).join(', ')}`);
+        audioBuffer = await synthesizeMultiSpeaker(subChunk.formattedText, speakerConfigs);
+      }
+    
+      // Save to temp file
+      const tempDir = getTempFolder(bookTitle);
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+      }
+      fs.writeFileSync(tempFile, audioBuffer);
+      
+      const elapsedMs = Date.now() - startTime;
+      const duration = estimateAudioDuration(audioBuffer);
+      
+      console.log(`  ✅ Sub-chunk ${chapterIndex}:${subChunkIndex} saved (${audioBuffer.length} bytes, ~${duration.toFixed(1)}s, ${elapsedMs}ms)`);
+      
+      return {
+        chapterIndex,
+        subChunkIndex,
+        audioBuffer,
+        filePath: tempFile,
+        fromCache: false,
+        duration,
+      };
+    } finally {
+      // RELEASE LOCK
+      generationInProgress.delete(lockKey);
+    }
+  })();
+  
+  // Store promise in lock map
+  generationInProgress.set(lockKey, generationPromise);
+  
+  return generationPromise;
+}
+
+/**
+ * Generate multiple sub-chunks in parallel
+ * 
+ * @param bookTitle - Sanitized book title
+ * @param chapterIndex - Chapter index
+ * @param subChunks - Array of sub-chunks to generate
+ * @param voiceMap - Character to voice mapping
+ * @param defaultVoice - Default voice for narrator
+ * @param parallelism - Number of concurrent TTS calls (default: 2)
+ * @returns Array of sub-chunk results
+ */
+export async function generateSubChunksParallel(
+  bookTitle: string,
+  chapterIndex: number,
+  subChunks: TwoSpeakerChunk[],
+  voiceMap: Record<string, string> = {},
+  defaultVoice: string = 'Algieba',
+  parallelism: number = 2
+): Promise<SubChunkResult[]> {
+  console.log(`🚀 Parallel generation: Chapter ${chapterIndex + 1}, ${subChunks.length} sub-chunks (parallelism: ${parallelism})`);
+  const startTime = Date.now();
+  
+  const results: SubChunkResult[] = [];
+  
+  // Process in batches of `parallelism` size
+  for (let i = 0; i < subChunks.length; i += parallelism) {
+    const batch = subChunks.slice(i, i + parallelism);
+    
+    const batchResults = await Promise.all(
+      batch.map(subChunk => 
+        generateSubChunk(bookTitle, chapterIndex, subChunk, voiceMap, defaultVoice)
+      )
+    );
+    
+    results.push(...batchResults);
+    
+    // Log progress
+    const completed = Math.min(i + parallelism, subChunks.length);
+    console.log(`  📊 Progress: ${completed}/${subChunks.length} sub-chunks`);
+  }
+  
+  const elapsedMs = Date.now() - startTime;
+  const fromCacheCount = results.filter(r => r.fromCache).length;
+  
+  console.log(`✅ Chapter ${chapterIndex + 1} complete: ${results.length} sub-chunks in ${elapsedMs}ms (${fromCacheCount} from cache)`);
+  
+  return results;
+}
+
+/**
+ * Consolidate sub-chunks into a single chapter WAV file
+ * 
+ * NEW: Works directly with sub-chunk files (no intermediate chunk layer)
+ * 
+ * @param bookTitle - Sanitized book title
+ * @param chapterIndex - Chapter index
+ * @param chapterTitle - Chapter title for filename
+ * @returns Path to consolidated chapter file
+ */
+export async function consolidateChapterFromSubChunks(
+  bookTitle: string,
+  chapterIndex: number,
+  chapterTitle?: string
+): Promise<string> {
+  const outputPath = getChapterPath(bookTitle, chapterIndex, chapterTitle);
+  
+  // Check if chapter file already exists
+  if (fs.existsSync(outputPath)) {
+    console.log(`✓ Chapter ${chapterIndex + 1} already consolidated: ${outputPath}`);
+    return outputPath;
+  }
+  
+  // Get all sub-chunk files for this chapter
+  const subChunkFiles = listChapterSubChunks(bookTitle, chapterIndex);
+  
+  if (subChunkFiles.length === 0) {
+    throw new Error(`No sub-chunks found for chapter ${chapterIndex + 1}`);
+  }
+  
+  console.log(`📦 Consolidating Chapter ${chapterIndex + 1} from ${subChunkFiles.length} sub-chunks...`);
+  
+  // Load all sub-chunk buffers and calculate boundaries
+  const buffers: Buffer[] = [];
+  const subChunkBoundaries: SubChunkBoundary[] = [];
+  let currentByteOffset = 0;
+  
+  for (let i = 0; i < subChunkFiles.length; i++) {
+    const buffer = fs.readFileSync(subChunkFiles[i]);
+    buffers.push(buffer);
+    
+    // Calculate PCM data size (buffer length - 44 byte WAV header)
+    const pcmSize = buffer.length - 44;
+    const duration = pcmSize / (24000 * 1 * 2); // 24kHz, mono, 16-bit
+    
+    subChunkBoundaries.push({
+      index: i,
+      byteStart: currentByteOffset,
+      byteEnd: currentByteOffset + pcmSize,
+      duration: duration,
+    });
+    
+    currentByteOffset += pcmSize;
+  }
+  
+  // Concatenate into single WAV
+  const chapterAudio = concatenateWavBuffers(buffers);
+  
+  // Ensure output directory exists
+  const bookDir = path.dirname(outputPath);
+  if (!fs.existsSync(bookDir)) {
+    fs.mkdirSync(bookDir, { recursive: true });
+  }
+  
+  // Save consolidated chapter file
+  fs.writeFileSync(outputPath, chapterAudio);
+  
+  // Save boundaries metadata
+  const totalDuration = subChunkBoundaries.reduce((sum, sc) => sum + sc.duration, 0);
+  const boundaries: ChapterBoundaries = {
+    chapterIndex,
+    totalDuration,
+    subChunks: subChunkBoundaries,
+    consolidatedAt: new Date().toISOString(),
+  };
+  saveChapterBoundaries(bookTitle, boundaries);
+  
+  console.log(`✅ Consolidated Chapter ${chapterIndex + 1}: ${path.basename(outputPath)} (${chapterAudio.length} bytes, ~${totalDuration.toFixed(1)}s)`);
+  
+  return outputPath;
+}
+
+/**
+ * Delete sub-chunks for a specific chapter after consolidation
+ * 
+ * @param bookTitle - Sanitized book title
+ * @param chapterIndex - Chapter index
+ * @returns Number of files deleted
+ */
+export function deleteChapterSubChunks(bookTitle: string, chapterIndex: number): number {
+  const tempDir = getTempFolder(bookTitle);
+  
+  if (!fs.existsSync(tempDir)) {
+    return 0;
+  }
+  
+  const subChunkFiles = listChapterSubChunks(bookTitle, chapterIndex);
+  
+  for (const filePath of subChunkFiles) {
+    fs.unlinkSync(filePath);
+  }
+  
+  if (subChunkFiles.length > 0) {
+    console.log(`  🗑️  Deleted ${subChunkFiles.length} sub-chunks for chapter ${chapterIndex + 1}`);
+  }
+  
+  // Check if temp folder is now empty and delete it
+  const remainingFiles = fs.readdirSync(tempDir);
+  if (remainingFiles.length === 0) {
+    fs.rmdirSync(tempDir);
+    console.log(`  🗑️  Removed empty temp folder`);
+  }
+  
+  return subChunkFiles.length;
+}
+
+/**
+ * Check if a sub-chunk exists on disk
+ */
+export function subChunkExists(bookTitle: string, chapterIndex: number, subChunkIndex: number): boolean {
+  const filePath = getSubChunkPath(bookTitle, chapterIndex, subChunkIndex);
+  return fs.existsSync(filePath);
+}
+
+/**
+ * Load existing sub-chunk from disk
+ */
+export function loadSubChunk(bookTitle: string, chapterIndex: number, subChunkIndex: number): Buffer | null {
+  const filePath = getSubChunkPath(bookTitle, chapterIndex, subChunkIndex);
+  
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+  
+  return fs.readFileSync(filePath);
+}
+
+/**
+ * Find and load a sub-chunk by global index by scanning temp folder
+ * This is a fallback when CHAPTER_SUBCHUNKS memory map is unreliable
+ * 
+ * @returns { audio: Buffer, chapterIndex: number, subChunkIndex: number } or null
+ */
+export function findSubChunkByGlobalIndex(
+  bookTitle: string, 
+  globalIndex: number,
+  chapterSubChunkCounts: Map<number, number>
+): { audio: Buffer; chapterIndex: number; subChunkIndex: number } | null {
+  const tempDir = getTempFolder(bookTitle);
+  
+  if (!fs.existsSync(tempDir)) {
+    return null;
+  }
+  
+  // Method 1: Calculate from known chapter sub-chunk counts
+  let runningTotal = 0;
+  for (const [chapIdx, count] of chapterSubChunkCounts.entries()) {
+    if (globalIndex < runningTotal + count) {
+      const localIdx = globalIndex - runningTotal;
+      const filePath = getSubChunkPath(bookTitle, chapIdx, localIdx);
+      if (fs.existsSync(filePath)) {
+        return {
+          audio: fs.readFileSync(filePath),
+          chapterIndex: chapIdx,
+          subChunkIndex: localIdx,
+        };
+      }
+    }
+    runningTotal += count;
+  }
+  
+  // Method 2: Scan all files and build mapping
+  try {
+    const files = fs.readdirSync(tempDir);
+    const subChunkPattern = /^subchunk_(\d{3})_(\d{3})\.wav$/;
+    
+    // Build sorted list of all sub-chunks
+    const allChunks: Array<{ chapIdx: number; subIdx: number; path: string }> = [];
+    
+    for (const file of files) {
+      const match = file.match(subChunkPattern);
+      if (match) {
+        allChunks.push({
+          chapIdx: parseInt(match[1], 10),
+          subIdx: parseInt(match[2], 10),
+          path: path.join(tempDir, file),
+        });
+      }
+    }
+    
+    // Sort by chapter, then by sub-chunk index
+    allChunks.sort((a, b) => {
+      if (a.chapIdx !== b.chapIdx) return a.chapIdx - b.chapIdx;
+      return a.subIdx - b.subIdx;
+    });
+    
+    // Return the chunk at globalIndex position
+    if (globalIndex >= 0 && globalIndex < allChunks.length) {
+      const chunk = allChunks[globalIndex];
+      return {
+        audio: fs.readFileSync(chunk.path),
+        chapterIndex: chunk.chapIdx,
+        subChunkIndex: chunk.subIdx,
+      };
+    }
+  } catch (error) {
+    console.error('Error scanning temp folder:', error);
+  }
+  
+  return null;
 }

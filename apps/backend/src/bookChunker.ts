@@ -76,7 +76,7 @@ export interface BookMetadata {
   
   // Hybrid dramatization metadata
   isDramatized?: boolean;
-  dramatizationType?: 'llm-only' | 'hybrid-optimized' | 'hybrid-streaming' | 'on-demand';
+  dramatizationType?: 'llm-only' | 'hybrid-optimized' | 'hybrid-streaming' | 'on-demand' | 'parallel-background';
   charactersFound?: number;
   dramatizationCost?: number;
   dramatizationConfidence?: number;
@@ -649,8 +649,12 @@ export function extractEpubChapters(epubBuffer: Buffer): Chapter[] {
       const htmlContent = contentEntry.getData().toString('utf8');
       const plainText = stripHtml(htmlContent);
       
-      if (plainText.trim().length === 0) {
-        continue; // Skip empty chapters
+      // Skip empty or very short chapters (< 100 chars - likely just title/metadata)
+      if (plainText.trim().length < 100) {
+        if (plainText.trim().length > 0) {
+          console.log(`⏭️ EPUB: Skipping short chapter (${plainText.trim().length} chars): "${plainText.trim().substring(0, 50)}..."`);
+        }
+        continue;
       }
       
       // Try to get title from TOC or generate one

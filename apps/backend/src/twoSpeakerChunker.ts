@@ -41,7 +41,7 @@ export interface TwoSpeakerChunkConfig {
 }
 
 const DEFAULT_CONFIG: TwoSpeakerChunkConfig = {
-  maxBytes: 3300,   // 4000 byte hard limit - 700 byte sentence completion allowance (for very long sentences)
+  maxBytes: 3300,   // 4000 byte hard limit - 700 byte sentence completion allowance
   minBytes: 0,      // No minimum - allow small chunks when 3rd speaker forces a split
 };
 

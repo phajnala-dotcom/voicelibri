@@ -1,18 +1,32 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { BookSelector } from './BookSelector';
 
 // ========================================
 // TypeScript Interfaces
 // ========================================
 
+interface ChapterInfo {
+  index: number;
+  title: string;
+  subChunkStart: number;  // Global sub-chunk index where chapter starts
+  subChunkCount: number;  // Number of sub-chunks in this chapter
+}
+
 interface BookInfo {
   title: string;
   author: string;
   language?: string;
   estimatedDuration: string; // Format: "hh:mm"
+  // Chapter info for UI display
+  chapters?: ChapterInfo[];
+  totalChapters?: number;
+  // Sanitized title for position API (matches audiobook folder name)
+  audiobookTitle?: string;
   // Internal data for calculations (not for display)
   _internal: {
-    totalChunks: number;
+    totalChunks: number;       // Effective total (max of actual vs estimated)
+    actualChunks?: number;     // Real generated count (for debugging)
+    dramatizationPending?: boolean; // Whether background processing is active
     durationSeconds: number;
   };
 }
@@ -159,17 +173,31 @@ const BookPlayer: React.FC = () => {
   const [isInitialized, setIsInitialized] = useState(false);
   const [currentBookFile, setCurrentBookFile] = useState<string>('');
 
-  // Save playback position whenever it changes
+  // Save playback position to backend whenever it changes significantly
+  // Debounced to avoid excessive API calls
+  const lastSavedPositionRef = useRef<{ chunk: number; time: number }>({ chunk: -1, time: -1 });
+  
   useEffect(() => {
-    if (currentBookFile && bookInfo) {
-      const position = {
-        chunkIndex: currentChunkIndex,
-        timeInChunk: currentTime,
-        timestamp: Date.now()
-      };
-      localStorage.setItem(`playbackPosition_${currentBookFile}`, JSON.stringify(position));
-    }
-  }, [currentChunkIndex, currentTime, currentBookFile, bookInfo]);
+    if (!bookInfo?.audiobookTitle) return;
+    
+    // Only save if position changed significantly (different chunk or >2s time change)
+    const lastSaved = lastSavedPositionRef.current;
+    const timeDiff = Math.abs(currentTime - lastSaved.time);
+    if (lastSaved.chunk === currentChunkIndex && timeDiff < 2) return;
+    
+    // Update ref immediately to prevent duplicate calls
+    lastSavedPositionRef.current = { chunk: currentChunkIndex, time: currentTime };
+    
+    // Save to backend (fire and forget - don't block playback)
+    fetch(`${API_BASE_URL}/api/audiobooks/${encodeURIComponent(bookInfo.audiobookTitle)}/position`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        currentChapter: currentChunkIndex,  // Using chunk index as "chapter" for now
+        currentTime: currentTime,
+      }),
+    }).catch(err => console.warn('Failed to save position:', err));
+  }, [currentChunkIndex, currentTime, bookInfo?.audiobookTitle]);
 
   // Voice selection state (3-level filtering: Gender → Characteristic → Voice Name)
   // Load from localStorage or use defaults
@@ -196,6 +224,37 @@ const BookPlayer: React.FC = () => {
     }
     console.log(`🎙️ Voice loaded from localStorage: ${savedVoice} (${savedGender})`);
   }, []); // Run once on mount
+
+  // Calculate current chapter from sub-chunk index
+  const currentChapterInfo = useMemo(() => {
+    if (!bookInfo?.chapters || bookInfo.chapters.length === 0) {
+      return { chapterIndex: 0, chapterTitle: 'Chapter 1', subChunkInChapter: 0, totalSubChunksInChapter: 1 };
+    }
+    
+    // Find which chapter contains the current sub-chunk
+    for (let i = 0; i < bookInfo.chapters.length; i++) {
+      const chapter = bookInfo.chapters[i];
+      const chapterEnd = chapter.subChunkStart + chapter.subChunkCount;
+      
+      if (currentChunkIndex < chapterEnd) {
+        return {
+          chapterIndex: i,
+          chapterTitle: chapter.title || `Chapter ${i + 1}`,
+          subChunkInChapter: currentChunkIndex - chapter.subChunkStart,
+          totalSubChunksInChapter: chapter.subChunkCount,
+        };
+      }
+    }
+    
+    // Default to last chapter if beyond
+    const lastChapter = bookInfo.chapters[bookInfo.chapters.length - 1];
+    return {
+      chapterIndex: bookInfo.chapters.length - 1,
+      chapterTitle: lastChapter.title || `Chapter ${bookInfo.chapters.length}`,
+      subChunkInChapter: 0,
+      totalSubChunksInChapter: lastChapter.subChunkCount,
+    };
+  }, [bookInfo?.chapters, currentChunkIndex]);
 
   // ========================================
   // API Functions
@@ -225,7 +284,48 @@ const BookPlayer: React.FC = () => {
         }),
       });
 
+      // Handle 202 "chunk not ready yet" - retry after delay
+      if (response.status === 202) {
+        const data = await response.json();
+        const retryAfter = data.retryAfterMs || 2000;
+        console.log(`⏳ Chunk ${chunkIndex} still generating (actual: ${data.actualChunks}, total: ${data.totalChunks}), retrying in ${retryAfter}ms...`);
+        
+        // Update bookInfo with latest chunk count from backend
+        if (data.totalChunks && bookInfo) {
+          setBookInfo(prev => prev ? {
+            ...prev,
+            _internal: {
+              ...prev._internal,
+              totalChunks: data.totalChunks,
+              actualChunks: data.actualChunks,
+              dramatizationPending: data.dramatizingInBackground
+            }
+          } : prev);
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, retryAfter));
+        return fetchChunkAudio(chunkIndex, retryCount, bookFileOverride); // Don't increment retry for 202
+      }
+
       if (!response.ok) {
+        // Check if this is a "book completed" response (chunk beyond actual total)
+        if (response.status === 400) {
+          const errorData = await response.json().catch(() => ({}));
+          if (errorData.isComplete) {
+            console.log('📚 Book completed - no more chunks');
+            // Update bookInfo with final chunk count and mark as complete
+            setBookInfo(prev => prev ? {
+              ...prev,
+              _internal: {
+                ...prev._internal,
+                totalChunks: errorData.totalChunks,
+                dramatizationPending: false
+              }
+            } : prev);
+            throw new Error('BOOK_COMPLETE');
+          }
+        }
+        
         const errorText = await response.text().catch(() => 'Unknown error');
         console.error(`❌ Fetch failed for chunk ${chunkIndex}:`, response.status, errorText);
         console.error(`   Voice: ${selectedVoiceName}`);
@@ -334,6 +434,18 @@ const BookPlayer: React.FC = () => {
       setLoading(false);
       setLoadingChunk(null);
       
+      // Handle BOOK_COMPLETE gracefully - not an error, just finished
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      if (errorMsg === 'BOOK_COMPLETE') {
+        console.log('📚 Book finished - returning to start');
+        setIsPlaying(false);
+        setCurrentChunkIndex(0);
+        if (audioRef.current) {
+          audioRef.current.currentTime = 0;
+        }
+        return; // Not an error, just done
+      }
+      
       console.error('❌ Error playing chunk:', error);
       console.error('   Current book file:', currentBookFile);
       console.error('   Book override:', bookFileOverride);
@@ -343,7 +455,6 @@ const BookPlayer: React.FC = () => {
       console.error('   Cache has chunk:', audioCache.has(chunkIndex));
       
       // Show user-friendly error message with actual error details
-      const errorMsg = error instanceof Error ? error.message : String(error);
       setError(`Nepodarilo sa načítať audio chunk ${chunkIndex + 1}: ${errorMsg}. Skúsiť znova?`);
       setIsPlaying(false);
     }
@@ -607,17 +718,29 @@ const BookPlayer: React.FC = () => {
   const handleAudioEnded = useCallback(() => {
     if (!bookInfo) return;
 
-    // Auto-advance to next chunk
-    if (currentChunkIndex < bookInfo._internal.totalChunks - 1) {
-      playChunk(currentChunkIndex + 1);
+    const nextChunkIndex = currentChunkIndex + 1;
+    
+    // Always try to play next chunk if dramatization is pending
+    // The 202 response will handle waiting for chunks to generate
+    const dramatizationPending = bookInfo._internal.dramatizationPending;
+    
+    if (nextChunkIndex < bookInfo._internal.totalChunks) {
+      // More chunks available - play next
+      console.log(`▶️ Auto-advancing to chunk ${nextChunkIndex + 1}/${bookInfo._internal.totalChunks}`);
+      playChunk(nextChunkIndex);
+    } else if (dramatizationPending) {
+      // At end of known chunks but more may be generating
+      // Try to play next chunk - 202 response will handle waiting
+      console.log(`⏳ At chunk ${currentChunkIndex + 1}, trying next (dramatization pending)...`);
+      playChunk(nextChunkIndex);
     } else {
-      // Book finished
+      // Book truly finished (no pending dramatization and past last chunk)
+      console.log('📚 Book finished!');
       setIsPlaying(false);
       setCurrentChunkIndex(0);
       if (audioRef.current) {
         audioRef.current.currentTime = 0;
       }
-      console.log('📚 Book finished!');
     }
   }, [bookInfo, currentChunkIndex, playChunk]);
 
@@ -673,15 +796,21 @@ const BookPlayer: React.FC = () => {
   const calculateProgress = (): number => {
     if (!bookInfo) return 0;
 
+    // Clamp chunk index to valid range to prevent overflow
+    const validChunkIndex = Math.min(currentChunkIndex, bookInfo._internal.totalChunks - 1);
     const avgChunkDuration = bookInfo._internal.durationSeconds / bookInfo._internal.totalChunks;
-    const totalElapsed = currentChunkIndex * avgChunkDuration + currentTime;
+    const totalElapsed = validChunkIndex * avgChunkDuration + currentTime;
     return Math.min(100, (totalElapsed / bookInfo._internal.durationSeconds) * 100);
   };
 
   const getCurrentTotalTime = (): number => {
     if (!bookInfo) return 0;
+    // Clamp chunk index to valid range to prevent overflow
+    const validChunkIndex = Math.min(currentChunkIndex, bookInfo._internal.totalChunks - 1);
     const avgChunkDuration = bookInfo._internal.durationSeconds / bookInfo._internal.totalChunks;
-    return currentChunkIndex * avgChunkDuration + currentTime;
+    const totalElapsed = validChunkIndex * avgChunkDuration + currentTime;
+    // Clamp to max duration
+    return Math.min(totalElapsed, bookInfo._internal.durationSeconds);
   };
 
   // ========================================
@@ -723,6 +852,37 @@ const BookPlayer: React.FC = () => {
 
     initializePlayer();
   }, []);
+
+  // Periodically refresh chunk count while dramatization is pending
+  useEffect(() => {
+    if (!bookInfo?._internal?.dramatizationPending) return;
+    
+    const refreshInterval = setInterval(async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/book/info`);
+        if (response.ok) {
+          const info = await response.json();
+          if (info._internal?.totalChunks !== bookInfo._internal.totalChunks || 
+              info._internal?.dramatizationPending !== bookInfo._internal.dramatizationPending) {
+            console.log(`📊 Chunk count updated: ${bookInfo._internal.totalChunks} → ${info._internal.totalChunks} (pending: ${info._internal?.dramatizationPending})`);
+            setBookInfo(prev => prev ? {
+              ...prev,
+              _internal: {
+                ...prev._internal,
+                totalChunks: info._internal.totalChunks,
+                actualChunks: info._internal.actualChunks,
+                dramatizationPending: info._internal.dramatizationPending
+              }
+            } : prev);
+          }
+        }
+      } catch (e) {
+        // Silently ignore refresh errors
+      }
+    }, 5000); // Refresh every 5 seconds
+    
+    return () => clearInterval(refreshInterval);
+  }, [bookInfo?._internal?.dramatizationPending, bookInfo?._internal?.totalChunks]);
 
   // Attach audio event listeners
   useEffect(() => {
@@ -786,21 +946,36 @@ const BookPlayer: React.FC = () => {
       setBookInfo(info);
       setCurrentBookFile(filename);
       
-      // Load saved playback position for this book
-      const savedPosition = localStorage.getItem(`playbackPosition_${filename}`);
+      // Load saved playback position from backend (auto-invalidates when audiobook deleted)
       let startChunkIndex = 0;
       let startTime = 0;
-      if (savedPosition) {
+      
+      if (info.audiobookTitle) {
         try {
-          const position = JSON.parse(savedPosition);
-          startChunkIndex = position.chunkIndex || 0;
-          startTime = position.timeInChunk || 0;
-          console.log(`📍 Resuming from chunk ${startChunkIndex} at ${startTime.toFixed(1)}s`);
+          const positionRes = await fetch(
+            `${API_BASE_URL}/api/audiobooks/${encodeURIComponent(info.audiobookTitle)}/position`
+          );
+          if (positionRes.ok) {
+            const position = await positionRes.json();
+            // Validate saved position against actual book chunks
+            const savedChunk = position.currentChapter || 0;
+            const savedTime = position.currentTime || 0;
+            if (savedChunk >= 0 && savedChunk < info._internal.totalChunks) {
+              startChunkIndex = savedChunk;
+              startTime = savedTime;
+              console.log(`📍 Resuming from chunk ${startChunkIndex} at ${startTime.toFixed(1)}s (from backend)`);
+            } else if (savedChunk > 0) {
+              console.warn(`⚠️ Saved chunk ${savedChunk} invalid for this book (${info._internal.totalChunks} chunks), starting from beginning`);
+            }
+          } else if (positionRes.status === 404) {
+            // Audiobook doesn't exist yet - start from beginning (expected for new books)
+            console.log('📍 Starting from beginning (new audiobook)');
+          }
         } catch (e) {
-          console.warn('Failed to parse saved position, starting from beginning');
+          console.warn('Failed to load position from backend, starting from beginning:', e);
         }
       } else {
-        console.log('📍 Starting from beginning');
+        console.log('📍 Starting from beginning (no audiobookTitle)');
       }
       
       setCurrentChunkIndex(startChunkIndex);
@@ -922,10 +1097,12 @@ const BookPlayer: React.FC = () => {
           </div>
         </div>
 
-        {/* Chunk Info */}
+        {/* Chapter Info - Shows current chapter (sub-chunks hidden from user) */}
         <div style={styles.chunkInfo}>
-          Chunk {currentChunkIndex + 1}/{bookInfo._internal.totalChunks} | {formatTime(totalElapsed)} /{' '}
-          {bookInfo.estimatedDuration}
+          {currentChapterInfo.chapterTitle} ({currentChapterInfo.chapterIndex + 1}/{bookInfo.totalChapters || bookInfo.chapters?.length || 1})
+        </div>
+        <div style={{ textAlign: 'center', fontSize: '14px', color: '#666', marginBottom: '24px' }}>
+          {formatTime(totalElapsed)} / {bookInfo.estimatedDuration}
         </div>
 
         {/* Playback Controls */}

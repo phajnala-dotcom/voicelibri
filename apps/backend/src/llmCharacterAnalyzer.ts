@@ -1,10 +1,12 @@
 /**
- * LLM Character Analyzer - Phase 2 Implementation
+ * LLM Character Analyzer - Parallel Pipeline Implementation
  * 
  * Integrates Gemini 2.5 Flash for sophisticated character analysis and dramatization
  * 
  * Features:
- * - Full book character extraction (1M token context)
+ * - TWO-PHASE character extraction for fast startup:
+ *   Phase 1 (BLOCKING): First 3 chapters → full character DB → assign voices → LOCK
+ *   Phase 2 (PARALLEL): Background enrichment from remaining chapters
  * - Progressive chapter-by-chapter dialogue tagging
  * - Intelligent voice-to-character matching
  * - Caching for instant replay
@@ -12,6 +14,26 @@
 
 import { GoogleAuth } from 'google-auth-library';
 import { cleanText, CleaningConfig } from './textCleaner.js';
+import { Chapter } from './bookChunker.js';
+
+/**
+ * Result from initial character analysis (Phase 1)
+ */
+export interface InitialAnalysisResult {
+  characters: CharacterProfile[];
+  analyzedChapters: number;
+  totalCharsAnalyzed: number;
+  analysisTimeMs: number;
+}
+
+/**
+ * Result from character enrichment (Phase 2)
+ */
+export interface EnrichmentResult {
+  newCharacters: CharacterProfile[];
+  enrichedCharacters: CharacterProfile[];  // Existing chars with updated info
+  chapterIndex: number;
+}
 
 /**
  * Detailed character profile with personality traits
@@ -465,6 +487,243 @@ ${chapterText}`;
     confidence: number;
   }>> {
     throw new Error('refineDialogueDetection not implemented yet (Phase 2 feature)');
+  }
+
+  /**
+   * TWO-PHASE CHARACTER EXTRACTION - Phase 1 (BLOCKING)
+   * 
+   * Analyzes first N chapters to build initial character DB.
+   * This is BLOCKING because voice assignment requires character info.
+   * 
+   * @param chapters - All book chapters
+   * @param numChapters - Number of chapters to analyze (default: 3)
+   * @returns Initial analysis result with characters for voice assignment
+   */
+  async analyzeInitialChapters(
+    chapters: Chapter[],
+    numChapters: number = 3
+  ): Promise<InitialAnalysisResult> {
+    const startTime = Date.now();
+    const chaptersToAnalyze = chapters.slice(0, Math.min(numChapters, chapters.length));
+    
+    // Combine chapter texts
+    const combinedText = chaptersToAnalyze.map(ch => ch.text).join('\n\n---CHAPTER BREAK---\n\n');
+    const totalChars = combinedText.length;
+    
+    console.log(`🔍 Phase 1: Analyzing first ${chaptersToAnalyze.length} chapters (${(totalChars / 1000).toFixed(0)}k chars)...`);
+    
+    // Clean text first
+    const cleanedResult = cleanText(combinedText, {
+      removePageNumbers: true,
+      removeTableOfContents: true,
+      removeEditorialNotes: true,
+      removePublisherInfo: true,
+      removeHeadersFooters: true,
+      preserveCopyright: true,
+      preserveAuthor: true,
+      aggressive: false,
+    });
+    
+    const cleanedText = cleanedResult.cleanedText;
+    
+    const prompt = `You are an expert literary analyst. Analyze the FIRST ${chaptersToAnalyze.length} CHAPTERS of this book and extract information about ALL characters who speak dialogue.
+
+IMPORTANT RULES:
+1. Include ONLY characters who speak dialogue (have quoted speech)
+2. Minimum 1 dialogue line to qualify as a character
+3. Include ALL speaking characters found in these chapters
+4. Always include NARRATOR as first character
+5. Use character names exactly as they appear in dialogue attributions
+6. Order characters by importance (most dialogue first)
+
+For each character, provide:
+- name: Exact name from book (or "NARRATOR" for narration)
+- gender: "male", "female", or "neutral"
+- traits: Array of 2-4 personality traits from context (e.g., ["calm", "mature", "wise"])
+- ageRange: "child", "young adult", "adult", or "elderly"
+- role: "protagonist", "antagonist", "supporting", or "minor"
+- dialogueCount: Approximate number of dialogue lines in these chapters
+
+Return ONLY a valid JSON array with NO additional text or markdown:
+[{"name": "NARRATOR", "gender": "neutral", "traits": [...], ...}, ...]
+
+First ${chaptersToAnalyze.length} chapters:
+${cleanedText.substring(0, 200000)}`;
+    
+    try {
+      const response = await this.callGemini(prompt);
+      const characters = this.parseCharacterResponse(response);
+      
+      const analysisTime = Date.now() - startTime;
+      console.log(`  ✅ Phase 1 complete: ${characters.length} characters in ${analysisTime}ms`);
+      console.log(`     Characters: ${characters.map(c => c.name).join(', ')}`);
+      
+      return {
+        characters,
+        analyzedChapters: chaptersToAnalyze.length,
+        totalCharsAnalyzed: totalChars,
+        analysisTimeMs: analysisTime,
+      };
+    } catch (error) {
+      console.error('❌ Phase 1 character analysis failed:', error);
+      
+      return {
+        characters: [{
+          name: 'NARRATOR',
+          gender: 'neutral',
+          traits: ['clear', 'neutral'],
+          ageRange: 'adult',
+          role: 'supporting',
+          dialogueCount: 0,
+        }],
+        analyzedChapters: chaptersToAnalyze.length,
+        totalCharsAnalyzed: totalChars,
+        analysisTimeMs: Date.now() - startTime,
+      };
+    }
+  }
+
+  /**
+   * TWO-PHASE CHARACTER EXTRACTION - Phase 2 (PARALLEL)
+   * 
+   * Enriches character DB from additional chapters.
+   * Runs in PARALLEL with TTS generation.
+   * 
+   * NEW characters get added with voice assignment.
+   * EXISTING characters get enriched (traits, age, role) but voice stays LOCKED.
+   * 
+   * @param chapterText - Text of chapter to analyze
+   * @param chapterIndex - Index of the chapter
+   * @param existingCharacters - Current character DB
+   * @returns New and enriched characters
+   */
+  async enrichFromChapter(
+    chapterText: string,
+    chapterIndex: number,
+    existingCharacters: CharacterProfile[]
+  ): Promise<EnrichmentResult> {
+    console.log(`  🔄 Phase 2: Enriching from chapter ${chapterIndex + 1} (${(chapterText.length / 1000).toFixed(1)}k chars)...`);
+    
+    const existingNames = existingCharacters.map(c => c.name.toUpperCase());
+    
+    const prompt = `You are an expert literary analyst. Analyze this chapter and:
+1. Identify any NEW speaking characters not in the existing list
+2. Find additional information about EXISTING characters
+
+EXISTING CHARACTERS (already known):
+${existingCharacters.map(c => `- ${c.name} (${c.gender}, ${c.ageRange || 'unknown age'}, ${c.role || 'unknown role'})`).join('\n')}
+
+For NEW characters found, provide full profile:
+- name, gender, traits, ageRange, role, dialogueCount
+
+For EXISTING characters with NEW information, provide updates:
+- Only include if you found NEW traits, age clarification, or role information
+- Include the character name and only the NEW/updated fields
+
+Return JSON with two arrays:
+{
+  "newCharacters": [{"name": "...", "gender": "...", "traits": [...], "ageRange": "...", "role": "...", "dialogueCount": N}],
+  "enrichments": [{"name": "EXISTING_NAME", "newTraits": [...], "ageRange": "...", "role": "..."}]
+}
+
+Chapter text:
+${chapterText.substring(0, 100000)}`;
+    
+    try {
+      const response = await this.callGemini(prompt);
+      
+      // Parse response
+      let jsonText = response.trim();
+      if (jsonText.startsWith('```')) {
+        jsonText = jsonText.replace(/^```json?\s*/, '').replace(/\s*```$/, '');
+      }
+      
+      const result = JSON.parse(jsonText);
+      const newCharacters: CharacterProfile[] = result.newCharacters || [];
+      const enrichedCharacters: CharacterProfile[] = [];
+      
+      // Apply enrichments to existing characters
+      for (const enrichment of (result.enrichments || [])) {
+        const existing = existingCharacters.find(
+          c => c.name.toUpperCase() === enrichment.name?.toUpperCase()
+        );
+        if (existing) {
+          const enriched = { ...existing };
+          
+          // Merge new traits
+          if (enrichment.newTraits?.length > 0) {
+            enriched.traits = [...new Set([...existing.traits, ...enrichment.newTraits])];
+          }
+          
+          // Update age if not set or more specific
+          if (enrichment.ageRange && !existing.ageRange) {
+            enriched.ageRange = enrichment.ageRange;
+          }
+          
+          // Update role if more important
+          const roleOrder = ['protagonist', 'antagonist', 'supporting', 'minor'];
+          if (enrichment.role && roleOrder.indexOf(enrichment.role) < roleOrder.indexOf(existing.role || 'minor')) {
+            enriched.role = enrichment.role;
+          }
+          
+          enrichedCharacters.push(enriched);
+        }
+      }
+      
+      if (newCharacters.length > 0 || enrichedCharacters.length > 0) {
+        console.log(`     ✅ Found ${newCharacters.length} new, enriched ${enrichedCharacters.length} existing`);
+      }
+      
+      return {
+        newCharacters,
+        enrichedCharacters,
+        chapterIndex,
+      };
+    } catch (error) {
+      console.error(`  ⚠️ Phase 2 enrichment failed for chapter ${chapterIndex + 1}:`, error);
+      return {
+        newCharacters: [],
+        enrichedCharacters: [],
+        chapterIndex,
+      };
+    }
+  }
+
+  /**
+   * Helper to parse character JSON response with recovery
+   */
+  private parseCharacterResponse(response: string): CharacterProfile[] {
+    let jsonText = response.trim();
+    if (jsonText.startsWith('```')) {
+      jsonText = jsonText.replace(/^```json?\s*/, '').replace(/\s*```$/, '');
+    }
+    
+    try {
+      return JSON.parse(jsonText);
+    } catch (parseError) {
+      console.warn('  ⚠️ JSON parse failed, attempting recovery...');
+      
+      // Try to recover from truncated JSON
+      const lastCompleteObjectEnd = jsonText.lastIndexOf('},');
+      if (lastCompleteObjectEnd > 0) {
+        const recovered = jsonText.substring(0, lastCompleteObjectEnd + 1) + ']';
+        try {
+          const characters = JSON.parse(recovered);
+          console.log(`  ✅ Recovery successful! Found ${characters.length} characters`);
+          return characters;
+        } catch (recoveryError) {
+          // Try simpler recovery
+          const firstBracket = jsonText.indexOf('[');
+          const lastValidEnd = jsonText.lastIndexOf('}]');
+          if (firstBracket >= 0 && lastValidEnd > firstBracket) {
+            const simpleRecovery = jsonText.substring(firstBracket, lastValidEnd + 2);
+            return JSON.parse(simpleRecovery);
+          }
+          throw recoveryError;
+        }
+      }
+      throw parseError;
+    }
   }
 }
 
