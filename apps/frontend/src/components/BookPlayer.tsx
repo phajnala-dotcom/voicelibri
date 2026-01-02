@@ -268,20 +268,64 @@ const BookPlayer: React.FC = () => {
     return response.json();
   };
 
+  /**
+   * Convert global chunk index to chapter:subChunk indices
+   * This allows direct addressing which is more reliable than backend conversion
+   * Returns chapterNum (1-based) and subChunkIndex (0-based within chapter)
+   */
+  const globalToChapterIndex = (globalIndex: number): { chapterIndex: number; subChunkIndex: number } | null => {
+    if (!bookInfo?.chapters) return null;
+    
+    for (let i = 0; i < bookInfo.chapters.length; i++) {
+      const chapter = bookInfo.chapters[i];
+      const chapterEnd = chapter.subChunkStart + chapter.subChunkCount;
+      
+      if (globalIndex < chapterEnd) {
+        return {
+          chapterIndex: chapter.index,  // Use backend's 1-based chapter number
+          subChunkIndex: globalIndex - chapter.subChunkStart,
+        };
+      }
+    }
+    
+    // Beyond known chapters - return last known position
+    if (bookInfo.chapters.length > 0) {
+      const lastChapter = bookInfo.chapters[bookInfo.chapters.length - 1];
+      return {
+        chapterIndex: lastChapter.index,  // Use backend's 1-based chapter number
+        subChunkIndex: globalIndex - lastChapter.subChunkStart,
+      };
+    }
+    
+    return null;
+  };
+
   const fetchChunkAudio = async (
     chunkIndex: number,
     retryCount = 0,
     bookFileOverride?: string // Allow override for book selection race condition
   ): Promise<string> => {
     try {
+      // FIX BUG 1: Convert global index to chapter:subChunk and send BOTH
+      // This allows direct addressing (preferred) with fallback to global index
+      const chapterInfo = globalToChapterIndex(chunkIndex);
+      
+      const requestBody: Record<string, unknown> = {
+        chunkIndex, // Legacy fallback
+        voiceName: selectedVoiceName || 'Algieba',
+        bookFile: bookFileOverride || currentBookFile,
+      };
+      
+      // Add direct chapter:subChunk addressing when available (preferred)
+      if (chapterInfo) {
+        requestBody.chapterIndex = chapterInfo.chapterIndex;
+        requestBody.subChunkIndex = chapterInfo.subChunkIndex;
+      }
+      
       const response = await fetch(`${API_BASE_URL}/api/tts/chunk`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          chunkIndex,
-          voiceName: selectedVoiceName || 'Algieba', // Send selected voice to backend
-          bookFile: bookFileOverride || currentBookFile // Use override if provided
-        }),
+        body: JSON.stringify(requestBody),
       });
 
       // Handle 202 "chunk not ready yet" - retry after delay

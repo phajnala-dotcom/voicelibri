@@ -649,22 +649,26 @@ export function extractEpubChapters(epubBuffer: Buffer): Chapter[] {
       const htmlContent = contentEntry.getData().toString('utf8');
       const plainText = stripHtml(htmlContent);
       
-      // Skip empty or very short chapters (< 100 chars - likely just title/metadata)
-      if (plainText.trim().length < 100) {
+      // Skip empty or very short chapters (< 50 chars - likely just title/metadata/junk)
+      // These skipped sections are NOT numbered - only real chapters get chapter numbers
+      if (plainText.trim().length < 50) {
         if (plainText.trim().length > 0) {
-          console.log(`⏭️ EPUB: Skipping short chapter (${plainText.trim().length} chars): "${plainText.trim().substring(0, 50)}..."`);
+          console.log(`⏭️ EPUB: Skipping short section (${plainText.trim().length} chars): "${plainText.trim().substring(0, 50)}..."`);
         }
         continue;
       }
       
+      // Chapter number is 1-based (first real chapter = Chapter 1)
+      const chapterNum = chapters.length + 1;
+      
       // Try to get title from TOC or generate one
-      const title = chapterTitles[i] || `Chapter ${i + 1}`;
+      const title = chapterTitles[i] || `Chapter ${chapterNum}`;
       
       const startOffset = currentOffset;
       const endOffset = currentOffset + plainText.length;
       
       chapters.push({
-        index: chapters.length,
+        index: chapterNum,  // 1-based chapter number
         title,
         startOffset,
         endOffset,

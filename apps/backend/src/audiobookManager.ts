@@ -29,7 +29,7 @@ export interface SubChunkBoundary {
  * Enables extraction of sub-chunks from consolidated chapter
  */
 export interface ChapterBoundaries {
-  chapterIndex: number;
+  chapterIndex: number;    // Note: This is actually chapterNum (1-based) despite the name
   totalDuration: number;   // Total chapter duration in seconds
   subChunks: SubChunkBoundary[];
   consolidatedAt: string;  // ISO timestamp
@@ -314,17 +314,18 @@ export function getTempChunkPath(bookTitle: string, chunkIndex: number): string 
  * Where CCC = chapter index (0-padded), SSS = sub-chunk index (0-padded)
  * 
  * @param bookTitle - Sanitized book title
- * @param chapterIndex - Chapter index (0-based)
+ * @param chapterNum - Chapter number (1-based, e.g., Chapter 1 = 1)
  * @param subChunkIndex - Sub-chunk index within chapter (0-based)
  * @returns Absolute path to the sub-chunk file
  */
 export function getSubChunkPath(
   bookTitle: string, 
-  chapterIndex: number, 
+  chapterNum: number, 
   subChunkIndex: number
 ): string {
   const tempDir = getTempFolder(bookTitle);
-  const chapterPad = chapterIndex.toString().padStart(3, '0');
+  // Use 1-based chapter number in filename (Chapter 1 -> 001)
+  const chapterPad = chapterNum.toString().padStart(3, '0');
   const subChunkPad = subChunkIndex.toString().padStart(3, '0');
   const filename = `subchunk_${chapterPad}_${subChunkPad}.wav`;
   return path.join(tempDir, filename);
@@ -334,17 +335,17 @@ export function getSubChunkPath(
  * Parse sub-chunk filename to extract indices
  * 
  * @param filename - Filename like "subchunk_001_023.wav"
- * @returns Chapter and sub-chunk indices, or null if invalid format
+ * @returns Chapter number (1-based) and sub-chunk index (0-based), or null if invalid format
  */
 export function parseSubChunkFilename(filename: string): { 
-  chapterIndex: number; 
-  subChunkIndex: number 
+  chapterNum: number;  // 1-based chapter number
+  subChunkIndex: number  // 0-based sub-chunk index
 } | null {
   const match = filename.match(/^subchunk_(\d{3})_(\d{3})\.wav$/);
   if (!match) return null;
   return {
-    chapterIndex: parseInt(match[1], 10),
-    subChunkIndex: parseInt(match[2], 10),
+    chapterNum: parseInt(match[1], 10),  // 1-based
+    subChunkIndex: parseInt(match[2], 10),  // 0-based
   };
 }
 
@@ -352,10 +353,10 @@ export function parseSubChunkFilename(filename: string): {
  * Count sub-chunks for a specific chapter
  * 
  * @param bookTitle - Sanitized book title
- * @param chapterIndex - Chapter index (0-based)
+ * @param chapterNum - Chapter number (1-based)
  * @returns Number of sub-chunk files found for this chapter
  */
-export function countChapterSubChunks(bookTitle: string, chapterIndex: number): number {
+export function countChapterSubChunks(bookTitle: string, chapterNum: number): number {
   const tempDir = getTempFolder(bookTitle);
   
   if (!fs.existsSync(tempDir)) {
@@ -364,7 +365,7 @@ export function countChapterSubChunks(bookTitle: string, chapterIndex: number): 
   
   try {
     const files = fs.readdirSync(tempDir);
-    const chapterPad = chapterIndex.toString().padStart(3, '0');
+    const chapterPad = chapterNum.toString().padStart(3, '0');
     const pattern = new RegExp(`^subchunk_${chapterPad}_\\d{3}\\.wav$`);
     return files.filter(f => pattern.test(f)).length;
   } catch (error) {
@@ -377,10 +378,10 @@ export function countChapterSubChunks(bookTitle: string, chapterIndex: number): 
  * List all sub-chunks for a chapter (sorted by index)
  * 
  * @param bookTitle - Sanitized book title
- * @param chapterIndex - Chapter index (0-based)
+ * @param chapterNum - Chapter number (1-based)
  * @returns Array of sub-chunk file paths, sorted by sub-chunk index
  */
-export function listChapterSubChunks(bookTitle: string, chapterIndex: number): string[] {
+export function listChapterSubChunks(bookTitle: string, chapterNum: number): string[] {
   const tempDir = getTempFolder(bookTitle);
   
   if (!fs.existsSync(tempDir)) {
@@ -389,7 +390,7 @@ export function listChapterSubChunks(bookTitle: string, chapterIndex: number): s
   
   try {
     const files = fs.readdirSync(tempDir);
-    const chapterPad = chapterIndex.toString().padStart(3, '0');
+    const chapterPad = chapterNum.toString().padStart(3, '0');
     const pattern = new RegExp(`^subchunk_${chapterPad}_\\d{3}\\.wav$`);
     
     return files
@@ -406,21 +407,22 @@ export function listChapterSubChunks(bookTitle: string, chapterIndex: number): s
  * Get chapter file path with title
  * 
  * @param bookTitle - Sanitized book title
- * @param chapterIndex - Chapter index (0-based)
+ * @param chapterNum - Chapter number (1-based)
  * @param chapterTitle - Chapter title (optional, will be sanitized)
  * @param partIndex - Part index for long chapters (optional, 0-based)
  * @returns Absolute path to the chapter file
  */
 export function getChapterPath(
   bookTitle: string, 
-  chapterIndex: number, 
+  chapterNum: number, 
   chapterTitle?: string,
   partIndex?: number
 ): string {
   const bookDir = getAudiobookFolder(bookTitle);
   
   // Build filename: "06_Kapitola 5_Part 01.wav"
-  let filename = `${(chapterIndex + 1).toString().padStart(2, '0')}`;
+  // chapterNum is 1-based, so use directly
+  let filename = `${chapterNum.toString().padStart(2, '0')}`;
   
   if (chapterTitle) {
     const sanitizedTitle = sanitizeChapterTitle(chapterTitle);
@@ -505,12 +507,13 @@ export function loadVoiceMapForBook(bookTitle: string): Record<string, string> {
  * Get chapter boundaries file path
  * 
  * @param bookTitle - Sanitized book title
- * @param chapterIndex - Chapter index (0-based)
+ * @param chapterNum - Chapter number (1-based)
  * @returns Path to boundaries JSON file
  */
-export function getChapterBoundariesPath(bookTitle: string, chapterIndex: number): string {
+export function getChapterBoundariesPath(bookTitle: string, chapterNum: number): string {
   const bookDir = getAudiobookFolder(bookTitle);
-  const chapterPad = (chapterIndex + 1).toString().padStart(2, '0');
+  // chapterNum is 1-based, use directly
+  const chapterPad = chapterNum.toString().padStart(2, '0');
   return path.join(bookDir, `${chapterPad}_boundaries.json`);
 }
 
@@ -518,7 +521,7 @@ export function getChapterBoundariesPath(bookTitle: string, chapterIndex: number
  * Save chapter boundaries after consolidation
  * 
  * @param bookTitle - Sanitized book title
- * @param boundaries - Chapter boundaries data
+ * @param boundaries - Chapter boundaries data (chapterIndex is 1-based chapterNum)
  */
 export function saveChapterBoundaries(bookTitle: string, boundaries: ChapterBoundaries): void {
   const boundariesPath = getChapterBoundariesPath(bookTitle, boundaries.chapterIndex);
@@ -530,18 +533,18 @@ export function saveChapterBoundaries(bookTitle: string, boundaries: ChapterBoun
   }
   
   fs.writeFileSync(boundariesPath, JSON.stringify(boundaries, null, 2), 'utf-8');
-  console.log(`💾 Saved boundaries for chapter ${boundaries.chapterIndex + 1}: ${boundaries.subChunks.length} sub-chunks`);
+  console.log(`💾 Saved boundaries for chapter ${boundaries.chapterIndex}: ${boundaries.subChunks.length} sub-chunks`);
 }
 
 /**
  * Load chapter boundaries
  * 
  * @param bookTitle - Sanitized book title
- * @param chapterIndex - Chapter index (0-based)
+ * @param chapterNum - Chapter number (1-based)
  * @returns Chapter boundaries or null if not found
  */
-export function loadChapterBoundaries(bookTitle: string, chapterIndex: number): ChapterBoundaries | null {
-  const boundariesPath = getChapterBoundariesPath(bookTitle, chapterIndex);
+export function loadChapterBoundaries(bookTitle: string, chapterNum: number): ChapterBoundaries | null {
+  const boundariesPath = getChapterBoundariesPath(bookTitle, chapterNum);
   
   if (!fs.existsSync(boundariesPath)) {
     return null;
@@ -551,7 +554,7 @@ export function loadChapterBoundaries(bookTitle: string, chapterIndex: number): 
     const content = fs.readFileSync(boundariesPath, 'utf-8');
     return JSON.parse(content) as ChapterBoundaries;
   } catch (error) {
-    console.error(`✗ Failed to load chapter ${chapterIndex + 1} boundaries:`, error);
+    console.error(`✗ Failed to load chapter ${chapterNum} boundaries:`, error);
     return null;
   }
 }
@@ -560,17 +563,17 @@ export function loadChapterBoundaries(bookTitle: string, chapterIndex: number): 
  * Check if chapter is consolidated (chapter file + boundaries exist)
  * 
  * @param bookTitle - Sanitized book title
- * @param chapterIndex - Chapter index (0-based)
+ * @param chapterNum - Chapter number (1-based)
  * @param chapterTitle - Optional chapter title for path resolution
  * @returns True if chapter is fully consolidated
  */
 export function isChapterConsolidated(
   bookTitle: string, 
-  chapterIndex: number,
+  chapterNum: number,
   chapterTitle?: string
 ): boolean {
-  const chapterPath = getChapterPath(bookTitle, chapterIndex, chapterTitle);
-  const boundariesPath = getChapterBoundariesPath(bookTitle, chapterIndex);
+  const chapterPath = getChapterPath(bookTitle, chapterNum, chapterTitle);
+  const boundariesPath = getChapterBoundariesPath(bookTitle, chapterNum);
   
   return fs.existsSync(chapterPath) && fs.existsSync(boundariesPath);
 }
@@ -580,19 +583,19 @@ export function isChapterConsolidated(
  * Uses byte boundaries to slice the correct portion
  * 
  * @param bookTitle - Sanitized book title
- * @param chapterIndex - Chapter index (0-based)
+ * @param chapterNum - Chapter number (1-based)
  * @param subChunkIndex - Sub-chunk index within chapter
  * @param chapterTitle - Optional chapter title for path resolution
  * @returns Audio buffer for the sub-chunk, or null if not available
  */
 export function extractSubChunkFromChapter(
   bookTitle: string,
-  chapterIndex: number,
+  chapterNum: number,
   subChunkIndex: number,
   chapterTitle?: string
 ): Buffer | null {
   // Load boundaries
-  const boundaries = loadChapterBoundaries(bookTitle, chapterIndex);
+  const boundaries = loadChapterBoundaries(bookTitle, chapterNum);
   if (!boundaries) {
     return null;
   }
@@ -600,12 +603,12 @@ export function extractSubChunkFromChapter(
   // Find sub-chunk boundary
   const subChunk = boundaries.subChunks.find(sc => sc.index === subChunkIndex);
   if (!subChunk) {
-    console.error(`✗ Sub-chunk ${subChunkIndex} not found in chapter ${chapterIndex + 1} boundaries`);
+    console.error(`✗ Sub-chunk ${subChunkIndex} not found in chapter ${chapterNum} boundaries`);
     return null;
   }
   
   // Load chapter file
-  const chapterPath = getChapterPath(bookTitle, chapterIndex, chapterTitle);
+  const chapterPath = getChapterPath(bookTitle, chapterNum, chapterTitle);
   if (!fs.existsSync(chapterPath)) {
     console.error(`✗ Chapter file not found: ${chapterPath}`);
     return null;
@@ -625,7 +628,7 @@ export function extractSubChunkFromChapter(
     // Create new WAV buffer with header + extracted PCM
     const wavBuffer = createWavBuffer(pcmData);
     
-    console.log(`📤 Extracted sub-chunk ${chapterIndex}:${subChunkIndex} from chapter (${wavBuffer.length} bytes)`);
+    console.log(`📤 Extracted sub-chunk ${chapterNum}:${subChunkIndex} from chapter (${wavBuffer.length} bytes)`);
     return wavBuffer;
   } catch (error) {
     console.error(`✗ Failed to extract sub-chunk from chapter:`, error);
