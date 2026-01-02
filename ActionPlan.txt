@@ -1,3 +1,14 @@
+Opus 4.5 - why sample_test does not dramatize properly
+
+
+Testing with preview models TTS
+
+System prompt for TTS according Gemini app
+
+mobile app - explore ways
+
+refactoring to sub-chunks only
+
 OTHER EBOOKS FORMATS SUPPORT
 Implement most used ebooks formats throughout the app:
 - Mobi
