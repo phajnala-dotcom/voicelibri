@@ -536,14 +536,6 @@ interface AudioFetchResult {
       // Play audio
       if (audioRef.current) {
         console.log('🎵 Setting audio src and playing...');
-        
-        // DEFENSIVE: If switching from sub-chunk to whole chapter for the SAME chunk,
-        // preserve the current playback position instead of resetting
-        const previousTime = audioRef.current.currentTime;
-        const previousCached = audioCache.get(currentChunkIndex);
-        const isSameChunk = chunkIndex === currentChunkIndex;
-        const switchingToWholeChapter = fetchResult.isWholeChapter && (!previousCached?.isWholeChapter);
-        
         // Clear previous source first to avoid 'no supported source' errors
         audioRef.current.pause();
         audioRef.current.src = '';
@@ -554,16 +546,8 @@ interface AudioFetchResult {
         
         // If this is a whole chapter with seek offset, seek to correct position
         if (fetchResult.isWholeChapter && fetchResult.seekOffsetSec && fetchResult.seekOffsetSec > 0) {
-          // DEFENSIVE: If replaying the same chunk after switching to whole chapter,
-          // use the previous playback position + seek offset to maintain continuity
-          if (isSameChunk && switchingToWholeChapter && previousTime > 0) {
-            const preservedPosition = fetchResult.seekOffsetSec + previousTime;
-            console.log(`📦 DEFENSIVE: Preserving position in consolidated chapter: ${fetchResult.seekOffsetSec.toFixed(2)}s + ${previousTime.toFixed(2)}s = ${preservedPosition.toFixed(2)}s`);
-            audioRef.current.currentTime = preservedPosition;
-          } else {
-            console.log(`📦 Seeking to ${fetchResult.seekOffsetSec.toFixed(2)}s in consolidated chapter`);
-            audioRef.current.currentTime = fetchResult.seekOffsetSec;
-          }
+          console.log(`📦 Seeking to ${fetchResult.seekOffsetSec.toFixed(2)}s in consolidated chapter`);
+          audioRef.current.currentTime = fetchResult.seekOffsetSec;
         }
         
         await audioRef.current.play();

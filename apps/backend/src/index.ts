@@ -703,8 +703,8 @@ async function startBackgroundDramatization(
             const chapterTitle = BOOK_CHAPTERS[chapterNum]?.title;
             await consolidateChapterFromSubChunks(bookTitle, chapterNum, chapterTitle);
             console.log(`   📦 Chapter ${chapterNum} consolidated`);
-            // Clean up temp sub-chunks after successful consolidation
-            deleteChapterSubChunks(bookTitle, chapterNum);
+            // NOTE: Sub-chunks are NOT deleted here - they are kept for playback
+            // Cleanup happens via trackSubChunkPlayed() after chapter is fully played
           } catch (consErr) {
             console.error(`   ⚠️ Chapter ${chapterNum} consolidation failed:`, consErr);
           }
@@ -742,8 +742,8 @@ async function startBackgroundDramatization(
             const chapterTitle = BOOK_CHAPTERS[chapterNum]?.title;
             await consolidateChapterFromSubChunks(bookTitle, chapterNum, chapterTitle);
             console.log(`   📦 Chapter ${chapterNum} consolidated (fallback)`);
-            // Clean up temp sub-chunks after successful consolidation
-            deleteChapterSubChunks(bookTitle, chapterNum);
+            // NOTE: Sub-chunks are NOT deleted here - they are kept for playback
+            // Cleanup happens via trackSubChunkPlayed() after chapter is fully played
           } catch (consErr) {
             console.error(`   ⚠️ Chapter ${chapterNum} consolidation failed:`, consErr);
           }
@@ -1026,31 +1026,6 @@ app.post('/api/book/select', async (req: Request, res: Response) => {
       console.log(`   Chapters generated: ${existingMetadata.chapters.filter(c => c && c.isGenerated).length}`);
     }
     console.log(`   Library version: ${hasLibraryVersion ? 'YES' : 'NO'}`);
-    
-    // FIX: Update existing metadata with correct chapter titles from fresh EPUB parsing
-    // This fixes stale metadata that may have incorrect titles (e.g., "1" instead of "Section 2")
-    if (existingMetadata && BOOK_CHAPTERS.length > 0) {
-      let titlesUpdated = false;
-      const validChapters = BOOK_CHAPTERS.filter((ch, i) => i > 0 && ch !== null);
-      
-      for (let i = 0; i < validChapters.length && i < existingMetadata.chapters.length; i++) {
-        const freshTitle = validChapters[i].title;
-        const storedTitle = existingMetadata.chapters[i]?.title;
-        
-        if (freshTitle !== storedTitle) {
-          console.log(`   📝 Updating chapter ${i + 1} title: "${storedTitle}" → "${freshTitle}"`);
-          existingMetadata.chapters[i].title = freshTitle;
-          existingMetadata.chapters[i].filename = `${(i + 1).toString().padStart(2, '0')}_${sanitizeChapterTitle(freshTitle)}.wav`;
-          titlesUpdated = true;
-        }
-      }
-      
-      if (titlesUpdated) {
-        existingMetadata.lastUpdated = new Date().toISOString();
-        saveAudiobookMetadata(bookTitle, existingMetadata);
-        console.log(`   ✅ Metadata titles updated from fresh EPUB parsing`);
-      }
-    }
     
     // IMPORTANT: Create metadata immediately if it doesn't exist
     // This enables position save/load to work from the start
@@ -1430,21 +1405,9 @@ app.post('/api/tts/chunk', async (req: Request, res: Response) => {
         
         // Approximate seek position: (subChunkIndex / totalSubChunks) * totalDuration
         // This assumes roughly equal sub-chunk durations
-        // SAFETY: Clamp to valid range to prevent seeking past chapter end
-        let seekOffsetSec = 0;
-        if (localSubChunkIndex > 0 && totalSubChunks > 1) {
-          seekOffsetSec = (localSubChunkIndex / totalSubChunks) * chapterDurationSec;
-          // Clamp to 95% of chapter duration to leave some buffer
-          seekOffsetSec = Math.min(seekOffsetSec, chapterDurationSec * 0.95);
-        }
+        const seekOffsetSec = (localSubChunkIndex / totalSubChunks) * chapterDurationSec;
         
         console.log(`   Seek offset: ${seekOffsetSec.toFixed(2)}s (subChunk ${localSubChunkIndex}/${totalSubChunks}, chapter ${chapterDurationSec.toFixed(1)}s)`);
-        
-        // SAFETY CHECK: Log warning if CHAPTER_SUBCHUNKS is missing/stale
-        if (!chapterSubChunks || chapterSubChunks.length === 0) {
-          console.warn(`   ⚠️ CHAPTER_SUBCHUNKS missing for chapter ${chapterNum}, using safe seekOffset=0`);
-          seekOffsetSec = 0;
-        }
         
         res.setHeader('Content-Type', 'audio/wav');
         res.setHeader('Content-Length', chapterAudio.length.toString());

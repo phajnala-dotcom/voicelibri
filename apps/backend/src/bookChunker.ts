@@ -931,11 +931,21 @@ export function extractEpubChapters(epubBuffer: Buffer): Chapter[] {
  * @returns Extracted title or null
  */
 function extractTitleFromHtml(html: string): string | null {
+  // Helper: Check if extracted title is meaningful enough to use
+  // Rejects: too short (<3 chars), just numbers, just roman numerals
+  // Returns null for bad titles so fallback "Section N"/"Chapter N" is used
+  const isValidTitle = (title: string): boolean => {
+    if (title.length < 3) return false;
+    if (/^\d+$/.test(title)) return false;
+    if (/^[IVXLCDM]+$/i.test(title)) return false;
+    return true;
+  };
+
   // Try h1 tag first (most common for chapter titles)
   const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
   if (h1Match) {
     const title = stripHtml(h1Match[1]).trim();
-    if (title.length > 0 && title.length < 200) {
+    if (title.length > 0 && title.length < 200 && isValidTitle(title)) {
       return title;
     }
   }
@@ -944,7 +954,7 @@ function extractTitleFromHtml(html: string): string | null {
   const h2Match = html.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i);
   if (h2Match) {
     const title = stripHtml(h2Match[1]).trim();
-    if (title.length > 0 && title.length < 200) {
+    if (title.length > 0 && title.length < 200 && isValidTitle(title)) {
       return title;
     }
   }
@@ -953,7 +963,7 @@ function extractTitleFromHtml(html: string): string | null {
   const h3Match = html.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i);
   if (h3Match) {
     const title = stripHtml(h3Match[1]).trim();
-    if (title.length > 0 && title.length < 200) {
+    if (title.length > 0 && title.length < 200 && isValidTitle(title)) {
       return title;
     }
   }
@@ -962,7 +972,7 @@ function extractTitleFromHtml(html: string): string | null {
   const classTitleMatch = html.match(/<[^>]+class="[^"]*(?:title|chapter|kapitola|heading)[^"]*"[^>]*>([\s\S]*?)<\/[^>]+>/i);
   if (classTitleMatch) {
     const title = stripHtml(classTitleMatch[1]).trim();
-    if (title.length > 0 && title.length < 200) {
+    if (title.length > 0 && title.length < 200 && isValidTitle(title)) {
       return title;
     }
   }
@@ -971,7 +981,7 @@ function extractTitleFromHtml(html: string): string | null {
   const tocMarkerMatch = html.match(/<p[^>]+id="[^"]*(?:toc|marker)[^"]*"[^>]*>([\s\S]*?)<\/p>/i);
   if (tocMarkerMatch) {
     const title = stripHtml(tocMarkerMatch[1]).trim();
-    if (title.length > 0 && title.length < 200) {
+    if (title.length > 0 && title.length < 200 && isValidTitle(title)) {
       return title;
     }
   }
