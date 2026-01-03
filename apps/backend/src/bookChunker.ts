@@ -3,6 +3,23 @@ import { XMLParser } from 'fast-xml-parser';
 import path from 'path';
 
 /**
+ * Check if a title is meaningful (not just a number, not too short, has semantic content)
+ * @param title - The title to validate
+ * @returns true if the title is meaningful and should be used, false if fallback needed
+ */
+function isMeaningfulTitle(title: string | undefined): boolean {
+  if (!title) return false;
+  const trimmed = title.trim();
+  // Too short (less than 3 chars)
+  if (trimmed.length < 3) return false;
+  // Just a number
+  if (/^\d+$/.test(trimmed)) return false;
+  // Just roman numerals
+  if (/^[IVXLCDM]+$/i.test(trimmed)) return false;
+  return true;
+}
+
+/**
  * Chunks book text into smaller pieces for TTS processing
  * Breaks at sentence endings AFTER reaching minimum chunk size
  * @param fullText - The complete book text
@@ -723,8 +740,8 @@ export function classifySections(sections: RawSection[]): Chapter[] {
     
     if (section.isFrontMatter) {
       displayNumber = null;
-      // For front matter: use extracted title or "Section N"
-      finalTitle = section.title || `Section ${sectionNumber}`;
+      // For front matter: use extracted title only if meaningful, else "Section N"
+      finalTitle = isMeaningfulTitle(section.title) ? section.title! : `Section ${sectionNumber}`;
       sectionNumber++;
     } else {
       // For real chapters: use parsed number or sequential
@@ -737,8 +754,8 @@ export function classifySections(sections: RawSection[]): Chapter[] {
       } else {
         displayNumber = chapterNumber++;
       }
-      // For chapters: use extracted title or "Chapter N"
-      finalTitle = section.title || `Chapter ${displayNumber}`;
+      // For chapters: use extracted title only if meaningful, else "Chapter N"
+      finalTitle = isMeaningfulTitle(section.title) ? section.title! : `Chapter ${displayNumber}`;
     }
     
     const chapterIndex = chapters.length + 1; // 1-based internal index
