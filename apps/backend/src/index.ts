@@ -276,12 +276,9 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
   let hasVoiceTags = /\[VOICE=.*?\]/.test(BOOK_TEXT);
   
   // HYBRID DRAMATIZATION: Auto-tag dialogue with LLM
-  // For short books (<10k chars): do immediate full dramatization
-  // For longer books: scan characters now, dramatize chunks on-demand during TTS
-  const isShortBook = BOOK_TEXT.length < 10000; // ~2000 words
-  
+  // All books use the same background dramatization process
   if (enableDramatization && !hasVoiceTags) {
-    console.log(`\n🎭 ${isShortBook ? 'IMMEDIATE' : 'ON-DEMAND'} DRAMATIZATION`);
+    console.log(`\n🎭 BACKGROUND DRAMATIZATION`);
     console.log('==========================================');
     
     try {
@@ -338,68 +335,29 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
       }
       console.log('');
       
-      // Store characters and analyzer for on-demand dramatization
+      // Store characters and analyzer for background dramatization
       (global as any).DRAMATIZATION_CHARACTERS = characters;
       (global as any).DRAMATIZATION_CONFIG = geminiConfig;
       (global as any).DRAMATIZATION_ANALYZER = analyzer;
       
-      // SHORT BOOKS: Do immediate full dramatization
-      if (isShortBook) {
-        console.log('📝 Short book - dramatizing immediately...');
-        
-        // Use tagChapterHybrid for quick tagging
-        const dramatizedChapters: string[] = [];
-        const chapterCount = getChapterCount();
-        for (let chapterNum = 1; chapterNum < BOOK_CHAPTERS.length; chapterNum++) {
-          const chapter = BOOK_CHAPTERS[chapterNum];
-          console.log(`   Dramatizing chapter ${chapterNum}/${chapterCount}...`);
-          
-          // Use tagChapterHybrid which handles dialogue tagging
-          const result = await tagChapterHybrid(
-            chapter.text,
-            characters,
-            analyzer,
-            chapterNum  // chapter number (1-based)
-          );
-          
-          dramatizedChapters.push(result.taggedText);
-          
-          // Update chapter with dramatized text
-          BOOK_CHAPTERS[chapterNum] = {
-            ...chapter,
-            text: result.taggedText
-          };
-        }
-        
-        // Update BOOK_TEXT with all dramatized chapters
-        BOOK_TEXT = dramatizedChapters.join('\n\n');
-        hasVoiceTags = true; // Now it's tagged!
-        
-        (global as any).DRAMATIZATION_ENABLED = false; // No need for on-demand
-        BOOK_METADATA.isDramatized = true;
-        BOOK_METADATA.dramatizationType = 'hybrid-optimized';
-        BOOK_METADATA.charactersFound = characters.length;
-        
-        console.log('✅ Short book dramatization complete!\n');
-      } else {
-        // LONGER BOOKS: Background parallel dramatization (non-blocking)
-        (global as any).DRAMATIZATION_ENABLED = true;
-        
-        // Update metadata
-        BOOK_METADATA.isDramatized = false; // Will be true after chunks are dramatized
-        BOOK_METADATA.dramatizationType = 'parallel-background';
-        BOOK_METADATA.charactersFound = characters.length;
-        
-        console.log('✅ Character scan complete\n');
-        console.log('🚀 Starting PARALLEL BACKGROUND DRAMATIZATION...');
-        console.log('   This runs independently - playback starts immediately!\n');
-        
-        // Start background dramatization (non-blocking)
-        // This will dramatize chapters in parallel while user can start playback
-        startBackgroundDramatization(characters, analyzer).catch(err => 
-          console.error('❌ Background dramatization failed:', err)
-        );
-      }
+      // ALL BOOKS: Background parallel dramatization (non-blocking)
+      // Same process regardless of book length for consistency
+      (global as any).DRAMATIZATION_ENABLED = true;
+      
+      // Update metadata
+      BOOK_METADATA.isDramatized = false; // Will be true after chunks are dramatized
+      BOOK_METADATA.dramatizationType = 'parallel-background';
+      BOOK_METADATA.charactersFound = characters.length;
+      
+      console.log('✅ Character scan complete\n');
+      console.log('🚀 Starting PARALLEL BACKGROUND DRAMATIZATION...');
+      console.log('   This runs independently - playback starts immediately!\n');
+      
+      // Start background dramatization (non-blocking)
+      // This will dramatize chapters in parallel while user can start playback
+      startBackgroundDramatization(characters, analyzer).catch(err => 
+        console.error('❌ Background dramatization failed:', err)
+      );
       
     } catch (error) {
       console.error('\n❌ CHARACTER SCAN FAILED');

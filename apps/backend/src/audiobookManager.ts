@@ -109,11 +109,19 @@ export function sanitizeBookTitle(title: string): string {
  * @returns Sanitized filename-safe string
  */
 export function sanitizeChapterTitle(title: string): string {
-  return title
+  let sanitized = title
     .replace(/[<>:"/\\|?*]/g, '') // Remove invalid filename characters
     .replace(/\.+$/, '') // Remove trailing dots
-    .replace(/^Chapter\s*/i, '') // Remove "Chapter" prefix if present
-    .substring(0, 50); // Shorter limit for chapter titles
+    .replace(/^(Chapter|Section)\s*/i, '') // Remove "Chapter"/"Section" prefix
+    .trim();
+  
+  // If after removing prefix we're left with just a number or roman numeral,
+  // keep the original title to preserve context (e.g., "Section 2" stays "Section 2")
+  if (/^(\d+|[IVXLCDM]+)$/i.test(sanitized)) {
+    sanitized = title.replace(/[<>:"/\\|?*]/g, '').replace(/\.+$/, '').trim();
+  }
+  
+  return sanitized.substring(0, 50);
 }
 
 /**

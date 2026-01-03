@@ -717,7 +717,7 @@ export function classifySections(sections: RawSection[]): Chapter[] {
       return { ...section, isFrontMatter: true };
     }
     // Short section before first numbered chapter = front matter
-    const isFrontMatter = section.textLength < 500 && 
+    const isFrontMatter = section.textLength < 700 && 
       (firstNumberedIndex === -1 || i < firstNumberedIndex);
     return { ...section, isFrontMatter };
   });
@@ -931,59 +931,28 @@ export function extractEpubChapters(epubBuffer: Buffer): Chapter[] {
  * @returns Extracted title or null
  */
 function extractTitleFromHtml(html: string): string | null {
-  // Helper: Check if extracted title is meaningful enough to use
-  // Rejects: too short (<3 chars), just numbers, just roman numerals
-  // Returns null for bad titles so fallback "Section N"/"Chapter N" is used
-  const isValidTitle = (title: string): boolean => {
-    if (title.length < 3) return false;
-    if (/^\d+$/.test(title)) return false;
-    if (/^[IVXLCDM]+$/i.test(title)) return false;
-    return true;
-  };
-
+  // Simple extraction - just get text from heading tags
+  // Validation (meaningful title check) happens in classifySections
+  
   // Try h1 tag first (most common for chapter titles)
   const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
   if (h1Match) {
     const title = stripHtml(h1Match[1]).trim();
-    if (title.length > 0 && title.length < 200 && isValidTitle(title)) {
-      return title;
-    }
+    if (title.length > 0 && title.length < 200) return title;
   }
   
   // Try h2 tag
   const h2Match = html.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i);
   if (h2Match) {
     const title = stripHtml(h2Match[1]).trim();
-    if (title.length > 0 && title.length < 200 && isValidTitle(title)) {
-      return title;
-    }
+    if (title.length > 0 && title.length < 200) return title;
   }
   
-  // Try h3 tag (some EPUBs use h3 for chapter titles)
+  // Try h3 tag
   const h3Match = html.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i);
   if (h3Match) {
     const title = stripHtml(h3Match[1]).trim();
-    if (title.length > 0 && title.length < 200 && isValidTitle(title)) {
-      return title;
-    }
-  }
-  
-  // Try elements with "title", "chapter", "kapitola" (Czech), or "heading" class
-  const classTitleMatch = html.match(/<[^>]+class="[^"]*(?:title|chapter|kapitola|heading)[^"]*"[^>]*>([\s\S]*?)<\/[^>]+>/i);
-  if (classTitleMatch) {
-    const title = stripHtml(classTitleMatch[1]).trim();
-    if (title.length > 0 && title.length < 200 && isValidTitle(title)) {
-      return title;
-    }
-  }
-  
-  // Try first <p> element with id containing "toc" or "marker" (common in EPUBs for chapter headers)
-  const tocMarkerMatch = html.match(/<p[^>]+id="[^"]*(?:toc|marker)[^"]*"[^>]*>([\s\S]*?)<\/p>/i);
-  if (tocMarkerMatch) {
-    const title = stripHtml(tocMarkerMatch[1]).trim();
-    if (title.length > 0 && title.length < 200 && isValidTitle(title)) {
-      return title;
-    }
+    if (title.length > 0 && title.length < 200) return title;
   }
   
   // Skip <title> tag - it often contains filename/metadata, not chapter title
