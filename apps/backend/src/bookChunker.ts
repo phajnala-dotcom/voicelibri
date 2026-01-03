@@ -532,11 +532,230 @@ export function formatDuration(seconds: number): string {
  * Chapter information
  */
 export interface Chapter {
-  index: number;
+  index: number;           // Internal array position (1-based)
+  displayNumber: number | null; // User-facing chapter number (null = front matter)
+  isFrontMatter: boolean;  // true for TOC, dedication, copyright, etc.
   title: string;
-  startOffset: number; // Character position in full text
+  startOffset: number;     // Character position in full text
   endOffset: number;
   text: string;
+}
+
+/**
+ * Language-agnostic chapter number extraction from title
+ * Focuses on NUMBERS (universal) rather than words like "Chapter/Kapitola"
+ * 
+ * @param title - Chapter title
+ * @returns Extracted number or null
+ */
+export function extractChapterNumber(title: string): number | null {
+  const trimmed = title.trim();
+  
+  // Pattern 1: Arabic numerals at START of title
+  // Matches: "1.", "1 -", "1:", "1 Chapter", "12. Kapitola", etc.
+  const startNumberMatch = trimmed.match(/^(\d+)[\s.\-:]/);
+  if (startNumberMatch) {
+    return parseInt(startNumberMatch[1], 10);
+  }
+  
+  // Pattern 2: Arabic numerals at END of title (common in many languages)
+  // Matches: "Chapter 1", "Kapitola 12", "Глава 3", "第 1 章" approximation
+  const endNumberMatch = trimmed.match(/\s(\d+)$/);
+  if (endNumberMatch) {
+    return parseInt(endNumberMatch[1], 10);
+  }
+  
+  // Pattern 3: Roman numerals at START (I, II, III, IV, V, VI, VII, VIII, IX, X, etc.)
+  const romanMatch = trimmed.match(/^(M{0,3})(CM|CD|D?C{0,3})(XC|XL|L?X{0,3})(IX|IV|V?I{0,3})(?:[\s.\-:]|$)/i);
+  if (romanMatch) {
+    const roman = romanMatch[0].replace(/[\s.\-:]$/, '').toUpperCase();
+    const romanValue = romanToArabic(roman);
+    if (romanValue > 0) {
+      return romanValue;
+    }
+  }
+  
+  // Pattern 4: Standalone number (entire title is just a number)
+  if (/^\d+$/.test(trimmed)) {
+    return parseInt(trimmed, 10);
+  }
+  
+  // Pattern 5: Number somewhere in short title (< 30 chars)
+  // Matches: "Part 1", "Část první", etc.
+  if (trimmed.length < 30) {
+    const anyNumberMatch = trimmed.match(/(\d+)/);
+    if (anyNumberMatch) {
+      return parseInt(anyNumberMatch[1], 10);
+    }
+  }
+  
+  return null;
+}
+
+/**
+ * Convert Roman numeral string to Arabic number
+ */
+function romanToArabic(roman: string): number {
+  const romanValues: { [key: string]: number } = {
+    'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000
+  };
+  
+  let result = 0;
+  let prev = 0;
+  
+  for (let i = roman.length - 1; i >= 0; i--) {
+    const curr = romanValues[roman[i].toUpperCase()];
+    if (!curr) return 0; // Invalid character
+    
+    if (curr < prev) {
+      result -= curr;
+    } else {
+      result += curr;
+    }
+    prev = curr;
+  }
+  
+  return result;
+}
+
+// ========================================
+// SHARED HEURISTICS FOR CHAPTER CLASSIFICATION
+// Works for EPUB, TXT, and future formats
+// ========================================
+
+/**
+ * Front matter title keywords (language-agnostic where possible)
+ * These indicate non-chapter content that shouldn't be numbered
+ */
+const FRONT_MATTER_KEYWORDS = [
+  // English
+  'contents', 'table of contents', 'copyright', 'dedication', 'foreword',
+  'preface', 'introduction', 'acknowledgement', 'acknowledgment', 'about',
+  // Czech/Slovak
+  'obsah', 'věnování', 'předmluva', 'úvod', 'poděkování',
+  // German
+  'inhalt', 'inhaltsverzeichnis', 'widmung', 'vorwort', 'einleitung',
+  // French
+  'sommaire', 'dédicace', 'avant-propos', 'préface',
+  // Spanish
+  'índice', 'dedicatoria', 'prólogo', 'prefacio',
+  // Common patterns
+  'title page', 'cover', 'colophon',
+];
+
+/**
+ * Check if title indicates front matter based on keywords
+ */
+export function isFrontMatterTitle(title: string): boolean {
+  const normalized = title.toLowerCase().trim();
+  return FRONT_MATTER_KEYWORDS.some(keyword => normalized.includes(keyword));
+}
+
+/**
+ * Raw section data before classification
+ */
+interface RawSection {
+  title: string;
+  text: string;
+  originalIndex: number; // Position in source (spine index for EPUB, line index for TXT)
+}
+
+/**
+ * Classify sections into front matter vs real chapters using heuristics
+ * 
+ * Algorithm:
+ * 1. Parse explicit chapter numbers from titles (multi-tier regex)
+ * 2. Detect front matter by:
+ *    - Title keywords (Contents, Dedication, etc.)
+ *    - Short text (< 500 chars) at beginning before first numbered/long chapter
+ * 3. Assign sequential numbers to real chapters without explicit numbers
+ * 
+ * @param sections - Raw sections from EPUB spine or TXT detection
+ * @returns Classified chapters with displayNumber and isFrontMatter
+ */
+export function classifySections(sections: RawSection[]): Chapter[] {
+  if (sections.length === 0) return [];
+  
+  // Step 1: Parse chapter numbers and detect keyword-based front matter
+  const analysis = sections.map((section, idx) => ({
+    ...section,
+    parsedNumber: extractChapterNumber(section.title),
+    isKeywordFrontMatter: isFrontMatterTitle(section.title),
+    textLength: section.text.length,
+  }));
+  
+  // Step 2: Find first section with a chapter number (real content marker)
+  const firstNumberedIndex = analysis.findIndex(s => s.parsedNumber !== null);
+  
+  // Step 3: Classify front matter vs real chapters
+  // Front matter = keyword match OR (no chapter number AND short AND before first numbered chapter)
+  const classifiedSections = analysis.map((section, i) => {
+    // If it has a chapter number, it's a real chapter (not front matter)
+    if (section.parsedNumber !== null) {
+      return { ...section, isFrontMatter: false };
+    }
+    // Keyword-based front matter detection
+    if (section.isKeywordFrontMatter) {
+      return { ...section, isFrontMatter: true };
+    }
+    // Short section before first numbered chapter = front matter
+    const isFrontMatter = section.textLength < 500 && 
+      (firstNumberedIndex === -1 || i < firstNumberedIndex);
+    return { ...section, isFrontMatter };
+  });
+  
+  // Step 4: Build chapters
+  // - index: sequential 1-based position (for file naming, array access)
+  // - displayNumber: parsed from title (for UI) or sequential fallback
+  const chapters: Chapter[] = [];
+  let sequentialNumber = 1;
+  let currentOffset = 0;
+  
+  for (let i = 0; i < classifiedSections.length; i++) {
+    const section = classifiedSections[i];
+    
+    // Determine displayNumber:
+    // - null for front matter
+    // - parsed number if available (directly from title, no offset adjustment)
+    // - sequential fallback for real chapters without explicit numbers
+    let displayNumber: number | null;
+    if (section.isFrontMatter) {
+      displayNumber = null;
+    } else if (section.parsedNumber !== null) {
+      displayNumber = section.parsedNumber;
+      // Update sequential to stay ahead of parsed numbers
+      if (section.parsedNumber >= sequentialNumber) {
+        sequentialNumber = section.parsedNumber + 1;
+      }
+    } else {
+      displayNumber = sequentialNumber++;
+    }
+    
+    const chapterIndex = chapters.length + 1; // 1-based internal index
+    const startOffset = currentOffset;
+    const endOffset = currentOffset + section.text.length;
+    
+    chapters.push({
+      index: chapterIndex,
+      displayNumber,
+      isFrontMatter: section.isFrontMatter,
+      title: section.title,
+      startOffset,
+      endOffset,
+      text: section.text,
+    });
+    
+    currentOffset = endOffset + 2; // +2 for "\n\n" separator
+    
+    // Log classification
+    if (section.isFrontMatter) {
+      console.log(`📄 Section ${chapterIndex} (front matter): "${section.title}" (${section.textLength} chars)`);
+    } else {
+      console.log(`📖 Section ${chapterIndex} (Chapter ${displayNumber}): "${section.title}" (${section.textLength} chars)`);
+    }
+  }
+  
+  return chapters;
 }
 
 /**
@@ -624,9 +843,8 @@ export function extractEpubChapters(epubBuffer: Buffer): Chapter[] {
     // Try to get chapter titles from TOC (toc.ncx or nav.xhtml)
     const chapterTitles = extractEpubTocTitles(zip, opfPath, opfData);
     
-    // Extract chapters from spine items
-    const chapters: Chapter[] = [];
-    let currentOffset = 0;
+    // Collect all sections from spine
+    const rawSections: RawSection[] = [];
     
     for (let i = 0; i < spineItems.length; i++) {
       const itemId = spineItems[i];
@@ -649,34 +867,24 @@ export function extractEpubChapters(epubBuffer: Buffer): Chapter[] {
       const htmlContent = contentEntry.getData().toString('utf8');
       const plainText = stripHtml(htmlContent);
       
-      // Skip empty or very short chapters (< 50 chars - likely just title/metadata/junk)
-      // These skipped sections are NOT numbered - only real chapters get chapter numbers
+      // Skip empty or very short sections (< 50 chars - likely just empty wrapper)
       if (plainText.trim().length < 50) {
         if (plainText.trim().length > 0) {
-          console.log(`⏭️ EPUB: Skipping short section (${plainText.trim().length} chars): "${plainText.trim().substring(0, 50)}..."`);
+          console.log(`⏭️ EPUB: Skipping empty section (${plainText.trim().length} chars): "${plainText.trim().substring(0, 50)}..."`);
         }
         continue;
       }
       
-      // Chapter number is 1-based (first real chapter = Chapter 1)
-      const chapterNum = chapters.length + 1;
+      // Extract title from HTML content (h1, h2, title tag) - more reliable than TOC index
+      const extractedTitle = extractTitleFromHtml(htmlContent);
+      const title = extractedTitle || `Section ${rawSections.length + 1}`;
       
-      // Try to get title from TOC or generate one
-      const title = chapterTitles[i] || `Chapter ${chapterNum}`;
-      
-      const startOffset = currentOffset;
-      const endOffset = currentOffset + plainText.length;
-      
-      chapters.push({
-        index: chapterNum,  // 1-based chapter number
-        title,
-        startOffset,
-        endOffset,
-        text: plainText,
-      });
-      
-      currentOffset = endOffset + 2; // +2 for "\n\n" separator
+      console.log(`📖 EPUB section ${rawSections.length + 1}: "${title}" (${plainText.trim().length} chars)`);
+      rawSections.push({ title, text: plainText, originalIndex: i });
     }
+    
+    // Use shared classification logic
+    const chapters = classifySections(rawSections);
     
     console.log(`✓ Extracted ${chapters.length} chapters from EPUB`);
     return chapters;
@@ -688,7 +896,57 @@ export function extractEpubChapters(epubBuffer: Buffer): Chapter[] {
 }
 
 /**
+ * Extract title from HTML content by looking at h1, h2, or title tags
+ * 
+ * @param html - HTML content
+ * @returns Extracted title or null
+ */
+function extractTitleFromHtml(html: string): string | null {
+  // Try h1 tag first (most common for chapter titles)
+  const h1Match = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+  if (h1Match) {
+    const title = stripHtml(h1Match[1]).trim();
+    if (title.length > 0 && title.length < 200) {
+      return title;
+    }
+  }
+  
+  // Try h2 tag
+  const h2Match = html.match(/<h2[^>]*>([\s\S]*?)<\/h2>/i);
+  if (h2Match) {
+    const title = stripHtml(h2Match[1]).trim();
+    if (title.length > 0 && title.length < 200) {
+      return title;
+    }
+  }
+  
+  // Try h3 tag (some EPUBs use h3 for chapter titles)
+  const h3Match = html.match(/<h3[^>]*>([\s\S]*?)<\/h3>/i);
+  if (h3Match) {
+    const title = stripHtml(h3Match[1]).trim();
+    if (title.length > 0 && title.length < 200) {
+      return title;
+    }
+  }
+  
+  // Try elements with "title" or "chapter" class
+  const classTitleMatch = html.match(/<[^>]+class="[^"]*(?:title|chapter|heading)[^"]*"[^>]*>([\s\S]*?)<\/[^>]+>/i);
+  if (classTitleMatch) {
+    const title = stripHtml(classTitleMatch[1]).trim();
+    if (title.length > 0 && title.length < 200) {
+      return title;
+    }
+  }
+  
+  // Skip <title> tag - it often contains filename/metadata, not chapter title
+  // If no heading found, return null and let fallback handle it
+  
+  return null;
+}
+
+/**
  * Extract chapter titles from EPUB TOC (toc.ncx or nav.xhtml)
+ * NOTE: This is now a fallback - we prefer extracting from HTML content
  * 
  * @param zip - EPUB zip archive
  * @param opfPath - Path to OPF file
@@ -783,8 +1041,6 @@ function extractEpubTocTitles(zip: AdmZip, opfPath: string, opfData: any): strin
  * @returns Array of chapters (or single chapter if none detected)
  */
 export function detectTextChapters(text: string): Chapter[] {
-  const chapters: Chapter[] = [];
-  
   // Chapter detection patterns (case-insensitive)
   const patterns = [
     /^Chapter\s+(\d+|[IVXLCDM]+|\w+)/mi,     // "Chapter 1", "Chapter I", "Chapter One"
@@ -833,7 +1089,8 @@ export function detectTextChapters(text: string): Chapter[] {
     return createSingleChapter(text, 'Full Text');
   }
   
-  // Build chapters from detected starts
+  // Build raw sections from detected starts
+  const rawSections: RawSection[] = [];
   for (let i = 0; i < chapterStarts.length; i++) {
     const start = chapterStarts[i];
     const nextStart = chapterStarts[i + 1];
@@ -842,14 +1099,15 @@ export function detectTextChapters(text: string): Chapter[] {
     const endOffset = nextStart ? nextStart.charOffset : text.length;
     const chapterText = text.substring(startOffset, endOffset).trim();
     
-    chapters.push({
-      index: i,
+    rawSections.push({
       title: start.title,
-      startOffset,
-      endOffset,
       text: chapterText,
+      originalIndex: i,
     });
   }
+  
+  // Use shared classification logic
+  const chapters = classifySections(rawSections);
   
   console.log(`✓ Detected ${chapters.length} chapters in plain text`);
   return chapters;
@@ -867,6 +1125,8 @@ export function createSingleChapter(text: string, title: string): Chapter[] {
   return [
     {
       index: 0,
+      displayNumber: 1,
+      isFrontMatter: false,
       title,
       startOffset: 0,
       endOffset: text.length,

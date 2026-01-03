@@ -172,6 +172,10 @@ const BookPlayer: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
   const [currentBookFile, setCurrentBookFile] = useState<string>('');
+  
+  // Consolidated chapters status - for skip navigation
+  const [consolidatedChapters, setConsolidatedChapters] = useState<Set<number>>(new Set());
+  const [_highestConsolidatedChapter, setHighestConsolidatedChapter] = useState<number>(0);
 
   // Save playback position to backend whenever it changes significantly
   // Debounced to avoid excessive API calls
@@ -267,6 +271,39 @@ const BookPlayer: React.FC = () => {
     }
     return response.json();
   };
+
+  // Fetch consolidated chapters status
+  const fetchConsolidatedStatus = async (): Promise<void> => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/book/consolidated`);
+      if (!response.ok) return;
+      
+      const data = await response.json();
+      const consolidated = new Set<number>(
+        data.chapters
+          .filter((c: { isConsolidated: boolean }) => c.isConsolidated)
+          .map((c: { chapterNum: number }) => c.chapterNum)
+      );
+      
+      setConsolidatedChapters(consolidated);
+      setHighestConsolidatedChapter(data.highestConsolidated || 0);
+    } catch (err) {
+      console.warn('Failed to fetch consolidated status:', err);
+    }
+  };
+
+  // Poll consolidated status while generation is in progress
+  useEffect(() => {
+    if (!bookInfo || !currentBookFile) return;
+    
+    // Initial fetch
+    fetchConsolidatedStatus();
+    
+    // Poll every 5 seconds while generation might be happening
+    const interval = setInterval(fetchConsolidatedStatus, 5000);
+    
+    return () => clearInterval(interval);
+  }, [bookInfo, currentBookFile]);
 
   /**
    * Convert global chunk index to chapter:subChunk indices
@@ -570,6 +607,11 @@ const BookPlayer: React.FC = () => {
   /**
    * Skip forward/backward with cross-chunk seeking
    * Uses actual cached audio durations for precise skip intervals
+   * 
+   * CONSOLIDATED-ONLY NAVIGATION:
+   * - Skip within same chapter: always allowed
+   * - Skip backward across chapters: goes to nearest consolidated chapter
+   * - Skip forward across chapters: ignored if target chapter not consolidated
    */
   const skipSeconds = async (seconds: number) => {
     if (!audioRef.current || !bookInfo) return;
@@ -587,6 +629,19 @@ const BookPlayer: React.FC = () => {
       return;
     }
 
+    // Helper: get chapter number (1-based) for a global chunk index
+    const getChapterForChunk = (chunkIdx: number): number => {
+      if (!bookInfo.chapters) return 1;
+      for (const chapter of bookInfo.chapters) {
+        if (chunkIdx < chapter.subChunkStart + chapter.subChunkCount) {
+          return chapter.index;
+        }
+      }
+      return bookInfo.chapters[bookInfo.chapters.length - 1]?.index || 1;
+    };
+    
+    const currentChapter = getChapterForChunk(currentChunkIndex);
+
     // Cross-chunk seeking needed
     let remainingSkip = seconds;
     let targetChunkIndex = currentChunkIndex;
@@ -602,6 +657,14 @@ const BookPlayer: React.FC = () => {
       const avgChunkDuration = bookInfo._internal.durationSeconds / bookInfo._internal.totalChunks;
       
       while (remainingSkip > 0 && targetChunkIndex < bookInfo._internal.totalChunks) {
+        // CHECK: If crossing to a new chapter, verify it's consolidated
+        const targetChapter = getChapterForChunk(targetChunkIndex);
+        if (targetChapter !== currentChapter && !consolidatedChapters.has(targetChapter)) {
+          console.log(`⛔ Skip forward blocked: chapter ${targetChapter} not yet consolidated`);
+          // Stay at current position - do nothing
+          return;
+        }
+        
         const cachedChunk = audioCache.get(targetChunkIndex);
         const chunkDuration = cachedChunk?.duration || avgChunkDuration;
         
@@ -639,6 +702,21 @@ const BookPlayer: React.FC = () => {
         console.log(`🔙 Going backward from chunk ${currentChunkIndex}, starting at chunk ${targetChunkIndex}`);
         
         while (remainingSkip > 0 && targetChunkIndex >= 0) {
+          // CHECK: If crossing to a new chapter, verify it's consolidated
+          const targetChapter = getChapterForChunk(targetChunkIndex);
+          if (targetChapter !== currentChapter && !consolidatedChapters.has(targetChapter)) {
+            // Find first chunk of nearest consolidated chapter ahead
+            for (const chapter of bookInfo.chapters || []) {
+              if (chapter.index >= targetChapter && consolidatedChapters.has(chapter.index)) {
+                targetChunkIndex = chapter.subChunkStart;
+                targetTimeInChunk = 0;
+                console.log(`🔄 Adjusted to nearest consolidated chapter ${chapter.index}, chunk ${targetChunkIndex}`);
+                break;
+              }
+            }
+            break;
+          }
+          
           const cachedChunk = audioCache.get(targetChunkIndex);
           const chunkDuration = cachedChunk?.duration || avgChunkDuration;
           

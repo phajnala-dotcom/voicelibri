@@ -420,6 +420,8 @@ export async function dramatizeBook(
   // For now, create single chapter (TODO: proper chapter detection)
   const chapters: Chapter[] = [{
     index: 0,
+    displayNumber: 1,
+    isFrontMatter: false,
     title: 'Chapter 1',
     text: bookText,
     startOffset: 0,

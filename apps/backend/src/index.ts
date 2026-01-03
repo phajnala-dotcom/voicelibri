@@ -20,13 +20,11 @@ import { loadVoiceMap, assignVoices, type Character } from './voiceAssigner.js';
 import { concatenateWavBuffers, addSilence } from './audioUtils.js';
 import { 
   generateAndSaveTempChunk,
-  generateMultipleTempChunks, 
   tempChunkExists, 
   loadTempChunk,
   consolidateChapterFromTemps,
   consolidateChapterSmart,
   deleteAllTempChunks,
-  deleteChapterTempChunks,
   extractChunkFromConsolidated,
   // Pre-dramatization pipeline
   clearDramatizationCache,
@@ -34,7 +32,6 @@ import {
   stopPreDramatization,
   getDramatizationCacheStats,
   // NEW: Sub-chunk generation (parallel pipeline)
-  generateSubChunk,
   generateSubChunksParallel,
   consolidateChapterFromSubChunks,
   deleteChapterSubChunks,
@@ -135,6 +132,10 @@ let CHAPTER_DRAMATIZED: Map<number, string> = new Map();
 // Total sub-chunks count (for backward compatibility with frontend)
 let TOTAL_SUBCHUNKS: number = 0;
 
+// LOCK: Chapter dramatization - prevents duplicate dramatization calls
+// Map: chapterNum (1-based) -> Promise that resolves when dramatization completes
+const CHAPTER_DRAMATIZATION_LOCK: Map<number, Promise<TwoSpeakerChunk[]>> = new Map();
+
 // NEW: Chapter playback tracking (for cleanup)
 // Map: chapterNum (1-based) -> Set of played sub-chunk indices
 let CHAPTER_PLAYED_SUBCHUNKS: Map<number, Set<number>> = new Map();
@@ -195,14 +196,6 @@ function trackSubChunkPlayed(
 // Audio cache for generated chunks - key format: "chunkIndex:voiceName"
 const audioCache = new Map<string, Buffer>();
 
-// Background generation state
-let isGeneratingInBackground = false;
-let backgroundGenerationAbort: AbortController | null = null;
-
-// Global state for background consolidation watcher
-let consolidationWatcherInterval: NodeJS.Timeout | null = null;
-const CONSOLIDATION_CHECK_INTERVAL = 30000; // Check every 30 seconds
-
 /**
  * Helper function to load a book by filename
  * @param filename - Name of the book file in assets/
@@ -220,8 +213,7 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
   // Clear dramatization cache from previous book
   clearDramatizationCache();
   
-  // Stop any ongoing background generation and dramatization
-  stopContinuousGeneration();
+  // Stop any ongoing background dramatization (includes TTS generation)
   stopBackgroundDramatization();
   
   // Determine format from extension
@@ -306,18 +298,28 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
       }
       
       console.log('⚡ Quick character scan (dramatization happens on-demand during TTS)...');
-      console.log(`   Book: ${BOOK_TEXT.length} chars, ${BOOK_CHAPTERS.length} chapters`);
+      console.log(`   Book: ${BOOK_TEXT.length} chars, ${getChapterCount()} chapters`);
       
       // Import analyzer for character scan only
       const { GeminiCharacterAnalyzer } = await import('./llmCharacterAnalyzer.js');
       const analyzer = new GeminiCharacterAnalyzer(geminiConfig);
       
-      // Phase 1: Character scan from FIRST 3 CHAPTERS only (fast, ~5s)
-      // This is much faster than scanning entire 800k char book
-      console.log('🔍 Scanning first 3 chapters for characters...');
-      const chaptersForScan = Math.min(3, BOOK_CHAPTERS.length);
-      const textForScan = BOOK_CHAPTERS.slice(0, chaptersForScan).map(ch => ch.text).join('\n\n');
-      console.log(`   Using ${chaptersForScan} chapters (${textForScan.length} chars) for initial scan`);
+      // Phase 1: Character scan from first ~50k chars of content
+      // This ensures we get enough real story content for character detection
+      // (front matter/TOC are usually < 1k chars each, so 50k gets us into the story)
+      console.log('🔍 Scanning first ~50k chars for characters...');
+      
+      // Collect chapter text until we have ~50k chars
+      const TARGET_CHARS = 50000;
+      let textForScan = '';
+      let chaptersUsed = 0;
+      for (let i = 1; i < BOOK_CHAPTERS.length && textForScan.length < TARGET_CHARS; i++) {
+        if (BOOK_CHAPTERS[i]) {
+          textForScan += BOOK_CHAPTERS[i].text + '\n\n';
+          chaptersUsed++;
+        }
+      }
+      console.log(`   Using ${chaptersUsed} chapters (${textForScan.length} chars) for initial scan`);
       
       const characters = await analyzer.analyzeFullBook(textForScan);
       
@@ -479,6 +481,7 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
   // Clear previous sub-chunk data
   CHAPTER_SUBCHUNKS.clear();
   CHAPTER_DRAMATIZED.clear();
+  CHAPTER_DRAMATIZATION_LOCK.clear();  // Clear dramatization locks from previous book
   TOTAL_SUBCHUNKS = 0;
   
   // Clear playback tracking state
@@ -506,10 +509,10 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
       
       console.log(`   Chapter ${chapterNum}: ${subChunks.length} sub-chunks (pre-tagged)`);
     } else if ((global as any).DRAMATIZATION_ENABLED) {
-      // Will be dramatized on-demand - create placeholder
-      // Sub-chunks will be generated when chapter is dramatized during TTS
+      // Will be dramatized by background process - create placeholder
+      // Sub-chunks will be generated when chapter is dramatized in background
       CHAPTER_SUBCHUNKS.set(chapterNum, []);
-      console.log(`   Chapter ${chapterNum}: pending dramatization`);
+      // Note: Verbose 'pending dramatization' log removed for cleaner output
     } else {
       // No voice tags, no dramatization - treat as single NARRATOR voice
       const narratorText = `[VOICE=NARRATOR]\n${chapterText}`;
@@ -527,7 +530,8 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
   console.log(`   ${TOTAL_SUBCHUNKS} total sub-chunks`);
   
   // Create book info from chapters (for backward compatibility)
-  const allChapterText = BOOK_CHAPTERS.map(ch => ch.text).join('\n\n');
+  // Filter out null (index 0 placeholder for 1-based indexing)
+  const allChapterText = BOOK_CHAPTERS.filter(ch => ch !== null).map(ch => ch.text).join('\n\n');
   BOOK_INFO = getBookInfo([allChapterText]); // Pass as single chunk for word count
   BOOK_INFO.totalChunks = TOTAL_SUBCHUNKS; // Override with sub-chunk count
   
@@ -581,167 +585,12 @@ app.get('/api/health', (req: Request, res: Response) => {
   });
 });
 
-/**
- * Continuously generate sub-chunks in background
- * NEW: Works with sub-chunks directly (no intermediate chunk layer)
- * 
- * @param bookTitle - Sanitized book title
- * @param voiceMap - Character to voice mapping
- * @param defaultVoice - Default voice for narrator
- * @param parallelism - Number of parallel TTS calls (default: 3)
- */
-async function startContinuousGeneration(
-  bookTitle: string,
-  voiceMap: Record<string, string> = {},
-  defaultVoice: string = 'Algieba',
-  parallelism: number = 3
-): Promise<void> {
-  if (isGeneratingInBackground) {
-    console.log('🔄 Background generation already running');
-    return;
-  }
-
-  isGeneratingInBackground = true;
-  backgroundGenerationAbort = new AbortController();
-  
-  console.log(`🚀 Starting continuous sub-chunk generation (parallelism: ${parallelism})...`);
-  
-  try {
-    // Process chapters sequentially (1-based), sub-chunks in parallel
-    for (let chapterNum = 1; chapterNum < BOOK_CHAPTERS.length; chapterNum++) {
-      if (backgroundGenerationAbort.signal.aborted) {
-        console.log('🛑 Background generation aborted');
-        break;
-      }
-      
-      let subChunks = CHAPTER_SUBCHUNKS.get(chapterNum) || [];
-      
-      // ON-DEMAND DRAMATIZATION: If no sub-chunks, dramatize the chapter first
-      if (subChunks.length === 0 && (global as any).DRAMATIZATION_ENABLED) {
-        console.log(`🎭 Background: dramatizing chapter ${chapterNum}...`);
-        
-        const chapter = BOOK_CHAPTERS[chapterNum];
-        const characters = (global as any).DRAMATIZATION_CHARACTERS || [];
-        const analyzer = (global as any).DRAMATIZATION_ANALYZER;
-        
-        if (analyzer && characters.length > 0) {
-          try {
-            // Dramatize the chapter
-            const result = await tagChapterHybrid(
-              chapter.text,
-              characters,
-              analyzer,
-              chapterNum  // chapter number (1-based)
-            );
-            
-            // Update chapter with dramatized text
-            BOOK_CHAPTERS[chapterNum] = {
-              ...chapter,
-              text: result.taggedText
-            };
-            
-            // Split into sub-chunks
-            const newSubChunks = chunkForTwoSpeakers(result.taggedText, undefined, chapterNum);
-            CHAPTER_SUBCHUNKS.set(chapterNum, newSubChunks);
-            CHAPTER_DRAMATIZED.set(chapterNum, result.taggedText);
-            TOTAL_SUBCHUNKS += newSubChunks.length;
-            
-            console.log(`   ✅ Chapter ${chapterNum}: ${newSubChunks.length} sub-chunks created (${result.method})`);
-            
-            subChunks = newSubChunks;
-          } catch (error) {
-            console.error(`   ❌ Chapter ${chapterNum} dramatization failed:`, error);
-            // Fallback: wrap in NARRATOR voice
-            const narratorText = `[VOICE=NARRATOR]\n${chapter.text}`;
-            const newSubChunks = chunkForTwoSpeakers(narratorText, undefined, chapterNum);
-            CHAPTER_SUBCHUNKS.set(chapterNum, newSubChunks);
-            CHAPTER_DRAMATIZED.set(chapterNum, narratorText);
-            TOTAL_SUBCHUNKS += newSubChunks.length;
-            
-            console.log(`   ⚠️ Chapter ${chapterNum}: ${newSubChunks.length} sub-chunks (narrator fallback)`);
-            
-            subChunks = newSubChunks;
-          }
-        } else {
-          // No analyzer - wrap in NARRATOR voice
-          const narratorText = `[VOICE=NARRATOR]\n${chapter.text}`;
-          const newSubChunks = chunkForTwoSpeakers(narratorText, undefined, chapterNum);
-          CHAPTER_SUBCHUNKS.set(chapterNum, newSubChunks);
-          CHAPTER_DRAMATIZED.set(chapterNum, narratorText);
-          TOTAL_SUBCHUNKS += newSubChunks.length;
-          
-          console.log(`   ⚠️ Chapter ${chapterNum}: ${newSubChunks.length} sub-chunks (no analyzer)`);
-          
-          subChunks = newSubChunks;
-        }
-      }
-      
-      if (subChunks.length === 0) {
-        console.log(`⏭️ Chapter ${chapterNum}: no sub-chunks (empty chapter?)`);
-        continue;
-      }
-      
-      // Check how many sub-chunks need generation
-      const pendingSubChunks = subChunks.filter(
-        sc => !subChunkExists(bookTitle, chapterNum, sc.index)
-      );
-      
-      if (pendingSubChunks.length === 0) {
-        console.log(`⏭️ Chapter ${chapterNum}: all ${subChunks.length} sub-chunks cached`);
-        continue;
-      }
-      
-      console.log(`📦 Chapter ${chapterNum}: generating ${pendingSubChunks.length}/${subChunks.length} sub-chunks`);
-      
-      // Generate in parallel batches
-      await generateSubChunksParallel(
-        bookTitle,
-        chapterNum,
-        pendingSubChunks,
-        voiceMap,
-        defaultVoice,
-        parallelism
-      );
-      
-      // Check if this chapter can be consolidated
-      const generatedCount = countChapterSubChunks(bookTitle, chapterNum);
-      if (generatedCount === subChunks.length) {
-        console.log(`✅ Chapter ${chapterNum}: all sub-chunks ready, consolidating...`);
-        await consolidateChapterFromSubChunks(
-          bookTitle,
-          chapterNum,
-          BOOK_CHAPTERS[chapterNum]?.title
-        );
-      }
-    }
-    
-    if (!backgroundGenerationAbort.signal.aborted) {
-      console.log('🎉 All sub-chunks generated!');
-    }
-  } catch (error) {
-    console.error('❌ Background generation error:', error);
-  } finally {
-    isGeneratingInBackground = false;
-    backgroundGenerationAbort = null;
-  }
-}
-
-/**
- * Stop continuous background generation
- */
-function stopContinuousGeneration(): void {
-  if (backgroundGenerationAbort) {
-    console.log('🛑 Stopping background generation...');
-    backgroundGenerationAbort.abort();
-  }
-}
-
-// Background dramatization state
+// Background dramatization state (includes TTS generation)
 let isDramatizingInBackground = false;
 let backgroundDramatizationAbort: AbortController | null = null;
 
 /**
- * Stop background dramatization
+ * Stop background dramatization (and TTS generation)
  */
 function stopBackgroundDramatization(): void {
   if (backgroundDramatizationAbort) {
@@ -798,9 +647,17 @@ async function startBackgroundDramatization(
       
       console.log(`📝 Dramatizing chapters ${pendingChapterNums.join(', ')}...`);
       
-      // Dramatize chapters in parallel
+      // Dramatize chapters in parallel - store promises in lock map for TTS to await
       await Promise.all(pendingChapterNums.map(async (chapterNum) => {
         if (backgroundDramatizationAbort?.signal.aborted) return;
+        
+        // Create and store the dramatization promise BEFORE starting
+        // This allows continuous generation to await it
+        let resolvePromise: () => void;
+        const dramatizationPromise = new Promise<TwoSpeakerChunk[]>((resolve) => {
+          resolvePromise = () => resolve(CHAPTER_SUBCHUNKS.get(chapterNum) || []);
+        });
+        CHAPTER_DRAMATIZATION_LOCK.set(chapterNum, dramatizationPromise);
         
         try {
           const chapter = BOOK_CHAPTERS[chapterNum];
@@ -827,6 +684,30 @@ async function startBackgroundDramatization(
           
           console.log(`   ✅ Chapter ${chapterNum}: ${newSubChunks.length} sub-chunks (${result.method})`);
           
+          // Signal that dramatization is complete
+          resolvePromise!();
+          
+          // IMMEDIATELY generate TTS for this chapter (producer responsibility)
+          const bookTitle = sanitizeBookTitle(BOOK_METADATA?.title || CURRENT_BOOK_FILE || 'Unknown');
+          console.log(`   🎤 Generating TTS for chapter ${chapterNum}...`);
+          await generateSubChunksParallel(
+            bookTitle,
+            chapterNum,
+            newSubChunks,
+            VOICE_MAP,
+            NARRATOR_VOICE,
+            2 // parallelism
+          );
+          
+          // AUTO-CONSOLIDATE immediately after all sub-chunks generated
+          try {
+            const chapterTitle = BOOK_CHAPTERS[chapterNum]?.title;
+            await consolidateChapterFromSubChunks(bookTitle, chapterNum, chapterTitle);
+            console.log(`   📦 Chapter ${chapterNum} consolidated`);
+          } catch (consErr) {
+            console.error(`   ⚠️ Chapter ${chapterNum} consolidation failed:`, consErr);
+          }
+          
         } catch (error) {
           console.error(`   ❌ Chapter ${chapterNum} dramatization failed:`, error);
           
@@ -839,6 +720,30 @@ async function startBackgroundDramatization(
           TOTAL_SUBCHUNKS += newSubChunks.length;
           
           console.log(`   ⚠️ Chapter ${chapterNum}: ${newSubChunks.length} sub-chunks (narrator fallback)`);
+          
+          // Signal that dramatization is complete
+          resolvePromise!();
+          
+          // Generate TTS even for fallback
+          const bookTitle = sanitizeBookTitle(BOOK_METADATA?.title || CURRENT_BOOK_FILE || 'Unknown');
+          console.log(`   🎤 Generating TTS for chapter ${chapterNum} (fallback)...`);
+          await generateSubChunksParallel(
+            bookTitle,
+            chapterNum,
+            newSubChunks,
+            VOICE_MAP,
+            NARRATOR_VOICE,
+            2
+          );
+          
+          // AUTO-CONSOLIDATE immediately after all sub-chunks generated
+          try {
+            const chapterTitle = BOOK_CHAPTERS[chapterNum]?.title;
+            await consolidateChapterFromSubChunks(bookTitle, chapterNum, chapterTitle);
+            console.log(`   📦 Chapter ${chapterNum} consolidated (fallback)`);
+          } catch (consErr) {
+            console.error(`   ⚠️ Chapter ${chapterNum} consolidation failed:`, consErr);
+          }
         }
       }));
     }
@@ -856,60 +761,6 @@ async function startBackgroundDramatization(
   } finally {
     isDramatizingInBackground = false;
     backgroundDramatizationAbort = null;
-  }
-}
-
-/**
- * Background consolidation watcher
- * Runs independently every 30 seconds to consolidate ready chapters
- * Works even when playback is not active - perfect for production
- */
-async function runConsolidationWatcher(): Promise<void> {
-  try {
-    // Check current book if loaded
-    if (CURRENT_BOOK_FILE && BOOK_METADATA) {
-      const bookTitle = sanitizeBookTitle(BOOK_METADATA.title);
-      const metadata = loadAudiobookMetadata(bookTitle);
-      
-      // Only check if generation is in progress
-      if (metadata && metadata.generationStatus === 'in-progress') {
-        const tempCount = countTempChunks(bookTitle);
-        if (tempCount > 0) {
-          console.log(`🔍 Background consolidation check: "${bookTitle}" (${tempCount} temp chunks)`);
-          await checkAndConsolidateReadyChapters(bookTitle);
-        }
-      }
-    }
-  } catch (error) {
-    console.error('❌ Consolidation watcher error:', error);
-  }
-}
-
-/**
- * Start background consolidation watcher
- * Checks every 30 seconds for chapters ready to consolidate
- */
-function startConsolidationWatcher(): void {
-  if (consolidationWatcherInterval) {
-    return; // Already running
-  }
-  
-  console.log('👁️ Background consolidation watcher started (checks every 30s)');
-  consolidationWatcherInterval = setInterval(() => {
-    runConsolidationWatcher().catch(err => 
-      console.error('❌ Consolidation watcher error:', err)
-    );
-  }, CONSOLIDATION_CHECK_INTERVAL);
-}
-
-/**
- * Stop background consolidation watcher
- */
-function stopConsolidationWatcher(): void {
-  if (consolidationWatcherInterval) {
-    console.log('🛑 Stopping background consolidation watcher...');
-    clearInterval(consolidationWatcherInterval);
-    consolidationWatcherInterval = null;
   }
 }
 
@@ -1112,10 +963,9 @@ app.post('/api/book/select', async (req: Request, res: Response) => {
       });
     }
     
-    // Stop any ongoing background generation for previous book
-    if (filename !== CURRENT_BOOK_FILE && isGeneratingInBackground) {
-      console.log('🛑 Switching books - stopping background generation for previous book');
-      stopContinuousGeneration();
+    // Trigger final consolidation check for previous book when switching
+    if (filename !== CURRENT_BOOK_FILE && isDramatizingInBackground) {
+      console.log('🛑 Switching books - will stop background dramatization');
       
       // Trigger final consolidation check for previous book
       if (BOOK_METADATA && CHAPTER_SUBCHUNKS.size > 0) {
@@ -1170,7 +1020,7 @@ app.post('/api/book/select', async (req: Request, res: Response) => {
     if (existingMetadata) {
       console.log(`   Generation status: "${existingMetadata.generationStatus}"`);
       console.log(`   Total chapters: ${existingMetadata.totalChapters}`);
-      console.log(`   Chapters generated: ${existingMetadata.chapters.filter(c => c.isGenerated).length}`);
+      console.log(`   Chapters generated: ${existingMetadata.chapters.filter(c => c && c.isGenerated).length}`);
     }
     console.log(`   Library version: ${hasLibraryVersion ? 'YES' : 'NO'}`);
     
@@ -1179,13 +1029,15 @@ app.post('/api/book/select', async (req: Request, res: Response) => {
     if (!existingMetadata && BOOK_CHAPTERS.length > 0) {
       console.log(`📝 Creating initial metadata for "${bookTitle}" (on book select)`);
       createAudiobookFolder(bookTitle);
+      // Skip index 0 (null placeholder for 1-based indexing)
+      const validChapters = BOOK_CHAPTERS.filter((ch, i) => i > 0 && ch !== null);
       const initialMetadata: AudiobookMetadata = {
         title: BOOK_METADATA.title,
         author: BOOK_METADATA.author,
         language: BOOK_METADATA.language || 'unknown',
-        totalChapters: BOOK_CHAPTERS.length,
-        chapters: BOOK_CHAPTERS.map((chapter, i) => ({
-          index: i,
+        totalChapters: validChapters.length,
+        chapters: validChapters.map((chapter, i) => ({
+          index: i + 1, // 1-based chapter index
           title: chapter.title,
           filename: `${(i + 1).toString().padStart(2, '0')}_${sanitizeChapterTitle(chapter.title)}.wav`,
           duration: 0,
@@ -1198,16 +1050,16 @@ app.post('/api/book/select', async (req: Request, res: Response) => {
         sourceFile: CURRENT_BOOK_FILE,
       };
       saveAudiobookMetadata(bookTitle, initialMetadata);
-      console.log(`✅ Initial metadata created with ${BOOK_CHAPTERS.length} chapters`);
+      console.log(`✅ Initial metadata created with ${validChapters.length} chapters`);
     }
     
     // Calculate effective chunk count (actual or estimated)
     // For background dramatization: use MAX of actual and estimated to ensure reasonable total
     let effectiveTotalChunks = BOOK_INFO.totalChunks; // TOTAL_SUBCHUNKS
     const hasDramatizationPending = (global as any).DRAMATIZATION_ENABLED || isDramatizingInBackground;
-    if (hasDramatizationPending && BOOK_CHAPTERS.length > 0) {
+    if (hasDramatizationPending && getChapterCount() > 0) {
       // Estimate: each chapter will have ~10 sub-chunks on average
-      const estimatedCount = BOOK_CHAPTERS.length * 10;
+      const estimatedCount = getChapterCount() * 10;
       effectiveTotalChunks = Math.max(BOOK_INFO.totalChunks, estimatedCount);
     }
     
@@ -1303,9 +1155,9 @@ app.get('/api/book/info', (req: Request, res: Response) => {
     // If dramatization is pending, use MAX of actual and estimated counts
     // This ensures frontend always sees a reasonable total even as dramatization progresses
     const hasDramatizationPending = (global as any).DRAMATIZATION_ENABLED || isDramatizingInBackground;
-    if (hasDramatizationPending && BOOK_CHAPTERS.length > 0) {
+    if (hasDramatizationPending && getChapterCount() > 0) {
       // Estimate: each chapter will have ~10 sub-chunks on average
-      const estimatedCount = BOOK_CHAPTERS.length * 10;
+      const estimatedCount = getChapterCount() * 10;
       effectiveTotalChunks = Math.max(TOTAL_SUBCHUNKS, estimatedCount);
     }
 
@@ -1359,6 +1211,65 @@ app.get('/api/book/info', (req: Request, res: Response) => {
     console.error('✗ Error fetching book info:', error);
     res.status(500).json({
       error: 'Failed to retrieve book information',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+// Get consolidated chapters status - which chapters are ready for navigation
+// Used by frontend to implement consolidated-only skip behavior
+app.get('/api/book/consolidated', (req: Request, res: Response) => {
+  try {
+    if (!BOOK_METADATA) {
+      return res.status(404).json({
+        error: 'No book loaded',
+        message: 'Please select a book first',
+      });
+    }
+
+    const bookTitle = sanitizeBookTitle(BOOK_METADATA.title);
+    const chapterCount = getChapterCount();
+    
+    // Build array of consolidated status for each chapter
+    const consolidatedStatus: Array<{
+      chapterNum: number;
+      title: string;
+      isConsolidated: boolean;
+      hasSubChunks: boolean;  // Has at least some sub-chunks in temp
+    }> = [];
+    
+    for (let chapterNum = 1; chapterNum <= chapterCount; chapterNum++) {
+      const chapterTitle = BOOK_CHAPTERS[chapterNum]?.title;
+      const isConsolidated = isChapterConsolidated(bookTitle, chapterNum, chapterTitle);
+      const subChunkCount = countChapterSubChunks(bookTitle, chapterNum);
+      
+      consolidatedStatus.push({
+        chapterNum,
+        title: chapterTitle || `Chapter ${chapterNum}`,
+        isConsolidated,
+        hasSubChunks: subChunkCount > 0,
+      });
+    }
+    
+    // Find highest consolidated chapter (for skip forward limit)
+    const highestConsolidated = consolidatedStatus
+      .filter(c => c.isConsolidated)
+      .map(c => c.chapterNum)
+      .reduce((max, n) => Math.max(max, n), 0);
+    
+    res.json({
+      bookTitle,
+      totalChapters: chapterCount,
+      consolidatedChapters: consolidatedStatus.filter(c => c.isConsolidated).length,
+      highestConsolidated,
+      chapters: consolidatedStatus,
+      generatingInBackground: isDramatizingInBackground, // TTS now runs inside dramatization
+      dramatizingInBackground: isDramatizingInBackground,
+    });
+  } catch (error) {
+    console.error('✗ Error fetching consolidated status:', error);
+    res.status(500).json({
+      error: 'Failed to retrieve consolidated status',
       message: error instanceof Error ? error.message : 'Unknown error',
     });
   }
@@ -1590,135 +1501,40 @@ app.post('/api/tts/chunk', async (req: Request, res: Response) => {
       }
       
       // Within estimated range or still processing - tell frontend to retry
-      if (isDramatizingInBackground || isGeneratingInBackground || hasDramatizationPending) {
+      if (isDramatizingInBackground || hasDramatizationPending) {
         console.log(`⏳ Chunk ${globalChunkIndex} not ready yet (have ${TOTAL_SUBCHUNKS}/${estimatedTotalChunks}), background processing in progress...`);
         return res.status(202).json({
           error: 'Chunk not ready',
           message: `Sub-chunk ${globalChunkIndex} is still being generated. Please retry in a few seconds.`,
           totalChunks: estimatedTotalChunks,
           actualChunks: TOTAL_SUBCHUNKS,
-          generatingInBackground: isGeneratingInBackground,
+          generatingInBackground: isDramatizingInBackground,
           dramatizingInBackground: isDramatizingInBackground,
           retryAfterMs: 3000,
         });
       }
     }
 
-    // Get sub-chunk data (may be empty if dramatization is pending)
-    let subChunks = CHAPTER_SUBCHUNKS.get(chapterNum) || [];
+    // ========================================
+    // READ-ONLY MODE: No on-demand generation!
+    // Player can ONLY serve existing files from disk/cache.
+    // Background process is the ONLY producer of audio.
+    // ========================================
     
-    // If sub-chunks empty, chapter needs dramatization
-    if (subChunks.length === 0 && (global as any).DRAMATIZATION_ENABLED && BOOK_CHAPTERS[chapterNum]) {
-      // For LEGACY requests: If background dramatization is running, return 202 to wait
-      // For DIRECT addressing: Always do on-demand dramatization (user explicitly requested this chapter)
-      if (!isDirectAddressing && isDramatizingInBackground) {
-        console.log(`⏳ Chapter ${chapterNum} not dramatized yet, background dramatization in progress...`);
-        return res.status(202).json({
-          error: 'Chapter not ready',
-          message: `Chapter ${chapterNum} is still being dramatized. Please retry in a few seconds.`,
-          totalChunks: TOTAL_SUBCHUNKS,
-          dramatizingInBackground: true,
-          retryAfterMs: 3000,
-        });
-      }
-      
-      // Do on-demand dramatization (direct request or no background process running)
-      console.log(`🎭 On-demand dramatization for chapter ${chapterNum}...`);
-      
-      const chapter = BOOK_CHAPTERS[chapterNum];
-      const characters = (global as any).DRAMATIZATION_CHARACTERS || [];
-      const geminiConfig = (global as any).DRAMATIZATION_CONFIG;
-      const analyzer = (global as any).DRAMATIZATION_ANALYZER;
-      
-      if (geminiConfig && characters.length > 0 && analyzer) {
-        // Dramatize the chapter using tagChapterHybrid
-        const result = await tagChapterHybrid(
-          chapter.text,
-          characters,
-          analyzer,
-          chapterNum  // chapter number (1-based)
-        );
-        
-        // Update chapter with dramatized text
-        BOOK_CHAPTERS[chapterNum] = {
-          ...chapter,
-          text: result.taggedText
-        };
-        
-        // Now split into sub-chunks
-        const newSubChunks = chunkForTwoSpeakers(result.taggedText, undefined, chapterNum);
-        CHAPTER_SUBCHUNKS.set(chapterNum, newSubChunks);
-        CHAPTER_DRAMATIZED.set(chapterNum, result.taggedText);
-        TOTAL_SUBCHUNKS += newSubChunks.length;
-        
-        console.log(`   ✅ Chapter ${chapterNum}: ${newSubChunks.length} sub-chunks created (${result.method})`);
-        
-        subChunks = newSubChunks;
-      } else {
-        // Fallback: wrap in NARRATOR voice
-        const narratorText = `[VOICE=NARRATOR]\n${chapter.text}`;
-        const newSubChunks = chunkForTwoSpeakers(narratorText, undefined, chapterNum);
-        CHAPTER_SUBCHUNKS.set(chapterNum, newSubChunks);
-        CHAPTER_DRAMATIZED.set(chapterNum, narratorText);
-        TOTAL_SUBCHUNKS += newSubChunks.length;
-        
-        console.log(`   ⚠️ Chapter ${chapterNum}: ${newSubChunks.length} sub-chunks (narrator fallback)`);
-        
-        subChunks = newSubChunks;
-      }
-    }
+    // If we reach here, audio doesn't exist anywhere - return 202
+    // The background generation will eventually create it
+    console.log(`⏳ Audio not ready: chapter ${chapterNum}:${localSubChunkIndex}`);
     
-    if (localSubChunkIndex >= subChunks.length) {
-      return res.status(400).json({
-        error: 'Sub-chunk not found',
-        message: `Sub-chunk ${localSubChunkIndex} not found in chapter ${chapterNum} (has ${subChunks.length} sub-chunks)`,
-      });
-    }
-    
-    const subChunk = subChunks[localSubChunkIndex];
-    
-    // Use global VOICE_MAP
-    let voiceMap = VOICE_MAP;
-    if (Object.keys(voiceMap).length === 0) {
-      const voiceMapPath = path.join(ASSETS_DIR, 'dramatized_output', 'voice_map_poc.json');
-      if (fs.existsSync(voiceMapPath)) {
-        voiceMap = await loadVoiceMap(voiceMapPath);
-      }
-    }
-    
-    // Generate sub-chunk audio
-    const result = await generateSubChunk(
-      bookTitle,
+    return res.status(202).json({
+      error: 'Audio not ready',
+      message: `Audio for chapter ${chapterNum}, sub-chunk ${localSubChunkIndex} is still being generated. Please retry.`,
       chapterNum,
-      subChunk,
-      voiceMap,
-      voiceName
-    );
-    
-    const audioBuffer = result.audioBuffer;
-    
-    // Cache in memory
-    const totalTime = Date.now() - requestStartTime;
-    audioCache.set(cacheKey, audioBuffer);
-    console.log(`✓ Audio generated and cached: ${audioBuffer.length} bytes (TOTAL TIME: ${totalTime}ms = ${(totalTime/1000).toFixed(1)}s)`);
-
-    // Track playback for cleanup (freshly generated = not ready yet)
-    trackSubChunkPlayed(bookTitle, chapterNum, localSubChunkIndex, false);
-
-    // Start continuous background generation if not already running
-    // This will generate ALL remaining chunks in batches of 3, independently of playback
-    if (!isGeneratingInBackground) {
-      console.log(`  🔥 Starting continuous background generation for all remaining chunks...`);
-      startContinuousGeneration(bookTitle, voiceMap, voiceName)
-        .catch(err => console.error('❌ Background generation failed:', err));
-    }
-
-    res.setHeader('Content-Type', 'audio/wav');
-    res.setHeader('Content-Length', audioBuffer.length.toString());
-    res.setHeader('Accept-Ranges', 'bytes');
-    res.setHeader('X-Cache', 'MISS');
-    
-    res.send(audioBuffer);
+      subChunkIndex: localSubChunkIndex,
+      totalChunks: TOTAL_SUBCHUNKS,
+      generatingInBackground: isDramatizingInBackground,
+      dramatizingInBackground: isDramatizingInBackground,
+      retryAfterMs: 2000,
+    });
   } catch (error) {
     console.error('✗ TTS Chunk Error:', error);
     res.status(500).json({
@@ -2391,13 +2207,5 @@ app.listen(PORT, () => {
   console.log(`  GET  /api/audiobooks/:bookTitle/position`);
   console.log(`  PUT  /api/audiobooks/:bookTitle/preferences`);
   console.log(`  GET  /api/audiobooks/:bookTitle/preferences`);
-  console.log('');
-  
-  // PRODUCTION: Enable background consolidation watcher
-  // This runs every 30s to consolidate ready chapters independently
-  // Disabled during development to prevent excessive token consumption
-  // startConsolidationWatcher();
-  console.log('💡 Background consolidation watcher: DISABLED (dev mode)');
-  console.log('   To enable for production: uncomment startConsolidationWatcher() in server startup');
   console.log('');
 });

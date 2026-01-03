@@ -188,7 +188,7 @@ export function saveAudiobookMetadata(bookTitle: string, metadata: AudiobookMeta
   
   // Write JSON with pretty formatting
   fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), 'utf-8');
-  console.log(`✓ Saved metadata: ${metadataPath}`);
+  // Note: Verbose 'Saved metadata' log removed for cleaner output
 }
 
 /**

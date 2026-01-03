@@ -1351,7 +1351,79 @@ export async function generateSubChunk(
 }
 
 /**
- * Generate multiple sub-chunks in parallel
+ * Worker pool pattern for TTS generation
+ * N independent workers continuously pull from a shared queue
+ * Much more efficient than batching when sub-chunks have varying sizes
+ * 
+ * @param bookTitle - Sanitized book title
+ * @param chapterIndex - Chapter index
+ * @param subChunks - Array of sub-chunks to generate
+ * @param voiceMap - Character to voice mapping
+ * @param defaultVoice - Default voice for narrator
+ * @param numWorkers - Number of concurrent workers (default: 2)
+ * @returns Array of sub-chunk results
+ */
+export async function generateSubChunksWorkerPool(
+  bookTitle: string,
+  chapterIndex: number,
+  subChunks: TwoSpeakerChunk[],
+  voiceMap: Record<string, string> = {},
+  defaultVoice: string = 'Algieba',
+  numWorkers: number = 2
+): Promise<SubChunkResult[]> {
+  console.log(`🏭 Worker pool: Chapter ${chapterIndex}, ${subChunks.length} sub-chunks (${numWorkers} workers)`);
+  const startTime = Date.now();
+  
+  // Create a shared queue (just an index counter)
+  let nextIndex = 0;
+  let completedCount = 0;
+  const results: SubChunkResult[] = new Array(subChunks.length);
+  
+  // Worker function - continuously pulls from queue until empty
+  async function worker(workerId: number): Promise<void> {
+    while (true) {
+      // Atomically get next index (JS is single-threaded, so this is safe)
+      const myIndex = nextIndex++;
+      if (myIndex >= subChunks.length) break; // Queue empty
+      
+      const subChunk = subChunks[myIndex];
+      console.log(`  🔧 Worker ${workerId}: sub-chunk ${chapterIndex}:${subChunk.index}`);
+      
+      try {
+        const result = await generateSubChunk(bookTitle, chapterIndex, subChunk, voiceMap, defaultVoice);
+        results[myIndex] = result;
+        completedCount++;
+        console.log(`  ✅ Worker ${workerId}: done ${chapterIndex}:${subChunk.index} (${completedCount}/${subChunks.length})`);
+      } catch (error) {
+        console.error(`  ❌ Worker ${workerId}: failed ${chapterIndex}:${subChunk.index}:`, error);
+        // Store error result with empty buffer
+        results[myIndex] = {
+          chapterIndex,
+          subChunkIndex: subChunk.index,
+          audioBuffer: Buffer.alloc(0),
+          filePath: '',
+          fromCache: false,
+          duration: 0
+        };
+        completedCount++;
+      }
+    }
+  }
+  
+  // Start all workers in parallel
+  const workerPromises = Array.from({ length: numWorkers }, (_, i) => worker(i + 1));
+  await Promise.all(workerPromises);
+  
+  const elapsedMs = Date.now() - startTime;
+  const fromCacheCount = results.filter(r => r?.fromCache).length;
+  
+  console.log(`✅ Chapter ${chapterIndex + 1} complete: ${completedCount} sub-chunks in ${elapsedMs}ms (${fromCacheCount} from cache)`);
+  
+  return results.filter(r => r !== undefined);
+}
+
+/**
+ * Generate multiple sub-chunks in parallel (LEGACY - batch-based)
  * 
  * @param bookTitle - Sanitized book title
  * @param chapterIndex - Chapter index
@@ -1369,7 +1441,7 @@ export async function generateSubChunksParallel(
   defaultVoice: string = 'Algieba',
   parallelism: number = 2
 ): Promise<SubChunkResult[]> {
-  console.log(`🚀 Parallel generation: Chapter ${chapterIndex + 1}, ${subChunks.length} sub-chunks (parallelism: ${parallelism})`);
+  console.log(`🚀 Parallel generation: Chapter ${chapterIndex}, ${subChunks.length} sub-chunks (parallelism: ${parallelism})`);
   const startTime = Date.now();
   
   const results: SubChunkResult[] = [];
