@@ -35,6 +35,8 @@ interface AudioCache {
   blobUrl: string;
   loading?: boolean;
   duration?: number; // Store actual audio duration in seconds
+  isWholeChapter?: boolean; // True if this is a consolidated chapter file
+  seekOffsetSec?: number; // Seek position for consolidated chapters
 }
 
 // ========================================
@@ -337,11 +339,18 @@ const BookPlayer: React.FC = () => {
     return null;
   };
 
+// Audio fetch result with optional seek info for consolidated chapters
+interface AudioFetchResult {
+  blobUrl: string;
+  isWholeChapter?: boolean;
+  seekOffsetSec?: number;
+}
+
   const fetchChunkAudio = async (
     chunkIndex: number,
     retryCount = 0,
     bookFileOverride?: string // Allow override for book selection race condition
-  ): Promise<string> => {
+  ): Promise<AudioFetchResult> => {
     try {
       // FIX BUG 1: Convert global index to chapter:subChunk and send BOTH
       // This allows direct addressing (preferred) with fallback to global index
@@ -416,7 +425,16 @@ const BookPlayer: React.FC = () => {
 
       const blob = await response.blob();
       const blobUrl = URL.createObjectURL(blob);
-      return blobUrl;
+      
+      // Check if backend returned a whole chapter instead of sub-chunk
+      const isWholeChapter = response.headers.get('X-Is-Whole-Chapter') === 'true';
+      const seekOffsetSec = parseFloat(response.headers.get('X-Seek-Offset-Sec') || '0');
+      
+      if (isWholeChapter) {
+        console.log(`📦 Received whole chapter file, seek offset: ${seekOffsetSec.toFixed(2)}s`);
+      }
+      
+      return { blobUrl, isWholeChapter, seekOffsetSec };
     } catch (error) {
       // Retry logic with exponential backoff
       if (retryCount < RETRY_ATTEMPTS) {
@@ -452,6 +470,13 @@ const BookPlayer: React.FC = () => {
           console.log('⚡ FAST PATH: Using cached audio, instant playback');
           audioRef.current.src = cachedAudio.blobUrl;
           audioRef.current.playbackRate = playbackSpeed;
+          
+          // If this is a cached whole chapter with seek offset, seek to correct position
+          if (cachedAudio.isWholeChapter && cachedAudio.seekOffsetSec && cachedAudio.seekOffsetSec > 0) {
+            console.log(`📦 Seeking to ${cachedAudio.seekOffsetSec.toFixed(2)}s in cached consolidated chapter`);
+            audioRef.current.currentTime = cachedAudio.seekOffsetSec;
+          }
+          
           await audioRef.current.play();
           setIsPlaying(true);
           setCurrentChunkIndex(chunkIndex);
@@ -473,17 +498,21 @@ const BookPlayer: React.FC = () => {
       console.log('🐌 SLOW PATH: Fetching from API...');
 
       // Fetch from API (pass bookFile override to avoid race condition)
-      const blobUrl = await fetchChunkAudio(chunkIndex, 0, bookFileOverride);
-      console.log('🎵 Received blobUrl:', blobUrl.substring(0, 50) + '...');
+      const fetchResult = await fetchChunkAudio(chunkIndex, 0, bookFileOverride);
+      console.log('🎵 Received blobUrl:', fetchResult.blobUrl.substring(0, 50) + '...');
 
-      // Cache it
+      // Cache it (include seek offset if this is a whole chapter)
       setAudioCache(prev => {
         const newCache = new Map(prev);
-        newCache.set(chunkIndex, { blobUrl });
+        newCache.set(chunkIndex, { 
+          blobUrl: fetchResult.blobUrl,
+          isWholeChapter: fetchResult.isWholeChapter,
+          seekOffsetSec: fetchResult.seekOffsetSec
+        });
         return newCache;
       });
 
-      cachedAudio = { blobUrl };
+      cachedAudio = { blobUrl: fetchResult.blobUrl };
 
       // Play audio
       if (audioRef.current) {
@@ -495,6 +524,13 @@ const BookPlayer: React.FC = () => {
         // Set new source
         audioRef.current.src = cachedAudio.blobUrl;
         audioRef.current.playbackRate = playbackSpeed;
+        
+        // If this is a whole chapter with seek offset, seek to correct position
+        if (fetchResult.isWholeChapter && fetchResult.seekOffsetSec && fetchResult.seekOffsetSec > 0) {
+          console.log(`📦 Seeking to ${fetchResult.seekOffsetSec.toFixed(2)}s in consolidated chapter`);
+          audioRef.current.currentTime = fetchResult.seekOffsetSec;
+        }
+        
         await audioRef.current.play();
         setIsPlaying(true);
         setCurrentChunkIndex(chunkIndex);
@@ -555,12 +591,17 @@ const BookPlayer: React.FC = () => {
         return newCache;
       });
 
-      const blobUrl = await fetchChunkAudio(nextIndex);
+      const fetchResult = await fetchChunkAudio(nextIndex);
 
-      // Update cache with blob URL
+      // Update cache with blob URL (preserve whole chapter info)
       setAudioCache(prev => {
         const newCache = new Map(prev);
-        newCache.set(nextIndex, { blobUrl, loading: false });
+        newCache.set(nextIndex, { 
+          blobUrl: fetchResult.blobUrl, 
+          loading: false,
+          isWholeChapter: fetchResult.isWholeChapter,
+          seekOffsetSec: fetchResult.seekOffsetSec
+        });
         return newCache;
       });
 

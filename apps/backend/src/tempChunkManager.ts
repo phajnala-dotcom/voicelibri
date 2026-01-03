@@ -33,10 +33,6 @@ import {
   getTempFolder,
   createAudiobookFolder,
   sanitizeChapterTitle,
-  saveChapterBoundaries,
-  loadChapterBoundaries,
-  ChapterBoundaries,
-  SubChunkBoundary
 } from './audiobookManager.js';
 import { Chapter } from './bookChunker.js';
 import { formatForMultiSpeakerTTS, getUniqueSpeakers, chunkForTwoSpeakers } from './twoSpeakerChunker.js';
@@ -1498,32 +1494,23 @@ export async function consolidateChapterFromSubChunks(
   const subChunkFiles = listChapterSubChunks(bookTitle, chapterIndex);
   
   if (subChunkFiles.length === 0) {
-    throw new Error(`No sub-chunks found for chapter ${chapterIndex + 1}`);
+    throw new Error(`No sub-chunks found for chapter ${chapterIndex}`);
   }
   
-  console.log(`📦 Consolidating Chapter ${chapterIndex + 1} from ${subChunkFiles.length} sub-chunks...`);
+  console.log(`📦 Consolidating Chapter ${chapterIndex} from ${subChunkFiles.length} sub-chunks...`);
   
-  // Load all sub-chunk buffers and calculate boundaries
+  // Load all sub-chunk buffers and calculate total duration
   const buffers: Buffer[] = [];
-  const subChunkBoundaries: SubChunkBoundary[] = [];
-  let currentByteOffset = 0;
+  let totalDuration = 0;
   
   for (let i = 0; i < subChunkFiles.length; i++) {
     const buffer = fs.readFileSync(subChunkFiles[i]);
     buffers.push(buffer);
     
-    // Calculate PCM data size (buffer length - 44 byte WAV header)
+    // Calculate duration from PCM data size (buffer length - 44 byte WAV header)
     const pcmSize = buffer.length - 44;
     const duration = pcmSize / (24000 * 1 * 2); // 24kHz, mono, 16-bit
-    
-    subChunkBoundaries.push({
-      index: i,
-      byteStart: currentByteOffset,
-      byteEnd: currentByteOffset + pcmSize,
-      duration: duration,
-    });
-    
-    currentByteOffset += pcmSize;
+    totalDuration += duration;
   }
   
   // Concatenate into single WAV
@@ -1538,17 +1525,7 @@ export async function consolidateChapterFromSubChunks(
   // Save consolidated chapter file
   fs.writeFileSync(outputPath, chapterAudio);
   
-  // Save boundaries metadata
-  const totalDuration = subChunkBoundaries.reduce((sum, sc) => sum + sc.duration, 0);
-  const boundaries: ChapterBoundaries = {
-    chapterIndex,
-    totalDuration,
-    subChunks: subChunkBoundaries,
-    consolidatedAt: new Date().toISOString(),
-  };
-  saveChapterBoundaries(bookTitle, boundaries);
-  
-  console.log(`✅ Consolidated Chapter ${chapterIndex + 1}: ${path.basename(outputPath)} (${chapterAudio.length} bytes, ~${totalDuration.toFixed(1)}s)`);
+  console.log(`✅ Consolidated Chapter ${chapterIndex}: ${path.basename(outputPath)} (${chapterAudio.length} bytes, ~${totalDuration.toFixed(1)}s)`);
   
   return outputPath;
 }

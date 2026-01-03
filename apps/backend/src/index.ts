@@ -25,7 +25,6 @@ import {
   consolidateChapterFromTemps,
   consolidateChapterSmart,
   deleteAllTempChunks,
-  extractChunkFromConsolidated,
   // Pre-dramatization pipeline
   clearDramatizationCache,
   startPreDramatization,
@@ -53,10 +52,8 @@ import {
   getSubChunkPath,
   countChapterSubChunks,
   isChapterConsolidated,
-  extractSubChunkFromChapter,
-  loadChapterBoundaries,
+  loadChapterFile,
   type AudiobookMetadata,
-  type ChapterBoundaries
 } from './audiobookManager.js';
 import { 
   extractEpubChapters, 
@@ -704,6 +701,8 @@ async function startBackgroundDramatization(
             const chapterTitle = BOOK_CHAPTERS[chapterNum]?.title;
             await consolidateChapterFromSubChunks(bookTitle, chapterNum, chapterTitle);
             console.log(`   📦 Chapter ${chapterNum} consolidated`);
+            // Clean up temp sub-chunks after successful consolidation
+            deleteChapterSubChunks(bookTitle, chapterNum);
           } catch (consErr) {
             console.error(`   ⚠️ Chapter ${chapterNum} consolidation failed:`, consErr);
           }
@@ -741,6 +740,8 @@ async function startBackgroundDramatization(
             const chapterTitle = BOOK_CHAPTERS[chapterNum]?.title;
             await consolidateChapterFromSubChunks(bookTitle, chapterNum, chapterTitle);
             console.log(`   📦 Chapter ${chapterNum} consolidated (fallback)`);
+            // Clean up temp sub-chunks after successful consolidation
+            deleteChapterSubChunks(bookTitle, chapterNum);
           } catch (consErr) {
             console.error(`   ⚠️ Chapter ${chapterNum} consolidation failed:`, consErr);
           }
@@ -1361,31 +1362,7 @@ app.post('/api/tts/chunk', async (req: Request, res: Response) => {
     // If the file exists, serve it immediately - don't care about TOTAL_SUBCHUNKS
     // ========================================
     
-    // PRIORITY 1: Check if chapter is consolidated → extract sub-chunk from chapter file
-    if (isChapterConsolidated(bookTitle, chapterNum, chapterTitle)) {
-      console.log(`📦 Chapter ${chapterNum} consolidated, extracting sub-chunk ${localSubChunkIndex}...`);
-      
-      const extractedAudio = extractSubChunkFromChapter(bookTitle, chapterNum, localSubChunkIndex, chapterTitle);
-      
-      if (extractedAudio) {
-        const cacheTime = Date.now() - requestStartTime;
-        console.log(`💾 Serving from chapter file: ${chapterNum}:${localSubChunkIndex} (${cacheTime}ms)`);
-        
-        // Track playback for cleanup (from chapter file = was ready)
-        trackSubChunkPlayed(bookTitle, chapterNum, localSubChunkIndex, true);
-        
-        res.setHeader('Content-Type', 'audio/wav');
-        res.setHeader('Content-Length', extractedAudio.length.toString());
-        res.setHeader('Accept-Ranges', 'bytes');
-        res.setHeader('X-Cache', 'CHAPTER_EXTRACT');
-        res.setHeader('X-Chapter-Num', chapterNum.toString());
-        res.setHeader('X-SubChunk-Index', localSubChunkIndex.toString());
-        
-        return res.send(extractedAudio);
-      }
-    }
-    
-    // PRIORITY 2: Check for existing sub-chunk file
+    // PRIORITY 1: Check for existing sub-chunk file (during generation)
     if (subChunkExists(bookTitle, chapterNum, localSubChunkIndex)) {
       const cachedAudio = loadSubChunk(bookTitle, chapterNum, localSubChunkIndex);
       
@@ -1404,6 +1381,41 @@ app.post('/api/tts/chunk', async (req: Request, res: Response) => {
         res.setHeader('X-SubChunk-Index', localSubChunkIndex.toString());
         
         return res.send(cachedAudio);
+      }
+    }
+    
+    // PRIORITY 2: Check if chapter is consolidated → serve whole chapter file
+    // Sub-chunks are deleted after consolidation, so serve the chapter for seeking
+    if (isChapterConsolidated(bookTitle, chapterNum, chapterTitle)) {
+      const chapterAudio = loadChapterFile(bookTitle, chapterNum, chapterTitle);
+      
+      if (chapterAudio) {
+        const cacheTime = Date.now() - requestStartTime;
+        console.log(`📦 Serving whole chapter file: ${chapterNum} (${cacheTime}ms) - sub-chunks were cleaned up`);
+        
+        // Calculate seek offset in seconds based on requested sub-chunk index
+        // Total chapter duration from audio buffer (24kHz, mono, 16-bit = 48000 bytes/sec)
+        const chapterDurationSec = (chapterAudio.length - 44) / 48000; // minus WAV header
+        const chapterSubChunks = CHAPTER_SUBCHUNKS.get(chapterNum);
+        const totalSubChunks = chapterSubChunks?.length || 1;
+        
+        // Approximate seek position: (subChunkIndex / totalSubChunks) * totalDuration
+        // This assumes roughly equal sub-chunk durations
+        const seekOffsetSec = (localSubChunkIndex / totalSubChunks) * chapterDurationSec;
+        
+        console.log(`   Seek offset: ${seekOffsetSec.toFixed(2)}s (subChunk ${localSubChunkIndex}/${totalSubChunks}, chapter ${chapterDurationSec.toFixed(1)}s)`);
+        
+        res.setHeader('Content-Type', 'audio/wav');
+        res.setHeader('Content-Length', chapterAudio.length.toString());
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('X-Cache', 'CHAPTER_FILE');
+        res.setHeader('X-Chapter-Num', chapterNum.toString());
+        res.setHeader('X-Is-Whole-Chapter', 'true');
+        res.setHeader('X-Seek-Offset-Sec', seekOffsetSec.toFixed(3));
+        res.setHeader('X-Total-SubChunks', totalSubChunks.toString());
+        res.setHeader('X-Requested-SubChunk', localSubChunkIndex.toString());
+        
+        return res.send(chapterAudio);
       }
     }
     

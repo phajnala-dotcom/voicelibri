@@ -17,24 +17,6 @@ const __dirname = path.dirname(__filename);
  * Sub-chunk boundary within a consolidated chapter file
  * Used to extract individual sub-chunks from chapter file for playback
  */
-export interface SubChunkBoundary {
-  index: number;           // Sub-chunk index within chapter
-  byteStart: number;       // Start byte offset in chapter file (after WAV header)
-  byteEnd: number;         // End byte offset in chapter file
-  duration: number;        // Duration in seconds
-}
-
-/**
- * Chapter boundaries metadata - stored alongside chapter file
- * Enables extraction of sub-chunks from consolidated chapter
- */
-export interface ChapterBoundaries {
-  chapterIndex: number;    // Note: This is actually chapterNum (1-based) despite the name
-  totalDuration: number;   // Total chapter duration in seconds
-  subChunks: SubChunkBoundary[];
-  consolidatedAt: string;  // ISO timestamp
-}
-
 /**
  * Chapter metadata within an audiobook
  */
@@ -499,73 +481,13 @@ export function loadVoiceMapForBook(bookTitle: string): Record<string, string> {
   }
 }
 
-// ========================================
-// Chapter Boundaries (Sub-chunk Extraction)
-// ========================================
-
 /**
- * Get chapter boundaries file path
- * 
- * @param bookTitle - Sanitized book title
- * @param chapterNum - Chapter number (1-based)
- * @returns Path to boundaries JSON file
- */
-export function getChapterBoundariesPath(bookTitle: string, chapterNum: number): string {
-  const bookDir = getAudiobookFolder(bookTitle);
-  // chapterNum is 1-based, use directly
-  const chapterPad = chapterNum.toString().padStart(2, '0');
-  return path.join(bookDir, `${chapterPad}_boundaries.json`);
-}
-
-/**
- * Save chapter boundaries after consolidation
- * 
- * @param bookTitle - Sanitized book title
- * @param boundaries - Chapter boundaries data (chapterIndex is 1-based chapterNum)
- */
-export function saveChapterBoundaries(bookTitle: string, boundaries: ChapterBoundaries): void {
-  const boundariesPath = getChapterBoundariesPath(bookTitle, boundaries.chapterIndex);
-  
-  // Ensure book directory exists
-  const bookDir = getAudiobookFolder(bookTitle);
-  if (!fs.existsSync(bookDir)) {
-    fs.mkdirSync(bookDir, { recursive: true });
-  }
-  
-  fs.writeFileSync(boundariesPath, JSON.stringify(boundaries, null, 2), 'utf-8');
-  console.log(`💾 Saved boundaries for chapter ${boundaries.chapterIndex}: ${boundaries.subChunks.length} sub-chunks`);
-}
-
-/**
- * Load chapter boundaries
- * 
- * @param bookTitle - Sanitized book title
- * @param chapterNum - Chapter number (1-based)
- * @returns Chapter boundaries or null if not found
- */
-export function loadChapterBoundaries(bookTitle: string, chapterNum: number): ChapterBoundaries | null {
-  const boundariesPath = getChapterBoundariesPath(bookTitle, chapterNum);
-  
-  if (!fs.existsSync(boundariesPath)) {
-    return null;
-  }
-  
-  try {
-    const content = fs.readFileSync(boundariesPath, 'utf-8');
-    return JSON.parse(content) as ChapterBoundaries;
-  } catch (error) {
-    console.error(`✗ Failed to load chapter ${chapterNum} boundaries:`, error);
-    return null;
-  }
-}
-
-/**
- * Check if chapter is consolidated (chapter file + boundaries exist)
+ * Check if chapter is consolidated (chapter file exists)
  * 
  * @param bookTitle - Sanitized book title
  * @param chapterNum - Chapter number (1-based)
  * @param chapterTitle - Optional chapter title for path resolution
- * @returns True if chapter is fully consolidated
+ * @returns True if chapter file exists
  */
 export function isChapterConsolidated(
   bookTitle: string, 
@@ -573,103 +495,34 @@ export function isChapterConsolidated(
   chapterTitle?: string
 ): boolean {
   const chapterPath = getChapterPath(bookTitle, chapterNum, chapterTitle);
-  const boundariesPath = getChapterBoundariesPath(bookTitle, chapterNum);
-  
-  return fs.existsSync(chapterPath) && fs.existsSync(boundariesPath);
+  return fs.existsSync(chapterPath);
 }
 
 /**
- * Extract a sub-chunk from consolidated chapter file
- * Uses byte boundaries to slice the correct portion
+ * Load the entire consolidated chapter file
  * 
  * @param bookTitle - Sanitized book title
  * @param chapterNum - Chapter number (1-based)
- * @param subChunkIndex - Sub-chunk index within chapter
  * @param chapterTitle - Optional chapter title for path resolution
- * @returns Audio buffer for the sub-chunk, or null if not available
+ * @returns Audio buffer for the whole chapter, or null if not available
  */
-export function extractSubChunkFromChapter(
+export function loadChapterFile(
   bookTitle: string,
   chapterNum: number,
-  subChunkIndex: number,
   chapterTitle?: string
 ): Buffer | null {
-  // Load boundaries
-  const boundaries = loadChapterBoundaries(bookTitle, chapterNum);
-  if (!boundaries) {
-    return null;
-  }
-  
-  // Find sub-chunk boundary
-  const subChunk = boundaries.subChunks.find(sc => sc.index === subChunkIndex);
-  if (!subChunk) {
-    console.error(`✗ Sub-chunk ${subChunkIndex} not found in chapter ${chapterNum} boundaries`);
-    return null;
-  }
-  
-  // Load chapter file
   const chapterPath = getChapterPath(bookTitle, chapterNum, chapterTitle);
+  
   if (!fs.existsSync(chapterPath)) {
-    console.error(`✗ Chapter file not found: ${chapterPath}`);
     return null;
   }
   
   try {
     const chapterBuffer = fs.readFileSync(chapterPath);
-    
-    // WAV header is 44 bytes - boundaries are relative to PCM data start
-    const WAV_HEADER_SIZE = 44;
-    const pcmStart = WAV_HEADER_SIZE + subChunk.byteStart;
-    const pcmEnd = WAV_HEADER_SIZE + subChunk.byteEnd;
-    
-    // Extract PCM data for this sub-chunk
-    const pcmData = chapterBuffer.slice(pcmStart, pcmEnd);
-    
-    // Create new WAV buffer with header + extracted PCM
-    const wavBuffer = createWavBuffer(pcmData);
-    
-    console.log(`📤 Extracted sub-chunk ${chapterNum}:${subChunkIndex} from chapter (${wavBuffer.length} bytes)`);
-    return wavBuffer;
+    console.log(`📦 Loaded chapter ${chapterNum}: ${path.basename(chapterPath)} (${chapterBuffer.length} bytes)`);
+    return chapterBuffer;
   } catch (error) {
-    console.error(`✗ Failed to extract sub-chunk from chapter:`, error);
+    console.error(`✗ Failed to load chapter file:`, error);
     return null;
   }
-}
-
-/**
- * Create a WAV buffer from PCM data
- * Uses Gemini TTS defaults: 24000 Hz, mono, 16-bit
- * 
- * @param pcmData - Raw PCM audio data
- * @returns Complete WAV buffer with header
- */
-function createWavBuffer(pcmData: Buffer): Buffer {
-  const sampleRate = 24000;
-  const numChannels = 1;
-  const bitsPerSample = 16;
-  const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
-  const blockAlign = numChannels * (bitsPerSample / 8);
-  
-  const header = Buffer.alloc(44);
-  
-  // RIFF header
-  header.write('RIFF', 0);
-  header.writeUInt32LE(36 + pcmData.length, 4);
-  header.write('WAVE', 8);
-  
-  // fmt chunk
-  header.write('fmt ', 12);
-  header.writeUInt32LE(16, 16); // fmt chunk size
-  header.writeUInt16LE(1, 20);  // audio format (PCM)
-  header.writeUInt16LE(numChannels, 22);
-  header.writeUInt32LE(sampleRate, 24);
-  header.writeUInt32LE(byteRate, 28);
-  header.writeUInt16LE(blockAlign, 32);
-  header.writeUInt16LE(bitsPerSample, 34);
-  
-  // data chunk
-  header.write('data', 36);
-  header.writeUInt32LE(pcmData.length, 40);
-  
-  return Buffer.concat([header, pcmData]);
 }

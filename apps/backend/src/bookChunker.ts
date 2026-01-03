@@ -631,8 +631,9 @@ const FRONT_MATTER_KEYWORDS = [
   // English
   'contents', 'table of contents', 'copyright', 'dedication', 'foreword',
   'preface', 'introduction', 'acknowledgement', 'acknowledgment', 'about',
+  'author', 'note', 'notes', 'prologue', 'epilogue',
   // Czech/Slovak
-  'obsah', 'věnování', 'předmluva', 'úvod', 'poděkování',
+  'obsah', 'věnování', 'předmluva', 'úvod', 'poděkování', 'poznámka', 'autor',
   // German
   'inhalt', 'inhaltsverzeichnis', 'widmung', 'vorwort', 'einleitung',
   // French
@@ -704,31 +705,40 @@ export function classifySections(sections: RawSection[]): Chapter[] {
     return { ...section, isFrontMatter };
   });
   
-  // Step 4: Build chapters
+  // Step 4: Build chapters with proper titles
   // - index: sequential 1-based position (for file naming, array access)
   // - displayNumber: parsed from title (for UI) or sequential fallback
+  // - title: extracted from HTML or fallback "Section N" / "Chapter N"
   const chapters: Chapter[] = [];
-  let sequentialNumber = 1;
+  let chapterNumber = 1;  // Counter for real chapters (starting from 1)
+  let sectionNumber = 1;  // Counter for front matter sections (starting from 1)
   let currentOffset = 0;
   
   for (let i = 0; i < classifiedSections.length; i++) {
     const section = classifiedSections[i];
     
-    // Determine displayNumber:
-    // - null for front matter
-    // - parsed number if available (directly from title, no offset adjustment)
-    // - sequential fallback for real chapters without explicit numbers
+    // Determine displayNumber and generate title if needed
     let displayNumber: number | null;
+    let finalTitle: string;
+    
     if (section.isFrontMatter) {
       displayNumber = null;
-    } else if (section.parsedNumber !== null) {
-      displayNumber = section.parsedNumber;
-      // Update sequential to stay ahead of parsed numbers
-      if (section.parsedNumber >= sequentialNumber) {
-        sequentialNumber = section.parsedNumber + 1;
-      }
+      // For front matter: use extracted title or "Section N"
+      finalTitle = section.title || `Section ${sectionNumber}`;
+      sectionNumber++;
     } else {
-      displayNumber = sequentialNumber++;
+      // For real chapters: use parsed number or sequential
+      if (section.parsedNumber !== null) {
+        displayNumber = section.parsedNumber;
+        // Update chapter counter to stay ahead of parsed numbers
+        if (section.parsedNumber >= chapterNumber) {
+          chapterNumber = section.parsedNumber + 1;
+        }
+      } else {
+        displayNumber = chapterNumber++;
+      }
+      // For chapters: use extracted title or "Chapter N"
+      finalTitle = section.title || `Chapter ${displayNumber}`;
     }
     
     const chapterIndex = chapters.length + 1; // 1-based internal index
@@ -739,7 +749,7 @@ export function classifySections(sections: RawSection[]): Chapter[] {
       index: chapterIndex,
       displayNumber,
       isFrontMatter: section.isFrontMatter,
-      title: section.title,
+      title: finalTitle,
       startOffset,
       endOffset,
       text: section.text,
@@ -749,9 +759,9 @@ export function classifySections(sections: RawSection[]): Chapter[] {
     
     // Log classification
     if (section.isFrontMatter) {
-      console.log(`📄 Section ${chapterIndex} (front matter): "${section.title}" (${section.textLength} chars)`);
+      console.log(`📄 Section ${chapterIndex} (front matter): "${finalTitle}" (${section.textLength} chars)`);
     } else {
-      console.log(`📖 Section ${chapterIndex} (Chapter ${displayNumber}): "${section.title}" (${section.textLength} chars)`);
+      console.log(`📖 Section ${chapterIndex} (Chapter ${displayNumber}): "${finalTitle}" (${section.textLength} chars)`);
     }
   }
   
@@ -875,11 +885,13 @@ export function extractEpubChapters(epubBuffer: Buffer): Chapter[] {
         continue;
       }
       
-      // Extract title from HTML content (h1, h2, title tag) - more reliable than TOC index
+      // Extract title from HTML content (h1, h2, title tag) - most reliable source
+      // Fallback will be computed in classifySections based on section type (Section N vs Chapter N)
       const extractedTitle = extractTitleFromHtml(htmlContent);
-      const title = extractedTitle || `Section ${rawSections.length + 1}`;
+      // Use extracted title or placeholder that will be replaced in classifySections
+      const title = extractedTitle || '';
       
-      console.log(`📖 EPUB section ${rawSections.length + 1}: "${title}" (${plainText.trim().length} chars)`);
+      console.log(`📖 EPUB section ${rawSections.length + 1}: "${title || '(no title)'}" (from: ${extractedTitle ? 'HTML' : 'pending'}) (${plainText.trim().length} chars)`);
       rawSections.push({ title, text: plainText, originalIndex: i });
     }
     
@@ -929,10 +941,19 @@ function extractTitleFromHtml(html: string): string | null {
     }
   }
   
-  // Try elements with "title" or "chapter" class
-  const classTitleMatch = html.match(/<[^>]+class="[^"]*(?:title|chapter|heading)[^"]*"[^>]*>([\s\S]*?)<\/[^>]+>/i);
+  // Try elements with "title", "chapter", "kapitola" (Czech), or "heading" class
+  const classTitleMatch = html.match(/<[^>]+class="[^"]*(?:title|chapter|kapitola|heading)[^"]*"[^>]*>([\s\S]*?)<\/[^>]+>/i);
   if (classTitleMatch) {
     const title = stripHtml(classTitleMatch[1]).trim();
+    if (title.length > 0 && title.length < 200) {
+      return title;
+    }
+  }
+  
+  // Try first <p> element with id containing "toc" or "marker" (common in EPUBs for chapter headers)
+  const tocMarkerMatch = html.match(/<p[^>]+id="[^"]*(?:toc|marker)[^"]*"[^>]*>([\s\S]*?)<\/p>/i);
+  if (tocMarkerMatch) {
+    const title = stripHtml(tocMarkerMatch[1]).trim();
     if (title.length > 0 && title.length < 200) {
       return title;
     }
