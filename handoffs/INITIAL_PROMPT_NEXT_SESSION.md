@@ -10,108 +10,193 @@ I'm working on an **ebook-to-audiobook TTS application** using:
 - Backend: Node.js/Express with TypeScript
 - Frontend: React/Vite
 - TTS: Google Gemini TTS API (multi-voice)
-- LLM: Gemini for dialogue dramatization
+- LLM: Gemini 2.5 Flash for dialogue dramatization and translation
 
-**Branch:** `feature/parallel-pipeline`
+**Branch:** `feature/translation-support`
 
-## Current State
+## Current State (Stable - All Previous Bugs Fixed)
 
 The app can:
 ✅ Load EPUB/TXT books
-✅ Detect characters and assign unique voices
-✅ Dramatize text with LLM (parallel, 3 chapters at a time)
-✅ Generate TTS audio sub-chunks
+✅ Detect characters and assign unique voices  
+✅ Dramatize text chapter-by-chapter with LLM
+✅ Generate TTS audio (3x parallel sub-chunks per chapter)
 ✅ Consolidate sub-chunks into chapter files
 ✅ Play audio with chapter-based UI
+✅ Dead code cleaned up (reduced codebase by ~2000 lines)
 
-## CRITICAL BUGS (Fix First!)
+## NEW FEATURE: Translation Support
 
-### Bug 1: Skip-back to existing sub-chunks fails
-- User plays chunks 0,1,2,3,4,5 then skips back to chunk 2
-- Error appears, then retry causes RE-GENERATION instead of playing cached file, or audiobook file saved in its folder if not possible from cache
-- **Root cause:** Global→local index conversion uses unreliable `CHAPTER_SUBCHUNKS` Map
-- **Fix needed:** Eliminate global index, pass chapterIndex+subChunkIndex directly from frontend
+**Goal:** Generate audiobooks in a **different language** than the source ebook.
 
-### Bug 2: Audio generation blocks after skipping
-- Background generation stops after ~6-10 sub-chunks
-- Always happens after user skips forward/back
-- **Root cause:** Generation lock deadlock in `generationInProgress` Map
-- **Fix needed:** Add timeout to lock wait, ensure finally block clears lock
+Example: Czech ebook → English audiobook
 
-## Tasks for This Session
+### Why This Is Needed
+- Gemini TTS does NOT support Slovak, Czech, Croatian natively
+- Translation to English/German/etc. enables audiobook generation for unsupported languages
 
-### 1. FIX THE TWO CRITICAL BUGS
-Make skip-back work by fixing the index mapping issue. Fix generation blocking.
+---
 
-### 2. COMPREHENSIVE AUDIT (Proposal Only - Don't Implement Yet)
-Analyze entire codebase and create `AUDIT_PROPOSALS.md` documenting:
+## Implementation Tasks
 
-- **Redundant/Legacy Code:** Dead code from previous iterations, duplicates, unused imports
-- **Architecture Issues:** Unnecessary complexity, poor separation of concerns
-- **Performance Bottlenecks:** Sync file I/O, redundant reads, memory leaks
-- **State Management:** Global variables, race conditions, scattered state
-- **Error Handling Gaps:** Unhandled rejections, missing try/catch
-- **Code Organization:** 2000+ line files that need splitting
-- **Pipeline Optimization:** Proposals for optimal 4-process parallel pipeline (see below)
+### Task 1: Frontend - Language Selector
 
-For each finding: Current state → Problem → Proposed fix → Risk → Effort (S/M/L)
+**File:** `apps/frontend/src/components/BookPlayer.tsx`
 
-### The 4 Parallel Processes (Include Design in AUDIT_PROPOSALS.md)
+1. Move playback speed selector to the **right** to make space
+2. Add new dropdown with same design style:
+   - Label: "Jazyk"
+   - Values: `en-US`, `en-GB`, `sk-SK`, `cs-CZ`, `ru-RU`, `de-DE`, `pl-PL`, `hr-HR`
+3. Pass `targetLanguage` to backend via `POST /api/load-book`
 
-```
-PROCESS 1: CHARACTER EXTRACTION
-    Scan book, detect characters, assign voices
-    ↓ (feeds into)
-PROCESS 2: DRAMATIZATION (LLM)
-    Tag dialogue with character voices, parallel chapters
-    ↓ (feeds into)
-PROCESS 3: AUDIO GENERATION (TTS API)
-    Includes: chunking → TTS calls → consolidation (internal steps)
-    ↓ (feeds into)
-PROCESS 4: PLAYBACK
-    Uninterrupted, starts ASAP (within 5-10 seconds)
-    Background processes continue while user listens
+---
+
+### Task 2: Backend - Translation Function
+
+**New File:** `apps/backend/src/chapterTranslator.ts`
+
+```typescript
+interface TranslationResult {
+  translatedText: string;
+  sourceLanguage: string;
+  targetLanguage: string;
+}
+
+async function translateChapter(
+  chapterText: string,
+  targetLanguage: string,
+  characterNames: string[]  // MUST be preserved unchanged
+): Promise<TranslationResult>
 ```
 
-**Goal:** First audio plays within 5-10 seconds (ASAP), zero gaps during playback.
+**Critical:** Character names must be preserved EXACTLY (passed as list to prompt).
+
+**Prompt structure:**
+```
+You are a professional literary translator.
+Translate from ${sourceLanguage} to ${targetLanguage}.
+
+CRITICAL: Preserve these character names EXACTLY (do not translate):
+${characterNames.join(', ')}
+
+Preserve dialogue formatting and paragraph structure.
+Return ONLY the translated text.
+
+TEXT:
+${chapterText}
+```
+
+---
+
+### Task 3: Backend - Pipeline Integration
+
+**File:** `apps/backend/src/index.ts`
+
+**Location:** Inside `startBackgroundDramatization()` (~line 590)
+
+**Current flow per chapter:**
+```
+1. Dramatize chapter
+2. Split into sub-chunks
+3. Generate TTS (3x parallel)
+4. Consolidate
+```
+
+**New flow per chapter:**
+```
+0. ★ TRANSLATE chapter (if targetLanguage ≠ sourceLanguage) ★
+1. Dramatize chapter (uses translated text)
+2. Split into sub-chunks  
+3. Generate TTS (3x parallel)
+4. Consolidate
+```
+
+**Bypass logic:**
+```typescript
+const needsTranslation = TARGET_LANGUAGE && TARGET_LANGUAGE !== SOURCE_LANGUAGE;
+
+if (needsTranslation) {
+  const translated = await translateChapter(chapter.text, TARGET_LANGUAGE, characterNames);
+  textToDramatize = translated.translatedText;
+}
+```
+
+---
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
-| `apps/backend/src/index.ts` (~2300 lines) | Main server, all endpoints |
-| `apps/backend/src/tempChunkManager.ts` (~1600 lines) | Generation, caching, locks |
-| `apps/backend/src/audiobookManager.ts` (~700 lines) | Folder structure, metadata |
-| `apps/frontend/src/components/BookPlayer.tsx` (~1500 lines) | Playback UI |
+| File | Action | Purpose |
+|------|--------|---------|
+| `BookPlayer.tsx` | MODIFY | Add language selector dropdown |
+| `index.ts` | MODIFY | Add bypass logic, integrate translation |
+| `chapterTranslator.ts` | **NEW** | Translation function |
 
-## Important Handoff Document
+---
 
-Read: `handoffs/HANDOFF_CHAPTER_UI_ISSUES.md` - contains detailed analysis
+## Pipeline Visualization
 
-## Core Principle
+```
+INITIALIZATION (BLOCKING):
+├── Load book → Parse chapters
+├── Character extraction (first 50k chars) ← UNCHANGED
+└── Voice assignment → LOCK ← UNCHANGED
 
-> **"Solve ROOT CAUSE by all means - don't add functions to counterfight other functions"**
+BACKGROUND (per chapter, sequential):
+┌─────────────────────────────────────────────────┐
+│ Chapter N:                                      │
+│   0. ★ TRANSLATE (if needed) ★ ← NEW           │
+│   1. Dramatize (with translated text)          │
+│   2. Split into sub-chunks                     │
+│   3. TTS generation (3x parallel)              │
+│   4. Consolidate to chapter.wav                │
+└─────────────────────────────────────────────────┘
+```
 
-When fixing issues, eliminate the source rather than adding workarounds.
+---
+
+## Handoff Document
+
+Read: `handoffs/HANDOFF_TRANSLATION_SUPPORT.md` - contains full specification
+
+---
+
+## Testing Plan
+
+1. **Same language (bypass):** Load English book, select en-US → No translation, normal flow
+2. **Translation active:** Load Czech book, select en-US → Translation logs, English audio
+3. **Character names:** Verify names in audio match original (not translated)
+
+---
 
 ## Quick Start
 
 ```powershell
 # Clear and restart
-taskkill /F /IM node.exe 2>$null
+Get-Process -Name "node" -ErrorAction SilentlyContinue | Stop-Process -Force
 Remove-Item -Recurse -Force "c:\Users\hajna\ebook-reader\audiobooks" -ErrorAction SilentlyContinue
 New-Item -ItemType Directory "c:\Users\hajna\ebook-reader\audiobooks" -Force
 
 # Backend
 cd c:\Users\hajna\ebook-reader\apps\backend; npx tsx src/index.ts
 
-# Frontend (new terminal)
+# Frontend (new terminal)  
 cd c:\Users\hajna\ebook-reader\apps\frontend; npm run dev
 ```
 
+---
+
 ## Deliverables
 
-1. ✅ Both critical bugs fixed and tested
-2. ✅ `AUDIT_PROPOSALS.md` created (proposals only, no implementation) - includes pipeline optimization proposals
+1. [ ] Frontend: Language selector dropdown added
+2. [ ] Backend: `chapterTranslator.ts` created with translateChapter()
+3. [ ] Backend: Translation integrated into pipeline with bypass logic
+4. [ ] Tested: Same-language bypass works
+5. [ ] Tested: Translation to English produces English audio
 
-Start by reading the handoff document, then fix the bugs, then proceed to audit.
+---
+
+## Core Principle
+
+> **"Solve ROOT CAUSE by all means - don't add functions to counterfight other functions"**
+
+Start by reading the handoff document, then implement in order: Frontend → Backend translation function → Pipeline integration → Test.
