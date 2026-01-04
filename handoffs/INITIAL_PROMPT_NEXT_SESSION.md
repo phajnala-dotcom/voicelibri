@@ -154,12 +154,6 @@ BACKGROUND (per chapter, sequential):
 
 ---
 
-## Handoff Document
-
-Read: `handoffs/HANDOFF_TRANSLATION_SUPPORT.md` - contains full specification
-
----
-
 ## Testing Plan
 
 1. **Same language (bypass):** Load English book, select en-US → No translation, normal flow
