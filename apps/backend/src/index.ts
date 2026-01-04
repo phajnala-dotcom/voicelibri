@@ -64,29 +64,11 @@ import {
 import { chunkBookByChapters, type ChunkInfo } from './chapterChunker.js';
 import { chunkForTwoSpeakers, type TwoSpeakerChunk } from './twoSpeakerChunker.js';
 import { dramatizeBookHybrid, tagChapterHybrid } from './hybridDramatizer.js';
-import { streamingDramatize, StreamingChunk } from './streamingDramatizer.js';
 import { GeminiConfig, CharacterProfile } from './llmCharacterAnalyzer.js';
 import { audiobookWorker } from './audiobookWorker.js';
 import { dramatizeBook, checkCache } from './geminiDramatizer.js';
-// NEW: Parallel pipeline manager
-import {
-  resetPipeline,
-  getPipelineState,
-  initializePipeline,
-  enrichFromChapter,
-  splitChapterToSubChunks,
-  getSubChunk,
-  getChapterSubChunkCount,
-  isReadyForPlayback,
-  markSubChunkGenerated,
-  getVoiceAssignments,
-  getCharacterDB,
-  globalToLocalIndex,
-  localToGlobalIndex,
-  getTotalSubChunkCount,
-  type PipelineConfig,
-  type ChapterState
-} from './parallelPipelineManager.js';
+// Parallel pipeline manager - only resetPipeline() is used for book switching
+import { resetPipeline } from './parallelPipelineManager.js';
 
 // ES modules dirname workaround
 const __filename = fileURLToPath(import.meta.url);
