@@ -53,6 +53,12 @@ export interface CharacterProfile {
    */
   traits: string[];
   
+  /** Alternative names/aliases for this character
+   * Used for consistent voice assignment across name variations
+   * Examples: ["Mrs. Westenra", "old woman", "the widow"]
+   */
+  aliases?: string[];
+  
   /** Suggested Gemini TTS voice name
    * TODO Phase 2: Smart matching based on traits + gender
    * Examples: "Algieba" (male, deep), "Zephyr" (female, young)

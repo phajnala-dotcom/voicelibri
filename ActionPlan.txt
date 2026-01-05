@@ -9,6 +9,8 @@ Implement most used ebooks formats throughout the app:
 ADVANCED UI WITH LIBRARY
 UI with SOTA design and functionality including library UI.
 
+SSML tags - emotions, events, style
+
 ----------------------------–
 
 Main:

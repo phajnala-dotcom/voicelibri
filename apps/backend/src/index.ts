@@ -67,6 +67,14 @@ import { dramatizeBookHybrid, tagChapterHybrid } from './hybridDramatizer.js';
 import { GeminiConfig, CharacterProfile } from './llmCharacterAnalyzer.js';
 import { audiobookWorker } from './audiobookWorker.js';
 import { dramatizeBook, checkCache } from './geminiDramatizer.js';
+// Chapter translation support
+import { 
+  ChapterTranslator, 
+  needsTranslation,
+  getLanguageDisplayName 
+} from './chapterTranslator.js';
+// Per-chapter character extraction with alias support
+import { CharacterRegistry } from './characterRegistry.js';
 // Parallel pipeline manager - only resetPipeline() is used for book switching
 import { resetPipeline } from './parallelPipelineManager.js';
 
@@ -97,6 +105,7 @@ let CURRENT_BOOK_FILE: string = '';
 let ASSETS_DIR: string;
 let VOICE_MAP: Record<string, string> = {}; // Global voice map for dramatized books
 let NARRATOR_VOICE: string = 'Achird'; // Global narrator voice selection (default: Achird)
+let TARGET_LANGUAGE: string | null = null; // Target language for translation (null = no translation)
 
 // Helper: Get actual chapter count (BOOK_CHAPTERS.length - 1 because index 0 is unused)
 function getChapterCount(): number {
@@ -273,52 +282,25 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
         throw new Error('GOOGLE_CLOUD_PROJECT environment variable not set');
       }
       
-      console.log('⚡ Quick character scan (dramatization happens on-demand during TTS)...');
+      console.log('⚡ Per-chapter character extraction (universal approach)...');
       console.log(`   Book: ${BOOK_TEXT.length} chars, ${getChapterCount()} chapters`);
       
-      // Import analyzer for character scan only
+      // Import analyzer for hybrid tagging
       const { GeminiCharacterAnalyzer } = await import('./llmCharacterAnalyzer.js');
       const analyzer = new GeminiCharacterAnalyzer(geminiConfig);
       
-      // Phase 1: Character scan from first ~50k chars of content
-      // This ensures we get enough real story content for character detection
-      // (front matter/TOC are usually < 1k chars each, so 50k gets us into the story)
-      console.log('🔍 Scanning first ~50k chars for characters...');
+      // Initialize CharacterRegistry for per-chapter extraction
+      // Characters will be extracted from each chapter (after translation if needed)
+      // This approach handles aliases naturally and works for all scenarios
+      const characterRegistry = new CharacterRegistry(geminiConfig);
+      characterRegistry.setNarratorVoice(NARRATOR_VOICE);
       
-      // Collect chapter text until we have ~50k chars
-      const TARGET_CHARS = 50000;
-      let textForScan = '';
-      let chaptersUsed = 0;
-      for (let i = 1; i < BOOK_CHAPTERS.length && textForScan.length < TARGET_CHARS; i++) {
-        if (BOOK_CHAPTERS[i]) {
-          textForScan += BOOK_CHAPTERS[i].text + '\n\n';
-          chaptersUsed++;
-        }
-      }
-      console.log(`   Using ${chaptersUsed} chapters (${textForScan.length} chars) for initial scan`);
-      
-      const characters = await analyzer.analyzeFullBook(textForScan);
-      
-      console.log(`✅ Found ${characters.length} characters: ${characters.map(c => c.name).join(', ')}`);
-      
-      // Create voice map immediately
-      const charactersForVoiceMap: Character[] = characters
-        .filter(cp => cp.name !== 'NARRATOR')
-        .map(cp => ({
-          name: cp.name,
-          gender: cp.gender === 'unknown' ? 'neutral' : cp.gender,
-          traits: cp.traits || []
-        }));
-      
-      VOICE_MAP = assignVoices(charactersForVoiceMap, NARRATOR_VOICE);
-      console.log(`🎙️  Voice assignments (narrator: ${NARRATOR_VOICE}):`);
-      for (const [character, voice] of Object.entries(VOICE_MAP)) {
-        console.log(`   ${character} → ${voice}`);
-      }
+      console.log('📋 Character registry initialized (per-chapter extraction enabled)');
+      console.log(`   Narrator voice: ${NARRATOR_VOICE}`);
       console.log('');
       
-      // Store characters and analyzer for background dramatization
-      (global as any).DRAMATIZATION_CHARACTERS = characters;
+      // Store registry and analyzer for background dramatization
+      (global as any).CHARACTER_REGISTRY = characterRegistry;
       (global as any).DRAMATIZATION_CONFIG = geminiConfig;
       (global as any).DRAMATIZATION_ANALYZER = analyzer;
       
@@ -329,20 +311,20 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
       // Update metadata
       BOOK_METADATA.isDramatized = false; // Will be true after chunks are dramatized
       BOOK_METADATA.dramatizationType = 'parallel-background';
-      BOOK_METADATA.charactersFound = characters.length;
+      BOOK_METADATA.charactersFound = 0; // Will be updated per-chapter
       
-      console.log('✅ Character scan complete\n');
+      console.log('✅ Ready for background dramatization\n');
       console.log('🚀 Starting PARALLEL BACKGROUND DRAMATIZATION...');
-      console.log('   This runs independently - playback starts immediately!\n');
+      console.log('   Per-chapter: translate → extract characters → dramatize\n');
       
       // Start background dramatization (non-blocking)
-      // This will dramatize chapters in parallel while user can start playback
-      startBackgroundDramatization(characters, analyzer).catch(err => 
+      // Each chapter: translate (if needed) → extract characters → dramatize
+      startBackgroundDramatization(characterRegistry, analyzer).catch(err => 
         console.error('❌ Background dramatization failed:', err)
       );
       
     } catch (error) {
-      console.error('\n❌ CHARACTER SCAN FAILED');
+      console.error('\n❌ INITIALIZATION FAILED');
       console.error('========================');
       console.error(error);
       console.error('\n⚠️ Falling back to single-voice narration\n');
@@ -542,7 +524,7 @@ function stopBackgroundDramatization(): void {
  * This is a NON-BLOCKING operation that runs independently
  */
 async function startBackgroundDramatization(
-  characters: CharacterProfile[],
+  characterRegistry: CharacterRegistry,
   analyzer: any
 ): Promise<void> {
   if (isDramatizingInBackground) {
@@ -558,10 +540,28 @@ async function startBackgroundDramatization(
   const parallelism = 1;
   const chapterCount = getChapterCount();
   
-  console.log(`\n🎭 BACKGROUND DRAMATIZATION STARTED`);
+  // Initialize translator if translation is needed
+  let translator: ChapterTranslator | null = null;
+  const translationRequired = needsTranslation(TARGET_LANGUAGE);
+  
+  if (translationRequired) {
+    const geminiConfig: GeminiConfig = {
+      projectId: process.env.GOOGLE_CLOUD_PROJECT || '',
+      location: process.env.GOOGLE_CLOUD_LOCATION || 'us-central1',
+    };
+    translator = new ChapterTranslator(geminiConfig);
+  }
+  
+  console.log(`\n🎭 BACKGROUND DRAMATIZATION STARTED (per-chapter extraction)`);
   console.log(`   Chapters: ${chapterCount}`);
   console.log(`   Chapter parallelism: ${parallelism} (sequential)`);
-  console.log(`   Characters: ${characters.map(c => c.name).join(', ')}\n`);
+  console.log(`   Mode: Per-chapter character extraction with alias detection`);
+  if (translationRequired) {
+    console.log(`   🌍 Translation: → ${getLanguageDisplayName(TARGET_LANGUAGE!)} (LLM auto-detects source)`);
+  } else {
+    console.log(`   🌍 Translation: not required (using original language)`);
+  }
+  console.log('');
   
   try {
     // Process chapters in parallel batches (1-based: chapter 1, 2, 3, ...)
@@ -584,7 +584,7 @@ async function startBackgroundDramatization(
         continue; // All chapters in batch already dramatized
       }
       
-      console.log(`📝 Dramatizing chapters ${pendingChapterNums.join(', ')}...`);
+      console.log(`📝 Processing chapters ${pendingChapterNums.join(', ')}...`);
       
       // Dramatize chapters in parallel - store promises in lock map for TTS to await
       await Promise.all(pendingChapterNums.map(async (chapterNum) => {
@@ -600,10 +600,55 @@ async function startBackgroundDramatization(
         
         try {
           const chapter = BOOK_CHAPTERS[chapterNum];
+          let textToDramatize = chapter.text;
           
-          // Dramatize the chapter
+          // ★ STEP 0: TRANSLATE chapter (if needed) ★
+          if (translationRequired && translator) {
+            console.log(`   🌍 Translating chapter ${chapterNum}...`);
+            try {
+              const translationResult = await translator.translateChapter(
+                chapter.text,
+                TARGET_LANGUAGE!
+              );
+              textToDramatize = translationResult.translatedText;
+              console.log(`   ✅ Chapter ${chapterNum} translated (${chapter.text.length} → ${textToDramatize.length} chars)`);
+              
+              // DEBUG: Save translated text for analysis
+              const bookTitle = sanitizeBookTitle(BOOK_METADATA?.title || CURRENT_BOOK_FILE || 'Unknown');
+              const translatedPath = path.join(getAudiobooksDir(), bookTitle, `chapter_${chapterNum}_translated.txt`);
+              try {
+                await fs.promises.writeFile(translatedPath, textToDramatize, 'utf8');
+                console.log(`   📝 Debug: Saved translated text to ${translatedPath}`);
+              } catch (e) {
+                console.error(`   ⚠️ Failed to save translated text:`, e);
+              }
+              
+            } catch (transErr) {
+              console.error(`   ⚠️ Chapter ${chapterNum} translation failed, using original:`, transErr);
+              // Continue with original text on translation failure
+            }
+          }
+          
+          // ★ STEP 1: EXTRACT CHARACTERS from this chapter (after translation) ★
+          // This is the key change: per-chapter extraction with alias detection
+          await characterRegistry.extractFromChapter(textToDramatize, chapterNum);
+          
+          // Update global VOICE_MAP with current registry state
+          VOICE_MAP = characterRegistry.getVoiceMap();
+          
+          // Convert registry characters to CharacterProfile[] for hybrid tagger
+          const registeredChars = characterRegistry.getAllCharacters();
+          const characters: CharacterProfile[] = registeredChars.map(rc => ({
+            name: rc.primaryName,
+            gender: rc.gender,
+            traits: rc.traits,
+            role: 'unknown' as const,
+            aliases: rc.aliases.filter(a => a !== rc.primaryName), // Exclude primary name from aliases
+          }));
+          
+          // STEP 2: Dramatize the chapter (with translated text if applicable)
           const result = await tagChapterHybrid(
-            chapter.text,
+            textToDramatize,
             characters,
             analyzer,
             chapterNum  // chapter number (1-based)
@@ -623,11 +668,20 @@ async function startBackgroundDramatization(
           
           console.log(`   ✅ Chapter ${chapterNum}: ${newSubChunks.length} sub-chunks (${result.method})`);
           
+          // DEBUG: Save dramatized text for analysis
+          const bookTitle = sanitizeBookTitle(BOOK_METADATA?.title || CURRENT_BOOK_FILE || 'Unknown');
+          const debugPath = path.join(getAudiobooksDir(), bookTitle, `chapter_${chapterNum}_dramatized.txt`);
+          try {
+            await fs.promises.writeFile(debugPath, result.taggedText, 'utf8');
+            console.log(`   📝 Debug: Saved dramatized text to ${debugPath}`);
+          } catch (e) {
+            console.error(`   ⚠️ Failed to save dramatized text:`, e);
+          }
+          
           // Signal that dramatization is complete
           resolvePromise!();
           
           // IMMEDIATELY generate TTS for this chapter (producer responsibility)
-          const bookTitle = sanitizeBookTitle(BOOK_METADATA?.title || CURRENT_BOOK_FILE || 'Unknown');
           console.log(`   🎤 Generating TTS for chapter ${chapterNum}...`);
           await generateSubChunksParallel(
             bookTitle,
@@ -652,9 +706,25 @@ async function startBackgroundDramatization(
         } catch (error) {
           console.error(`   ❌ Chapter ${chapterNum} dramatization failed:`, error);
           
-          // Fallback: wrap in NARRATOR voice
+          // Fallback: wrap in NARRATOR voice (still try translation if needed)
           const chapter = BOOK_CHAPTERS[chapterNum];
-          const narratorText = `[VOICE=NARRATOR]\n${chapter.text}`;
+          let fallbackText = chapter.text;
+          
+          // Try translation even for fallback (TTS might not support source language)
+          if (translationRequired && translator) {
+            try {
+              console.log(`   🌍 Translating chapter ${chapterNum} for fallback...`);
+              const translationResult = await translator.translateChapter(
+                chapter.text,
+                TARGET_LANGUAGE!
+              );
+              fallbackText = translationResult.translatedText;
+            } catch (transErr) {
+              console.error(`   ⚠️ Fallback translation also failed:`, transErr);
+            }
+          }
+          
+          const narratorText = `[VOICE=NARRATOR]\n${fallbackText}`;
           const newSubChunks = chunkForTwoSpeakers(narratorText, undefined, chapterNum);
           CHAPTER_SUBCHUNKS.set(chapterNum, newSubChunks);
           CHAPTER_DRAMATIZED.set(chapterNum, narratorText);
@@ -877,7 +947,7 @@ app.get('/api/books', (req: Request, res: Response) => {
 // Select a different book
 app.post('/api/book/select', async (req: Request, res: Response) => {
   try {
-    const { filename, narratorVoice } = req.body;
+    const { filename, narratorVoice, targetLanguage } = req.body;
     
     console.log(`📞 /api/book/select called with filename: "${filename}"`);
     console.log(`   Current book: "${CURRENT_BOOK_FILE || 'none'}"`);
@@ -888,6 +958,15 @@ app.post('/api/book/select', async (req: Request, res: Response) => {
       const oldVoice = NARRATOR_VOICE;
       NARRATOR_VOICE = narratorVoice;
       console.log(`🎙️ Narrator voice set: ${oldVoice} → ${narratorVoice}`);
+    }
+    
+    // Update target language for translation
+    if (targetLanguage && typeof targetLanguage === 'string') {
+      TARGET_LANGUAGE = targetLanguage;
+      console.log(`🌍 Target language set: ${getLanguageDisplayName(targetLanguage)}`);
+    } else {
+      TARGET_LANGUAGE = null;
+      console.log(`🌍 No translation (using original language)`);
     }
     
     if (!filename || typeof filename !== 'string') {

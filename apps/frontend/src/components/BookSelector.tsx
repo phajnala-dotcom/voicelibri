@@ -64,12 +64,19 @@ export const BookSelector: React.FC<BookSelectorProps> = ({ onBookSelected, curr
     try {
       // Get narrator voice from localStorage (user preference)
       const narratorVoice = localStorage.getItem('preferredNarratorVoice') || 'Achird';
+      // Get target language for translation (if any)
+      const targetLanguage = localStorage.getItem('preferredTargetLanguage') || 'original';
       
       // First, select the book to check if library version exists
       const response = await fetch(`${API_BASE_URL}/api/book/select`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filename, dramatize: enableDramatization, narratorVoice }),
+        body: JSON.stringify({ 
+          filename, 
+          dramatize: enableDramatization, 
+          narratorVoice,
+          targetLanguage: targetLanguage !== 'original' ? targetLanguage : undefined,
+        }),
       });
 
       if (!response.ok) {

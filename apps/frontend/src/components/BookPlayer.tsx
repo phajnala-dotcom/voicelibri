@@ -49,6 +49,18 @@ const RETRY_DELAYS = [1000, 2000, 4000]; // Exponential backoff
 
 const SPEED_OPTIONS = [0.75, 0.9, 1.0, 1.25, 1.5];
 
+// Target language options for TTS output
+// Note: Some source languages (Czech, Slovak, Croatian) are not supported by Gemini TTS
+// Translation to a supported language enables audiobook generation
+const LANGUAGE_OPTIONS = [
+  { code: 'original', label: 'Originál (bez prekladu)' },
+  { code: 'en-US', label: 'English (US)' },
+  { code: 'en-GB', label: 'English (UK)' },
+  { code: 'de-DE', label: 'Deutsch' },
+  { code: 'ru-RU', label: 'Русский' },
+  { code: 'pl-PL', label: 'Polski' },
+];
+
 // ========================================
 // Voice Configuration - All 30 Gemini TTS Voices
 // Source: https://docs.cloud.google.com/text-to-speech/docs/gemini-tts
@@ -178,6 +190,12 @@ const BookPlayer: React.FC = () => {
   // Consolidated chapters status - for skip navigation
   const [consolidatedChapters, setConsolidatedChapters] = useState<Set<number>>(new Set());
   const [_highestConsolidatedChapter, setHighestConsolidatedChapter] = useState<number>(0);
+
+  // Target language for TTS output (translation)
+  // 'original' means no translation - use source language
+  const [targetLanguage, setTargetLanguage] = useState<string>(() => {
+    return localStorage.getItem('preferredTargetLanguage') || 'original';
+  });
 
   // Save playback position to backend whenever it changes significantly
   // Debounced to avoid excessive API calls
@@ -1351,6 +1369,26 @@ interface AudioFetchResult {
             {SPEED_OPTIONS.map(speed => (
               <option key={speed} value={speed}>
                 {speed.toFixed(2)}x
+              </option>
+            ))}
+          </select>
+
+          {/* Language Control - Translation target */}
+          <label style={{ ...styles.speedLabel, marginLeft: '24px' }}>Jazyk:</label>
+          <select
+            value={targetLanguage}
+            onChange={e => {
+              const newLang = e.target.value;
+              setTargetLanguage(newLang);
+              localStorage.setItem('preferredTargetLanguage', newLang);
+              console.log(`🌍 Target language changed to: ${newLang}`);
+            }}
+            style={styles.speedSelect}
+            title="Jazyk audiobooku (preklad)"
+          >
+            {LANGUAGE_OPTIONS.map(lang => (
+              <option key={lang.code} value={lang.code}>
+                {lang.label}
               </option>
             ))}
           </select>

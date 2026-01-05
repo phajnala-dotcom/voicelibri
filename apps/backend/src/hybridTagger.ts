@@ -175,8 +175,9 @@ export function extractDialogueParagraphs(text: string): string[] {
 function splitIntoDialogueNarration(content: string): Array<{ type: 'dialogue' | 'narration'; text: string }> {
   const segments: Array<{ type: 'dialogue' | 'narration'; text: string }> = [];
   
-  // Pattern matches Czech „…" and other quote styles
-  const quotePattern = /([„""''«»])([^„""''«»]*?)([„""''«»])/g;
+  // Pattern matches various quote styles BUT NOT ASCII apostrophe (') which is used in contractions
+  // Includes: „ (Czech), " (ASCII), "" (curly double), '' (curly single U+2018/U+2019), «» (guillemets)
+  const quotePattern = /([„"\u201C\u201D\u2018\u2019«»])([^„"\u201C\u201D\u2018\u2019«»]*?)([„"\u201C\u201D\u2018\u2019«»])/g;
   
   let lastIndex = 0;
   let match;
@@ -209,124 +210,210 @@ function splitIntoDialogueNarration(content: string): Array<{ type: 'dialogue' |
 }
 
 /**
- * Simple rule-based dialogue detection and tagging
+ * Enhanced rule-based dialogue detection and tagging
  * 
- * Patterns:
- * - Dialogue: "text" said NAME, NAME replied "text"
- * - Thoughts: "text" thought NAME, NAME wondered "text"
- * - Czech: poznamenala Lili, zvolal Ragowski, pomyslela si Marie
- * - English: said John, Mary replied, John thought
- * - Attribution before/after quotes
+ * Improvements over basic approach:
+ * 1. Multi-line attribution: Looks at next/previous lines for attribution
+ * 2. Post-quote attribution: "Quote" CHARACTER smiled/said
+ * 3. Pronoun resolution: "he said" → most recently mentioned character
+ * 4. Paragraph context: Groups quotes within same paragraph
+ * 5. No incorrect carry-over: Resets speaker when there's narration gap
  * 
  * CRITICAL: Lines with mixed dialogue/narration are split into segments.
  * Narration (unquoted text) ALWAYS gets NARRATOR tag.
- * 
- * Note: Unquoted inner thoughts are HARD to detect with rules.
- * These require LLM analysis for proper attribution.
  */
 export function applyRuleBasedTagging(
   text: string,
   characters: CharacterProfile[]
 ): { taggedText: string; confidence: number } {
   // Create character name lookup (case-insensitive)
-  const characterNames = new Set(
-    characters.map(c => c.name.toUpperCase())
-  );
+  const characterNames = new Set<string>();
+  const aliasToMainName = new Map<string, string>();
+  
+  for (const char of characters) {
+    const mainName = char.name.toUpperCase();
+    characterNames.add(mainName);
+    aliasToMainName.set(mainName, mainName);
+    
+    if (char.aliases) {
+      for (const alias of char.aliases) {
+        const upperAlias = alias.toUpperCase();
+        characterNames.add(upperAlias);
+        aliasToMainName.set(upperAlias, mainName);
+      }
+    }
+  }
+  
+  // Speech verbs (English + Czech)
+  const speechVerbs = 'said|asked|replied|answered|shouted|whispered|muttered|exclaimed|thought|wondered|pondered|mused|realized|called|cried|yelled|screamed|murmured|demanded|inquired|responded|suggested|added|continued|began|started|finished|concluded|agreed|disagreed|argued|explained|announced|declared|stated|mentioned|noted|observed|remarked|commented|repeated|echoed|insisted|urged|warned|promised|admitted|confessed|denied|lied|joked|laughed|sighed|groaned|moaned|gasped|breathed|hissed|growled|snarled|snapped|barked|roared|bellowed|boomed|thundered|smiled|grinned|frowned|nodded|shrugged|cleared|řekl|řekla|zvolal|zvolala|poznamenal|poznamenala|odpověděl|odpověděla|prohlásil|prohlásila|dodal|dodala|podotkl|podotkla|zeptal|zeptala|pomyslel|pomyslela|uvažoval|uvažovala|přemýšlel|přemýšlela|zavolal|zavolala|křikl|křikla|zašeptal|zašeptala|zabručel|zabručela|zasmál|zasmála|povzdechl|povzdechla|zasténal|zasténala|zaúpěl|zaúpěla';
+  const speechVerbPattern = new RegExp(`\\b(${speechVerbs})\\b`, 'i');
+  
+  // Pronoun patterns for he/she attribution
+  const pronounPattern = /\b(he|she|they)\s+(said|asked|replied|exclaimed|whispered|muttered|shouted|thought|wondered|began|continued|added|remarked|observed|noted|commented)\b/i;
+  
+  // Sort character names by length (longest first)
+  const sortedNames = Array.from(characterNames).sort((a, b) => b.length - a.length);
+  
+  // Helper: Find character name in text
+  const findCharacterInText = (searchText: string): string | null => {
+    for (const charName of sortedNames) {
+      const escapedName = charName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const namePattern = new RegExp(`\\b${escapedName}\\b`, 'i');
+      if (namePattern.test(searchText)) {
+        return aliasToMainName.get(charName) || charName;
+      }
+    }
+    return null;
+  };
   
   const lines = text.split('\n');
   const taggedLines: string[] = [];
-  let lastSpeaker = 'NARRATOR';
+  let lastMentionedCharacter: string | null = null; // Track last mentioned character for pronoun resolution
+  let lastDialogueSpeaker: string | null = null; // Track speaker of last dialogue line
+  let linesSinceLastDialogue = 0; // Count narration lines between dialogues
   let successfulAttributions = 0;
   let totalDialogues = 0;
   
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    const line = lines[i].trim();
+    if (!line) continue;
     
-    // Check if line has dialogue
+    const nextLine = i + 1 < lines.length ? lines[i + 1].trim() : '';
+    const prevLine = i > 0 ? lines[i - 1].trim() : '';
+    
+    // Track any character mentioned in narration (for pronoun resolution)
     if (!hasDialogue(line)) {
-      // Narration
+      const mentionedChar = findCharacterInText(line);
+      if (mentionedChar) {
+        lastMentionedCharacter = mentionedChar;
+      }
+      
+      // Narration line
       if (taggedLines.length === 0 || !taggedLines[taggedLines.length - 1].startsWith('[VOICE=NARRATOR]')) {
         taggedLines.push('[VOICE=NARRATOR]');
       }
       taggedLines.push(line);
+      linesSinceLastDialogue++;
       continue;
     }
     
     totalDialogues++;
-    
-    // Try to find speaker attribution
-    let speaker = lastSpeaker;
+    let speaker: string | null = null;
     let foundAttribution = false;
     
-    // Pattern 1: Czech verb + name (dialogue AND thoughts)
-    // "poznamenala Lili" → LILI, "pomyslela si Marie" → MARIE
-    const czechPattern = /(zvolal|zvolala|poznamenal|poznamenala|řekl|řekla|odpověděl|odpověděla|prohlásil|prohlásila|dodal|dodala|podotkl|podotkla|zeptal|zeptala|pomyslel|pomyslela|uvažoval|uvažovala|přemýšlel|přemýšlela)\s+(si\s+)?([A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ][a-záčďéěíňóřšťúůýž]+)/gi;
-    const czechMatch = line.match(czechPattern);
-    
-    if (czechMatch) {
-      // Extract name (last word in match, handling optional 'si')
-      const words = czechMatch[0].split(/\s+/);
-      const potentialName = words[words.length - 1].toUpperCase();
-      if (characterNames.has(potentialName)) {
-        speaker = potentialName;
-        lastSpeaker = speaker;
+    // === PATTERN 1: Direct attribution on same line ===
+    // "Quote" said CHARACTER or CHARACTER said "Quote"
+    if (speechVerbPattern.test(line)) {
+      const charInLine = findCharacterInText(line);
+      if (charInLine) {
+        speaker = charInLine;
         foundAttribution = true;
-        successfulAttributions++;
+        console.log(`  [Tagger] Direct attribution: "${charInLine}" in line`);
       }
     }
     
-    // Pattern 2: English verb + name (dialogue AND thoughts)
-    // "said John" → JOHN, "thought Mary" → MARY
+    // === PATTERN 2: Pronoun attribution on same line ===
+    // "Quote" he said → resolve "he" to lastMentionedCharacter
+    if (!foundAttribution && pronounPattern.test(line) && lastMentionedCharacter) {
+      speaker = lastMentionedCharacter;
+      foundAttribution = true;
+      console.log(`  [Tagger] Pronoun resolved to: "${lastMentionedCharacter}"`);
+    }
+    
+    // === PATTERN 3: Post-quote attribution (same line) ===
+    // "Quote" The newscaster smiled. → CHARACTER + action verb (even without speech verb)
     if (!foundAttribution) {
-      const englishPattern = /(said|asked|replied|answered|shouted|whispered|muttered|exclaimed|thought|wondered|pondered|mused|realized)\s+([A-Z][a-z]+)/g;
-      const englishMatch = line.match(englishPattern);
-      
-      if (englishMatch) {
-        const potentialName = englishMatch[0].split(/\s+/)[1].toUpperCase();
-        if (characterNames.has(potentialName)) {
-          speaker = potentialName;
-          lastSpeaker = speaker;
+      // Look for character name AFTER a quote on the same line
+      const postQuoteMatch = line.match(/[""\u201D][,.]?\s*(.+)$/);
+      if (postQuoteMatch) {
+        const afterQuote = postQuoteMatch[1];
+        const charInAfter = findCharacterInText(afterQuote);
+        if (charInAfter) {
+          speaker = charInAfter;
           foundAttribution = true;
-          successfulAttributions++;
+          console.log(`  [Tagger] Post-quote attribution: "${charInAfter}"`);
         }
       }
     }
     
-    // Pattern 3: Name at start of line (before quote)
-    if (!foundAttribution) {
-      const nameFirstPattern = /^([A-ZÁČĎÉĚÍŇÓŘŠŤÚŮÝŽ][a-záčďéěíňóřšťúůýž]+)\s+/;
-      const nameMatch = line.match(nameFirstPattern);
-      
-      if (nameMatch) {
-        const potentialName = nameMatch[1].toUpperCase();
-        if (characterNames.has(potentialName)) {
-          speaker = potentialName;
-          lastSpeaker = speaker;
+    // === PATTERN 4: Multi-line attribution (look at NEXT line) ===
+    // "Quote"
+    // he exclaimed, looking around...
+    if (!foundAttribution && nextLine) {
+      // Check if next line has attribution
+      if (speechVerbPattern.test(nextLine)) {
+        const charInNext = findCharacterInText(nextLine);
+        if (charInNext) {
+          speaker = charInNext;
           foundAttribution = true;
-          successfulAttributions++;
+          console.log(`  [Tagger] Next-line attribution: "${charInNext}"`);
+        } else if (pronounPattern.test(nextLine) && lastMentionedCharacter) {
+          // "Quote"
+          // he said
+          speaker = lastMentionedCharacter;
+          foundAttribution = true;
+          console.log(`  [Tagger] Next-line pronoun resolved to: "${lastMentionedCharacter}"`);
         }
       }
     }
     
-    // CRITICAL: Split line into dialogue/narration segments
-    // This ensures narration (text outside quotes) ALWAYS gets NARRATOR tag
+    // === PATTERN 5: Pre-quote attribution (look at PREVIOUS line) ===
+    // Mr. Dursley cleared his throat nervously.
+    // "Er – Petunia..."
+    if (!foundAttribution && prevLine && !hasDialogue(prevLine)) {
+      const charInPrev = findCharacterInText(prevLine);
+      if (charInPrev) {
+        speaker = charInPrev;
+        foundAttribution = true;
+        console.log(`  [Tagger] Previous-line attribution: "${charInPrev}"`);
+      }
+    }
+    
+    // === PATTERN 6: Continuation - same speaker for adjacent quotes ===
+    // Only if no significant narration gap (≤1 line)
+    if (!foundAttribution && lastDialogueSpeaker && linesSinceLastDialogue <= 1) {
+      speaker = lastDialogueSpeaker;
+      console.log(`  [Tagger] Continuation from previous dialogue: "${lastDialogueSpeaker}"`);
+      // Note: Don't mark as foundAttribution since it's just continuation
+    }
+    
+    // === FALLBACK: NARRATOR if nothing found ===
+    if (!speaker) {
+      speaker = 'NARRATOR';
+      console.log(`  [Tagger] No attribution found, using NARRATOR. Line: "${line.substring(0, 60)}..."`);
+    }
+    
+    if (foundAttribution) {
+      successfulAttributions++;
+      lastMentionedCharacter = speaker; // Update for pronoun resolution
+    }
+    
+    // Update tracking
+    lastDialogueSpeaker = speaker !== 'NARRATOR' ? speaker : lastDialogueSpeaker;
+    linesSinceLastDialogue = 0;
+    
+    // Split line into dialogue/narration segments
     const segments = splitIntoDialogueNarration(line);
     
-    // Detect if this is a thought or dialogue
+    // Detect if this is a thought
     const isThought = /\b(thought|wondered|pondered|mused|realized|pomyslel|pomyslela|uvažoval|uvažovala|přemýšlel|přemýšlela)\b/i.test(line);
     
-    // Tag each segment appropriately
+    // Tag each segment
     let lastTaggedSpeaker = '';
     for (const segment of segments) {
       if (segment.type === 'narration') {
-        // Narration ALWAYS gets NARRATOR
         if (lastTaggedSpeaker !== 'NARRATOR') {
           taggedLines.push('[VOICE=NARRATOR]');
           lastTaggedSpeaker = 'NARRATOR';
         }
         taggedLines.push(segment.text);
+        
+        // Track character mentioned in narration part
+        const mentionedInNarration = findCharacterInText(segment.text);
+        if (mentionedInNarration) {
+          lastMentionedCharacter = mentionedInNarration;
+        }
       } else {
-        // Dialogue gets the attributed speaker
         const voiceTag = isThought && speaker !== 'NARRATOR' 
           ? `[VOICE=${speaker}:THOUGHT]` 
           : `[VOICE=${speaker}]`;
@@ -336,12 +423,12 @@ export function applyRuleBasedTagging(
         }
         taggedLines.push(segment.text);
       }
-    };
+    }
   }
   
   // Calculate confidence
   const attributionRate = totalDialogues > 0 ? successfulAttributions / totalDialogues : 1.0;
-  const confidence = attributionRate * 0.9 + 0.05; // Cap at 0.95 for rule-based
+  const confidence = attributionRate * 0.9 + 0.05;
   
   return {
     taggedText: taggedLines.join('\n'),
