@@ -128,8 +128,9 @@ export function parseVoiceTag(tag: string): VoiceStyle {
 export function hasDialogue(text: string): boolean {
   // Check for various quote marks
   const quotePatterns = [
-    /["']([^"']+)["']/,        // English: "text" or 'text'
-    /\u201E([^\u201E\u201C]+)\u201C/,  // Czech: „text" (U+201E opening, U+201C closing)
+    /["']([^"']+)["']/,        // English straight: "text" or 'text'
+    /[\u201C\u201D]([^\u201C\u201D]+)[\u201C\u201D]/,  // English curly: "text" (U+201C/U+201D)
+    /\u201E([^\u201E\u201C]+)\u201C/,  // Czech/German: „text" (U+201E opening, U+201C closing)
     /[»«]([^»«]+)[»«]/,         // French/German guillemets
   ];
   
@@ -141,9 +142,10 @@ export function hasDialogue(text: string): boolean {
  */
 export function countDialogues(text: string): number {
   const patterns = [
-    /["']([^"']+)["']/g,
-    /\u201E([^\u201E\u201C]+)\u201C/g,  // Czech: „text" (U+201E opening, U+201C closing)
-    /[»«]([^»«]+)[»«]/g,
+    /["']([^"']+)["']/g,                    // English straight: "text" or 'text'
+    /[\u201C\u201D]([^\u201C\u201D]+)[\u201C\u201D]/g,  // English curly: "text" (U+201C/U+201D)
+    /\u201E([^\u201E\u201C]+)\u201C/g,      // Czech/German: „text" (U+201E opening, U+201C closing)
+    /[»«]([^»«]+)[»«]/g,                     // French/German guillemets
   ];
   
   let count = 0;
@@ -366,6 +368,16 @@ export function applyRuleBasedTagging(
         speaker = charInPrev;
         foundAttribution = true;
         console.log(`  [Tagger] Previous-line attribution: "${charInPrev}"`);
+      } else if (lastMentionedCharacter) {
+        // ENHANCEMENT: If previous line has action (verb) but no explicit name,
+        // use last mentioned character (for pronoun-like attribution)
+        // e.g., "He cleared his throat nervously." → He = last mentioned character
+        const hasActionVerb = /\b(cleared|raised|lifted|turned|looked|smiled|frowned|nodded|shook|sighed|groaned|stood|sat|walked|moved|stepped|reached|grabbed|took|put|placed|opened|closed)\b/i.test(prevLine);
+        if (hasActionVerb) {
+          speaker = lastMentionedCharacter;
+          foundAttribution = true;
+          console.log(`  [Tagger] Previous-line action → inferred character: "${lastMentionedCharacter}"`);
+        }
       }
     }
     
@@ -430,10 +442,85 @@ export function applyRuleBasedTagging(
   const attributionRate = totalDialogues > 0 ? successfulAttributions / totalDialogues : 1.0;
   const confidence = attributionRate * 0.9 + 0.05;
   
+  // POST-PROCESSING: Consolidate consecutive same-voice segments and add closing tags
+  const finalLines = consolidateAndAddClosingTags(taggedLines);
+  
   return {
-    taggedText: taggedLines.join('\n'),
+    taggedText: finalLines.join('\n'),
     confidence: Math.min(confidence, 0.95),
   };
+}
+
+/**
+ * Consolidate consecutive same-voice segments and add closing tags
+ * 
+ * This ensures:
+ * 1. No redundant consecutive voice tags (e.g., [VOICE=NARRATOR] three times in a row)
+ * 2. Explicit [/VOICE] closing tags for TTS to correctly handle voice transitions
+ * 
+ * @param lines - Array of lines with voice tags
+ * @returns Consolidated lines with closing tags
+ */
+export function consolidateAndAddClosingTags(lines: string[]): string[] {
+  const result: string[] = [];
+  let currentVoice: string | null = null;
+  let currentSegment: string[] = [];
+  
+  for (const line of lines) {
+    const voiceTagMatch = line.match(/^\[VOICE=([^\]]+)\]$/);
+    
+    if (voiceTagMatch) {
+      const newVoice = voiceTagMatch[1];
+      
+      // If we have accumulated content for previous voice, output it with closing tag
+      if (currentVoice && currentSegment.length > 0) {
+        result.push(`[VOICE=${currentVoice}]`);
+        result.push(...currentSegment);
+        result.push('[/VOICE]');
+        currentSegment = [];
+      }
+      
+      // Start new voice segment
+      currentVoice = newVoice;
+    } else {
+      // Accumulate content lines
+      currentSegment.push(line);
+    }
+  }
+  
+  // Output final segment if any
+  if (currentVoice && currentSegment.length > 0) {
+    result.push(`[VOICE=${currentVoice}]`);
+    result.push(...currentSegment);
+    result.push('[/VOICE]');
+  }
+  
+  return result;
+}
+
+/**
+ * Add closing tags to already-tagged text
+ * 
+ * This is a utility wrapper that takes a string with [VOICE=X] tags
+ * and ensures each voice segment has proper [/VOICE] closing tags.
+ * Use this to post-process any tagged text from LLM or other sources.
+ * 
+ * @param taggedText - Text with [VOICE=X] opening tags
+ * @returns Text with proper [VOICE=X]...[/VOICE] structure
+ */
+export function addClosingTagsToText(taggedText: string): string {
+  // Skip if already has closing tags
+  if (taggedText.includes('[/VOICE]')) {
+    console.log('  [addClosingTagsToText] Text already has closing tags, skipping');
+    return taggedText;
+  }
+  
+  // Split into lines and apply consolidation with closing tags
+  const lines = taggedText.split('\n');
+  const result = consolidateAndAddClosingTags(lines);
+  
+  console.log(`  [addClosingTagsToText] Added closing tags (${(taggedText.match(/\[VOICE=/g) || []).length} voice segments)`);
+  return result.join('\n');
 }
 
 /**
