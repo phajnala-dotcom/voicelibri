@@ -1,4 +1,4 @@
-import express, { Request, Response } from 'express';
+﻿import express, { Request, Response } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import fs from 'fs';
@@ -71,7 +71,8 @@ import { dramatizeBook, checkCache } from './geminiDramatizer.js';
 import { 
   ChapterTranslator, 
   needsTranslation,
-  getLanguageDisplayName 
+  getLanguageDisplayName,
+  normalizeQuotesForDramatization
 } from './chapterTranslator.js';
 // Per-chapter character extraction with alias support
 import { CharacterRegistry } from './characterRegistry.js';
@@ -504,9 +505,50 @@ app.get('/api/health', (req: Request, res: Response) => {
   });
 });
 
+// Dramatization status endpoint
+app.get('/api/dramatization/status', (req: Request, res: Response) => {
+  // Check for timeout
+  const now = Date.now();
+  const isTimedOut = dramatizationStatus.lastActivityAt && 
+    (now - dramatizationStatus.lastActivityAt) > DRAMATIZATION_TIMEOUT_MS;
+  
+  const status = {
+    ...dramatizationStatus,
+    isActive: isDramatizingInBackground,
+    isTimedOut,
+    completedChapters: CHAPTER_SUBCHUNKS.size,
+    totalSubChunks: TOTAL_SUBCHUNKS,
+  };
+  
+  res.json(status);
+});
+
 // Background dramatization state (includes TTS generation)
 let isDramatizingInBackground = false;
 let backgroundDramatizationAbort: AbortController | null = null;
+
+// Dramatization progress tracking
+interface DramatizationStatus {
+  phase: 'idle' | 'translating' | 'dramatizing' | 'generating_audio' | 'complete' | 'failed';
+  currentChapter: number;
+  totalChapters: number;
+  currentOperation: string;
+  startedAt: number | null;
+  lastActivityAt: number | null;
+  error: string | null;
+}
+
+let dramatizationStatus: DramatizationStatus = {
+  phase: 'idle',
+  currentChapter: 0,
+  totalChapters: 0,
+  currentOperation: '',
+  startedAt: null,
+  lastActivityAt: null,
+  error: null,
+};
+
+const DRAMATIZATION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes per chapter
 
 /**
  * Stop background dramatization (and TTS generation)
@@ -539,6 +581,18 @@ async function startBackgroundDramatization(
   // TTS parallelism (2) within each chapter keeps generation fast
   const parallelism = 1;
   const chapterCount = getChapterCount();
+  
+  // Initialize status tracking
+  const now = Date.now();
+  dramatizationStatus = {
+    phase: 'dramatizing',
+    currentChapter: 0,
+    totalChapters: chapterCount - 1, // -1 because we skip chapter 0
+    currentOperation: 'Starting background dramatization',
+    startedAt: now,
+    lastActivityAt: now,
+    error: null,
+  };
   
   // Initialize translator if translation is needed
   let translator: ChapterTranslator | null = null;
@@ -605,13 +659,34 @@ async function startBackgroundDramatization(
           // ★ STEP 0: TRANSLATE chapter (if needed) ★
           if (translationRequired && translator) {
             console.log(`   🌍 Translating chapter ${chapterNum}...`);
+            
+            // Update status
+            dramatizationStatus.phase = 'translating';
+            dramatizationStatus.currentChapter = chapterNum;
+            dramatizationStatus.currentOperation = `Translating chapter ${chapterNum}`;
+            dramatizationStatus.lastActivityAt = Date.now();
+            
             try {
+              // Check for timeout
+              const elapsed = Date.now() - (dramatizationStatus.lastActivityAt || 0);
+              if (elapsed > DRAMATIZATION_TIMEOUT_MS) {
+                throw new Error(`Translation timeout after ${Math.round(elapsed / 1000)}s`);
+              }
+              
               const translationResult = await translator.translateChapter(
                 chapter.text,
                 TARGET_LANGUAGE!
               );
               textToDramatize = translationResult.translatedText;
+              
+              // Normalize quotes: curly single quotes → straight apostrophes
+              // This prevents contractions (can't, won't) from being treated as dialogue
+              textToDramatize = normalizeQuotesForDramatization(textToDramatize);
+              
               console.log(`   ✅ Chapter ${chapterNum} translated (${chapter.text.length} → ${textToDramatize.length} chars)`);
+              
+              // Update activity timestamp
+              dramatizationStatus.lastActivityAt = Date.now();
               
               // DEBUG: Save translated text for analysis
               const bookTitle = sanitizeBookTitle(BOOK_METADATA?.title || CURRENT_BOOK_FILE || 'Unknown');
@@ -625,6 +700,7 @@ async function startBackgroundDramatization(
               
             } catch (transErr) {
               console.error(`   ⚠️ Chapter ${chapterNum} translation failed, using original:`, transErr);
+              dramatizationStatus.error = `Translation failed: ${transErr}`;
               // Continue with original text on translation failure
             }
           }
@@ -647,6 +723,10 @@ async function startBackgroundDramatization(
           }));
           
           // STEP 2: Dramatize the chapter (with translated text if applicable)
+          dramatizationStatus.phase = 'dramatizing';
+          dramatizationStatus.currentOperation = `Dramatizing chapter ${chapterNum}`;
+          dramatizationStatus.lastActivityAt = Date.now();
+          
           const result = await tagChapterHybrid(
             textToDramatize,
             characters,
@@ -683,6 +763,10 @@ async function startBackgroundDramatization(
           
           // IMMEDIATELY generate TTS for this chapter (producer responsibility)
           console.log(`   🎤 Generating TTS for chapter ${chapterNum}...`);
+          dramatizationStatus.phase = 'generating_audio';
+          dramatizationStatus.currentOperation = `Generating audio for chapter ${chapterNum}`;
+          dramatizationStatus.lastActivityAt = Date.now();
+          
           await generateSubChunksParallel(
             bookTitle,
             chapterNum,
@@ -691,6 +775,9 @@ async function startBackgroundDramatization(
             NARRATOR_VOICE,
             3 // TTS parallelism within chapter
           );
+          
+          // Update activity after generation
+          dramatizationStatus.lastActivityAt = Date.now();
           
           // AUTO-CONSOLIDATE immediately after all sub-chunks generated
           try {
@@ -771,7 +858,14 @@ async function startBackgroundDramatization(
     }
   } catch (error) {
     console.error('❌ Background dramatization error:', error);
+    dramatizationStatus.phase = 'failed';
+    dramatizationStatus.error = String(error);
+    dramatizationStatus.lastActivityAt = Date.now();
   } finally {
+    if (dramatizationStatus.phase !== 'failed') {
+      dramatizationStatus.phase = 'complete';
+      dramatizationStatus.currentOperation = 'Dramatization finished';
+    }
     isDramatizingInBackground = false;
     backgroundDramatizationAbort = null;
   }
@@ -961,12 +1055,13 @@ app.post('/api/book/select', async (req: Request, res: Response) => {
     }
     
     // Update target language for translation
-    if (targetLanguage && typeof targetLanguage === 'string') {
+    // Note: undefined/'original' = no translation, anything else = translate to that language
+    if (targetLanguage && typeof targetLanguage === 'string' && targetLanguage !== 'original') {
       TARGET_LANGUAGE = targetLanguage;
       console.log(`🌍 Target language set: ${getLanguageDisplayName(targetLanguage)}`);
     } else {
       TARGET_LANGUAGE = null;
-      console.log(`🌍 No translation (using original language)`);
+      console.log(`🌍 No translation (using original language) - received: "${targetLanguage}"`);
     }
     
     if (!filename || typeof filename !== 'string') {
@@ -1308,8 +1403,88 @@ app.post('/api/tts/chunk', async (req: Request, res: Response) => {
       chapterIndex: reqChapterNum,     // NEW: Direct chapter number (1-based)
       subChunkIndex: reqSubChunkIndex, // NEW: Direct sub-chunk index within chapter
       voiceName = 'Algieba', 
-      bookFile 
+      bookFile,
+      targetLanguage          // Target language for translation
     } = req.body;
+
+    // CRITICAL: Check if target language has EXPLICITLY changed → trigger re-dramatization
+    // FIX Issue 3: Only change language if explicitly provided (not undefined)
+    // When frontend doesn't send targetLanguage, preserve the current setting
+    const previousTargetLang = TARGET_LANGUAGE;
+    
+    // Only compute newTargetLang if targetLanguage was explicitly provided
+    // undefined = not provided = keep previous value
+    // 'original' = explicitly requested original = set to null
+    // other value = explicitly requested language = set to that value
+    let newTargetLang: string | null;
+    if (targetLanguage === undefined) {
+      // Not provided - preserve current setting
+      newTargetLang = previousTargetLang;
+      console.log(`🔍 Language check: not provided, keeping previous="${previousTargetLang}"`);
+    } else if (targetLanguage === 'original' || targetLanguage === null) {
+      // Explicitly requested original language
+      newTargetLang = null;
+      console.log(`🔍 Language check: explicitly set to original`);
+    } else {
+      // Explicitly requested a specific language
+      newTargetLang = targetLanguage;
+      console.log(`🔍 Language check: explicitly set to "${targetLanguage}"`);
+    }
+    
+    if (newTargetLang !== previousTargetLang) {
+      console.log(`\n🔄 TARGET LANGUAGE CHANGED: ${previousTargetLang || 'original'} → ${newTargetLang || 'original'}`);
+      
+      // Update target language
+      TARGET_LANGUAGE = newTargetLang;
+      
+      if (newTargetLang) {
+        console.log(`🌍 Target language updated: ${getLanguageDisplayName(newTargetLang)}`);
+      } else {
+        console.log(`🌍 Target language cleared (using original)`);
+      }
+      
+      // Clear existing dramatization and trigger re-processing
+      console.log('🔄 Clearing cached dramatization...');
+      CHAPTER_DRAMATIZED.clear();
+      CHAPTER_SUBCHUNKS.clear();
+      TOTAL_SUBCHUNKS = 0;
+      
+      // Delete existing audiobook folder to force regeneration
+      if (BOOK_METADATA) {
+        const bookTitle = sanitizeBookTitle(BOOK_METADATA.title || CURRENT_BOOK_FILE || 'Unknown');
+        const audiobookPath = path.join(getAudiobooksDir(), bookTitle);
+        try {
+          await fs.promises.rm(audiobookPath, { recursive: true, force: true });
+          console.log(`🗑️ Deleted existing audiobook: ${bookTitle}`);
+        } catch (e) {
+          console.warn('⚠️ Failed to delete audiobook folder:', e);
+        }
+      }
+      
+      // Trigger re-dramatization
+      if ((global as any).DRAMATIZATION_ENABLED && BOOK_METADATA) {
+        console.log('🚀 Starting re-dramatization with new language...');
+        isDramatizingInBackground = true;
+        
+        // Import necessary modules
+        const { CharacterRegistry } = await import('./characterRegistry.js');
+        const { GeminiCharacterAnalyzer } = await import('./llmCharacterAnalyzer.js');
+        
+        // Create GeminiConfig from environment
+        const geminiConfig: GeminiConfig = {
+          projectId: process.env.GOOGLE_CLOUD_PROJECT || '',
+          location: process.env.GOOGLE_CLOUD_LOCATION || 'us-central1',
+        };
+        
+        const characterRegistry = new CharacterRegistry(geminiConfig);
+        characterRegistry.setNarratorVoice(NARRATOR_VOICE);
+        const analyzer = new GeminiCharacterAnalyzer(geminiConfig);
+        
+        startBackgroundDramatization(characterRegistry, analyzer).catch(err => 
+          console.error('❌ Re-dramatization failed:', err)
+        );
+      }
+    }
 
     // Update global narrator voice (used for character voice assignment)
     if (voiceName && voiceName !== NARRATOR_VOICE) {
@@ -1515,6 +1690,41 @@ app.post('/api/tts/chunk', async (req: Request, res: Response) => {
     // ========================================
     
     console.log(`🎤 TTS request: chapter ${chapterNum}:${localSubChunkIndex} (voice: ${voiceName})`);
+    
+    // CRITICAL: Block if requested chapter hasn't been dramatized yet
+    // This prevents frontend from polling for audio before it's ready
+    if (isDramatizingInBackground) {
+      const chapterDramatized = CHAPTER_SUBCHUNKS.has(chapterNum);
+      
+      if (!chapterDramatized) {
+        // Check for timeout
+        const now = Date.now();
+        const isTimedOut = dramatizationStatus.lastActivityAt && 
+          (now - dramatizationStatus.lastActivityAt) > DRAMATIZATION_TIMEOUT_MS;
+        
+        if (isTimedOut) {
+          console.error(`⏱️ TIMEOUT: No activity for ${Math.round((now - dramatizationStatus.lastActivityAt!) / 1000)}s`);
+          dramatizationStatus.phase = 'failed';
+          dramatizationStatus.error = 'Dramatization timeout - no progress detected';
+          isDramatizingInBackground = false;
+          
+          return res.status(500).json({
+            error: 'Dramatization timeout',
+            message: `Chapter ${chapterNum} dramatization timed out. Current phase: ${dramatizationStatus.currentOperation}`,
+            status: dramatizationStatus,
+          });
+        }
+        
+        console.log(`⏳ Chapter ${chapterNum} not dramatized yet (currently on chapter ${dramatizationStatus.currentChapter})`);
+        return res.status(202).json({
+          error: 'Chapter not ready',
+          message: `Chapter ${chapterNum} is still being processed. Current: ${dramatizationStatus.currentOperation}`,
+          chapterNum,
+          status: dramatizationStatus,
+          retryAfterMs: 3000,
+        });
+      }
+    }
     
     // Calculate estimated total chunks for validation
     const chapterCount = getChapterCount();
@@ -2198,7 +2408,7 @@ app.get('/api/dramatize/voice-map', async (req: Request, res: Response) => {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔════════════════════════════════════════╗');
-  console.log('║   Ebook Reader Backend POC 2.0        ║');
+  console.log('║   VoiceLibri Backend v1.0             ║');
   console.log('╚════════════════════════════════════════╝');
   console.log('');
   console.log(`🚀 Server running on http://localhost:${PORT}`);

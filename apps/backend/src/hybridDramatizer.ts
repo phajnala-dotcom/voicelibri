@@ -19,6 +19,7 @@ import {
   calculateConfidence,
   extractDialogueParagraphs,
   mergeWithNarration,
+  addClosingTagsToText,
   TaggingResult 
 } from './hybridTagger.js';
 
@@ -60,7 +61,8 @@ export async function tagChapterHybrid(
   // Strategy 1: No dialogue → Auto-tag as NARRATOR
   if (!hasDialogue(chapterText)) {
     console.log(`📖 Chapter ${chapterNumber}: No dialogue detected → Auto-tag NARRATOR`);
-    const taggedText = `[VOICE=NARRATOR]\n${chapterText}`;
+    // Add both opening and closing tags for consistency
+    const taggedText = `[VOICE=NARRATOR]\n${chapterText}\n[/VOICE]`;
     
     return {
       taggedText,
@@ -115,6 +117,9 @@ export async function tagChapterHybrid(
   // Merge LLM-tagged dialogues back with narration
   const mergedText = mergeWithNarration(chapterText, llmTagged, characters);
   
+  // CRITICAL: Add closing tags to merged text (LLM/merge doesn't add them)
+  const finalText = addClosingTagsToText(mergedText);
+  
   // Estimate cost (much cheaper than full chapter)
   const inputTokens = Math.ceil(dialogueText.length / 4);
   const outputTokens = Math.ceil(llmTagged.length / 4);
@@ -123,7 +128,7 @@ export async function tagChapterHybrid(
   console.log(`💰 LLM fallback cost: $${cost.toFixed(4)} (${inputTokens} in + ${outputTokens} out tokens)`);
   
   return {
-    taggedText: mergedText,
+    taggedText: finalText,
     method: 'llm-fallback',
     confidence: 0.98, // LLM is highly accurate
     dialogueCount,

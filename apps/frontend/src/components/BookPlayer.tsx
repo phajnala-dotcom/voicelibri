@@ -190,6 +190,19 @@ const BookPlayer: React.FC = () => {
   // Consolidated chapters status - for skip navigation
   const [consolidatedChapters, setConsolidatedChapters] = useState<Set<number>>(new Set());
   const [_highestConsolidatedChapter, setHighestConsolidatedChapter] = useState<number>(0);
+  
+  // Dramatization status tracking
+  interface DramatizationStatus {
+    phase: 'idle' | 'translating' | 'dramatizing' | 'generating_audio' | 'complete' | 'failed';
+    currentChapter: number;
+    totalChapters: number;
+    currentOperation: string;
+    isActive: boolean;
+    isTimedOut: boolean;
+    error: string | null;
+  }
+  
+  const [dramatizationStatus, setDramatizationStatus] = useState<DramatizationStatus | null>(null);
 
   // Target language for TTS output (translation)
   // 'original' means no translation - use source language
@@ -324,6 +337,31 @@ const BookPlayer: React.FC = () => {
     
     return () => clearInterval(interval);
   }, [bookInfo, currentBookFile]);
+  
+  // Poll dramatization status
+  useEffect(() => {
+    if (!bookInfo || !currentBookFile) return;
+    
+    const fetchDramatizationStatus = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/dramatization/status`);
+        if (!response.ok) return;
+        
+        const status = await response.json();
+        setDramatizationStatus(status);
+      } catch (err) {
+        console.warn('Failed to fetch dramatization status:', err);
+      }
+    };
+    
+    // Initial fetch
+    fetchDramatizationStatus();
+    
+    // Poll every 2 seconds while active
+    const interval = setInterval(fetchDramatizationStatus, 2000);
+    
+    return () => clearInterval(interval);
+  }, [bookInfo, currentBookFile]);
 
   /**
    * Convert global chunk index to chapter:subChunk indices
@@ -384,6 +422,13 @@ interface AudioFetchResult {
       if (chapterInfo) {
         requestBody.chapterIndex = chapterInfo.chapterIndex;
         requestBody.subChunkIndex = chapterInfo.subChunkIndex;
+      }
+      
+      // Add target language for translation
+      // Always send the targetLanguage so backend knows the current UI state
+      // This fixes Issue 3: language selection ignored after book selection
+      if (targetLanguage) {
+        requestBody.targetLanguage = targetLanguage;
       }
       
       const response = await fetch(`${API_BASE_URL}/api/tts/chunk`, {
@@ -612,7 +657,7 @@ interface AudioFetchResult {
       setError(`Nepodarilo sa načítať audio chunk ${chunkIndex + 1}: ${errorMsg}. Skúsiť znova?`);
       setIsPlaying(false);
     }
-  }, [bookInfo, audioCache, playbackSpeed, fetchChunkAudio]);
+  }, [bookInfo, audioCache, playbackSpeed, fetchChunkAudio, targetLanguage]);
 
   const preloadNextChunk = async (nextIndex: number) => {
     if (!bookInfo || nextIndex >= bookInfo._internal.totalChunks) return;
@@ -1270,6 +1315,40 @@ interface AudioFetchResult {
           onBookSelected={handleBookSelected}
           currentBook={currentBookFile}
         />
+        
+        {/* Dramatization Status Banner */}
+        {dramatizationStatus && dramatizationStatus.isActive && dramatizationStatus.phase !== 'complete' && (
+          <div style={{
+            padding: '12px 20px',
+            backgroundColor: dramatizationStatus.isTimedOut ? '#ff4444' : '#2196F3',
+            color: 'white',
+            borderRadius: '8px',
+            marginBottom: '16px',
+            textAlign: 'center',
+            fontSize: '14px',
+          }}>
+            {dramatizationStatus.isTimedOut ? (
+              <div>
+                <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>⏱️ Timeout Detected</div>
+                <div style={{ fontSize: '13px', opacity: 0.9 }}>
+                  {dramatizationStatus.error || 'Processing timed out'}
+                </div>
+              </div>
+            ) : (
+              <div>
+                <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
+                  {dramatizationStatus.phase === 'translating' && '🌍 Translating...'}
+                  {dramatizationStatus.phase === 'dramatizing' && '🎭 Dramatizing...'}
+                  {dramatizationStatus.phase === 'generating_audio' && '🎤 Generating Audio...'}
+                  {dramatizationStatus.phase === 'idle' && '⏳ Preparing...'}
+                </div>
+                <div style={{ fontSize: '13px', opacity: 0.9 }}>
+                  {dramatizationStatus.currentOperation} ({dramatizationStatus.currentChapter}/{dramatizationStatus.totalChapters})
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Book Metadata Header - Centered */}
         <div style={styles.bookHeader}>

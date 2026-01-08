@@ -1,4 +1,4 @@
-# Ebook Reader POC 1.0
+﻿# VoiceLibri - AI-Powered Audiobook Platform
 
 Aplikácia pre čítanie textov syntetizovaným hlasom pomocou Gemini 2.5 Flash TTS.
 

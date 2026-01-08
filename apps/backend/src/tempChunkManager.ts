@@ -346,10 +346,13 @@ function lookupVoice(speaker: string, voiceMap: Record<string, string>, defaultV
     return voiceMap[speaker];
   }
   
-  // Convert UPPERCASE_WITH_UNDERSCORES to Title Case with spaces
+  // Convert UPPERCASE to Title Case
+  // Handles both underscore-separated (JOSEPH_RAGOWSKI) and space-separated (JOSEPH RAGOWSKI)
   // e.g., "JOSEPH_RAGOWSKI" → "Joseph Ragowski"
+  // e.g., "JOSEPH RAGOWSKI" → "Joseph Ragowski"
   const normalizedName = speaker
-    .split('_')
+    .replace(/_/g, ' ')  // First convert underscores to spaces
+    .split(' ')          // Then split on spaces
     .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
     .join(' ');
   

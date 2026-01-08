@@ -64,7 +64,7 @@ export const BookSelector: React.FC<BookSelectorProps> = ({ onBookSelected, curr
     try {
       // Get narrator voice from localStorage (user preference)
       const narratorVoice = localStorage.getItem('preferredNarratorVoice') || 'Achird';
-      // Get target language for translation (if any)
+      // Get target language from localStorage (user preference)
       const targetLanguage = localStorage.getItem('preferredTargetLanguage') || 'original';
       
       // First, select the book to check if library version exists
@@ -75,6 +75,7 @@ export const BookSelector: React.FC<BookSelectorProps> = ({ onBookSelected, curr
           filename, 
           dramatize: enableDramatization, 
           narratorVoice,
+          // Send target language so backend can start translation during dramatization
           targetLanguage: targetLanguage !== 'original' ? targetLanguage : undefined,
         }),
       });

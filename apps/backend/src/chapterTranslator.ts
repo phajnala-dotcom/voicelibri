@@ -184,6 +184,27 @@ ${chapterText}`;
 }
 
 /**
+ * Normalize quotes in translated text
+ * Converts curly single quotes (used in contractions) to straight apostrophes
+ * Preserves curly double quotes for dialogue
+ * 
+ * Problem: Gemini translator outputs "can't" with curly apostrophe ('),
+ * which dramatizer incorrectly treats as dialogue quote marker.
+ * 
+ * @param text - Translated text with curly quotes
+ * @returns Text with normalized quotes
+ */
+export function normalizeQuotesForDramatization(text: string): string {
+  // Replace curly single quotes (U+2018, U+2019) with straight apostrophe
+  // This fixes contractions: can't, won't, it's, they've, etc.
+  return text
+    .replace(/\u2018/g, "'")  // Left single quote → apostrophe
+    .replace(/\u2019/g, "'")  // Right single quote → apostrophe
+    .replace(/'/g, "'")       // Curly apostrophe → straight (alternative encoding)
+    .replace(/'/g, "'");      // Curly apostrophe → straight (alternative encoding)
+}
+
+/**
  * Check if translation is needed
  * Simply checks if a target language is specified
  * LLM will auto-detect the source language

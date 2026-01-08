@@ -1,7 +1,7 @@
-{
-  "name": "ebook-reader-poc",
+﻿{
+  "name": "voicelibri",
   "version": "1.0.0",
-  "description": "Ebook Reader POC with Gemini 2.5 Flash TTS",
+  "description": "VoiceLibri - AI-Powered Multi-Voice Dramatized Audiobook Platform",
   "private": true,
   "workspaces": [
     "apps/*",
