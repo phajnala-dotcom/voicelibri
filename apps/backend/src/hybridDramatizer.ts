@@ -19,7 +19,6 @@ import {
   calculateConfidence,
   extractDialogueParagraphs,
   mergeWithNarration,
-  addClosingTagsToText,
   TaggingResult 
 } from './hybridTagger.js';
 
@@ -61,8 +60,8 @@ export async function tagChapterHybrid(
   // Strategy 1: No dialogue → Auto-tag as NARRATOR
   if (!hasDialogue(chapterText)) {
     console.log(`📖 Chapter ${chapterNumber}: No dialogue detected → Auto-tag NARRATOR`);
-    // Add both opening and closing tags for consistency
-    const taggedText = `[VOICE=NARRATOR]\n${chapterText}\n[/VOICE]`;
+    // Use Gemini TTS format: "SPEAKER: text"
+    const taggedText = `NARRATOR: ${chapterText}`;
     
     return {
       taggedText,
@@ -117,8 +116,8 @@ export async function tagChapterHybrid(
   // Merge LLM-tagged dialogues back with narration
   const mergedText = mergeWithNarration(chapterText, llmTagged, characters);
   
-  // CRITICAL: Add closing tags to merged text (LLM/merge doesn't add them)
-  const finalText = addClosingTagsToText(mergedText);
+  // Text is already in Gemini TTS format "SPEAKER: text"
+  const finalText = mergedText;
   
   // Estimate cost (much cheaper than full chapter)
   const inputTokens = Math.ceil(dialogueText.length / 4);

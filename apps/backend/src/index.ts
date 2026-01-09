@@ -239,8 +239,8 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
     // Load TXT
     BOOK_TEXT = fs.readFileSync(bookPath, 'utf-8');
     
-    // Parse metadata from TXT
-    BOOK_METADATA = parseBookMetadata(BOOK_TEXT, 'txt');
+    // Parse metadata from TXT (pass filePath for better title extraction)
+    BOOK_METADATA = parseBookMetadata(BOOK_TEXT, 'txt', bookPath);
     
     // Detect chapters in TXT (returns 0-indexed array)
     const chaptersArray = detectTextChapters(BOOK_TEXT);
@@ -264,8 +264,8 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
     throw new Error(`Unsupported book format: ${ext}`);
   }
   
-  // Check for voice tags (existing or from dramatization)
-  let hasVoiceTags = /\[VOICE=.*?\]/.test(BOOK_TEXT);
+  // Check for voice tags (existing or from dramatization) - new format: SPEAKER: text
+  let hasVoiceTags = /^[A-Z][A-Z0-9]*:\s/m.test(BOOK_TEXT);
   
   // HYBRID DRAMATIZATION: Auto-tag dialogue with LLM
   // All books use the same background dramatization process
@@ -344,8 +344,8 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
       // Import gender inference utility
       const { inferGender } = await import('./hybridTagger.js');
       
-      // Extract all unique character names from voice tags in the book text
-      const voiceTagRegex = /\[VOICE=([^:\]]+)(?::[^\]]+)?\]/g;
+      // Extract all unique character names from voice tags (SPEAKER: format) in the book text
+      const voiceTagRegex = /^([A-Z][A-Z0-9]*):\s/gm;
       const characterNames = new Set<string>();
       let match;
       
@@ -417,8 +417,8 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
     const chapter = BOOK_CHAPTERS[chapterNum];
     const chapterText = chapter.text;
     
-    // Check if chapter has voice tags (either pre-tagged or needs dramatization)
-    const chapterHasVoiceTags = /\[VOICE=.*?\]/.test(chapterText);
+    // Check if chapter has voice tags (either pre-tagged or needs dramatization) - SPEAKER: format
+    const chapterHasVoiceTags = /^[A-Z][A-Z0-9]*:\s/m.test(chapterText);
     
     if (chapterHasVoiceTags) {
       // Pre-tagged: split directly to sub-chunks
@@ -435,7 +435,7 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
       // Note: Verbose 'pending dramatization' log removed for cleaner output
     } else {
       // No voice tags, no dramatization - treat as single NARRATOR voice
-      const narratorText = `[VOICE=NARRATOR]\n${chapterText}`;
+      const narratorText = `NARRATOR: ${chapterText}`;
       const subChunks = chunkForTwoSpeakers(narratorText, undefined, chapterNum);
       CHAPTER_SUBCHUNKS.set(chapterNum, subChunks);
       CHAPTER_DRAMATIZED.set(chapterNum, narratorText);
@@ -617,6 +617,11 @@ async function startBackgroundDramatization(
   }
   console.log('');
   
+  // Create audiobook folder BEFORE any file operations
+  const bookTitle = sanitizeBookTitle(BOOK_METADATA?.title || CURRENT_BOOK_FILE || 'Unknown');
+  createAudiobookFolder(bookTitle);
+  console.log(`   📁 Audiobook folder: ${bookTitle}`);
+  
   try {
     // Process chapters in parallel batches (1-based: chapter 1, 2, 3, ...)
     for (let batchStart = 1; batchStart < BOOK_CHAPTERS.length; batchStart += parallelism) {
@@ -690,7 +695,9 @@ async function startBackgroundDramatization(
               
               // DEBUG: Save translated text for analysis
               const bookTitle = sanitizeBookTitle(BOOK_METADATA?.title || CURRENT_BOOK_FILE || 'Unknown');
-              const translatedPath = path.join(getAudiobooksDir(), bookTitle, `chapter_${chapterNum}_translated.txt`);
+              const bookFolder = path.join(getAudiobooksDir(), bookTitle);
+              await fs.promises.mkdir(bookFolder, { recursive: true });
+              const translatedPath = path.join(bookFolder, `chapter_${chapterNum}_translated.txt`);
               try {
                 await fs.promises.writeFile(translatedPath, textToDramatize, 'utf8');
                 console.log(`   📝 Debug: Saved translated text to ${translatedPath}`);
@@ -750,7 +757,9 @@ async function startBackgroundDramatization(
           
           // DEBUG: Save dramatized text for analysis
           const bookTitle = sanitizeBookTitle(BOOK_METADATA?.title || CURRENT_BOOK_FILE || 'Unknown');
-          const debugPath = path.join(getAudiobooksDir(), bookTitle, `chapter_${chapterNum}_dramatized.txt`);
+          const bookFolder = path.join(getAudiobooksDir(), bookTitle);
+          await fs.promises.mkdir(bookFolder, { recursive: true });
+          const debugPath = path.join(bookFolder, `chapter_${chapterNum}_dramatized.txt`);
           try {
             await fs.promises.writeFile(debugPath, result.taggedText, 'utf8');
             console.log(`   📝 Debug: Saved dramatized text to ${debugPath}`);
@@ -811,7 +820,7 @@ async function startBackgroundDramatization(
             }
           }
           
-          const narratorText = `[VOICE=NARRATOR]\n${fallbackText}`;
+          const narratorText = `NARRATOR: ${fallbackText}`;
           const newSubChunks = chunkForTwoSpeakers(narratorText, undefined, chapterNum);
           CHAPTER_SUBCHUNKS.set(chapterNum, newSubChunks);
           CHAPTER_DRAMATIZED.set(chapterNum, narratorText);
@@ -1938,8 +1947,8 @@ app.post('/api/audiobooks/generate', async (req: Request, res: Response) => {
       const bookText = fs.readFileSync(bookPath, 'utf-8');
       bookMetadata = parseBookMetadata(bookText, 'txt');
       
-      // Check for voice tags
-      isDramatized = /\[VOICE=.*?\]/.test(bookText);
+      // Check for voice tags (SPEAKER: format)
+      isDramatized = /^[A-Z][A-Z0-9]*:\s/m.test(bookText);
       
       // Detect chapters
       chapters = bookText.includes('Chapter') || bookText.includes('CHAPTER')

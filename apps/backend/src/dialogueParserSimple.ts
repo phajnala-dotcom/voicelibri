@@ -7,6 +7,8 @@
  * - Split text into narrator/dialogue segments
  */
 
+import { toTTSSpeakerAlias } from './llmCharacterAnalyzer.js';
+
 export interface DialogueSegment {
   type: 'narrator' | 'dialogue';
   speaker: string;
@@ -73,7 +75,7 @@ export function detectDialogues(text: string): DialogueSegment[] {
     const verbNameMatch = beforeText.match(verbNamePattern);
     
     if (verbNameMatch) {
-      speaker = verbNameMatch[2].toUpperCase();
+      speaker = toTTSSpeakerAlias(verbNameMatch[2]);
       lastKnownSpeaker = speaker;
     } else {
       // Pattern 2: Name + action verb (not dialogue verb) before quote
@@ -82,7 +84,7 @@ export function detectDialogues(text: string): DialogueSegment[] {
       const nameActionMatch = beforeText.match(nameActionPattern);
       
       if (nameActionMatch) {
-        speaker = nameActionMatch[1].toUpperCase();
+        speaker = toTTSSpeakerAlias(nameActionMatch[1]);
         lastKnownSpeaker = speaker;
       }
     }
@@ -193,44 +195,45 @@ export function identifyCharacters(segments: DialogueSegment[]): Map<string, Cha
 }
 
 /**
- * Inserts voice tags
+ * Inserts voice tags using Gemini TTS format: SPEAKER: text
  */
 export function insertVoiceTags(segments: DialogueSegment[]): string {
-  const parts: string[] = [];
+  const lines: string[] = [];
   
   for (const segment of segments) {
-    parts.push(`[VOICE=${segment.speaker}]`);
-    parts.push(segment.text);
-    parts.push(`[/VOICE]`);
+    // Each segment is one line: SPEAKER: text
+    lines.push(`${segment.speaker}: ${segment.text}`);
   }
   
-  return parts.join('\n');
+  return lines.join('\n');
 }
 
 /**
- * Removes voice tags for TTS
+ * Removes speaker prefixes for TTS (SPEAKER: pattern)
  */
 export function removeVoiceTags(taggedText: string): string {
   return taggedText
-    .replace(/\[VOICE=[^\]]+\]/g, '')
-    .replace(/\[\/VOICE\]/g, '')
+    .replace(/^[A-Z][A-Z0-9]*:\s*/gm, '')  // Remove SPEAKER: prefix from start of lines
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
 
 /**
- * Extracts voice segments
+ * Extracts voice segments from Gemini TTS format (SPEAKER: text)
  */
 export function extractVoiceSegments(taggedText: string): Array<{ voice: string; text: string }> {
   const segments: Array<{ voice: string; text: string }> = [];
-  const voicePattern = /\[VOICE=([^\]]+)\]\s*([\s\S]*?)\s*\[\/VOICE\]/g;
+  const lines = taggedText.split('\n');
+  const voicePattern = /^([A-Z][A-Z0-9]*):\s*(.+)$/;
   
-  let match;
-  while ((match = voicePattern.exec(taggedText)) !== null) {
-    segments.push({
-      voice: match[1],
-      text: match[2].trim(),
-    });
+  for (const line of lines) {
+    const match = line.match(voicePattern);
+    if (match) {
+      segments.push({
+        voice: match[1],
+        text: match[2].trim(),
+      });
+    }
   }
   
   return segments;

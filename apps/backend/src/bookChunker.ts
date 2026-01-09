@@ -125,7 +125,7 @@ export function parseBookMetadata(
       if (typeof contentOrBuffer !== 'string') {
         throw new Error('TXT format requires string content');
       }
-      return parseTxtMetadata(contentOrBuffer);
+      return parseTxtMetadata(contentOrBuffer, filePath);
     case 'epub':
       if (typeof contentOrBuffer === 'string') {
         throw new Error('EPUB format requires Buffer');
@@ -141,24 +141,37 @@ export function parseBookMetadata(
 
 /**
  * Parses metadata from simple .txt format
- * Expects format:
- * Line 1: TITLE (uppercase or mixed case)
- * Line 2-5: AUTHOR NAME (look for all caps or specific patterns, may span multiple lines)
+ * 
+ * Priority for title:
+ * 1. Filename (without extension) - most reliable for ebook files
+ * 2. First meaningful line (fallback)
+ * 
+ * Expects format for author detection:
+ * Line 1-5: Look for ALL CAPS author name
  * 
  * @param fullText - Complete text file content
+ * @param filePath - Optional file path for better title extraction
  * @returns Extracted metadata
  */
-function parseTxtMetadata(fullText: string): BookMetadata {
+function parseTxtMetadata(fullText: string, filePath?: string): BookMetadata {
   const lines = fullText.split('\n').map(line => line.trim()).filter(line => line.length > 0);
   
+  // Extract title from filename (most reliable for ebook files)
   let title = 'Unknown Title';
+  if (filePath) {
+    const basename = filePath.replace(/^.*[\\\/]/, '').replace(/\.[^.]+$/, '');
+    if (basename && basename.length > 2) {
+      title = basename;
+    }
+  }
+  
   let author = 'Unknown Author';
   let language: string | undefined;
   
-  // Heuristic: First meaningful line is often the title
+  // Search for author in first lines (look for ALL CAPS names)
   if (lines.length > 0) {
     // Skip common headers like "e Knizky.sk", "PDFknihy.sk"
-    // ALSO skip voice tags like "[VOICE=NARRATOR]" or "[voice=character]"
+    // ALSO skip voice tags like "NARRATOR: text" or "CHARACTER: text" (Gemini TTS format)
     const skipPatterns = [
       /^e\s+knizky/i, 
       /^pdf/i, 
@@ -166,13 +179,10 @@ function parseTxtMetadata(fullText: string): BookMetadata {
       /^http/i, 
       /©/, 
       /obsah/i,
-      /^\[VOICE=/i,      // Skip [VOICE=...] tags (uppercase)
-      /^\[voice=/i,      // Skip [voice=...] tags (lowercase)
-      /^\[\/VOICE\]/i,   // Skip [/VOICE] closing tags
-      /^\[\/voice\]/i    // Skip [/voice] closing tags
+      /^[A-Z][A-Z0-9]*: /,  // Skip "SPEAKER: " lines (Gemini TTS format)
     ];
     
-    let titleLine = '';
+    let titleFromText = '';
     const authorLines: string[] = [];
     let foundAuthor = false;
     
@@ -185,9 +195,9 @@ function parseTxtMetadata(fullText: string): BookMetadata {
       // Skip very short lines (likely headers)
       if (line.length < 2) continue;
       
-      // First valid line = title
-      if (!titleLine) {
-        titleLine = line;
+      // First valid line = potential title (only use if no filename)
+      if (!titleFromText) {
+        titleFromText = line;
         continue;
       }
       
@@ -209,9 +219,9 @@ function parseTxtMetadata(fullText: string): BookMetadata {
       }
     }
     
-    if (titleLine) {
-      // Clean title (remove extra whitespace, convert to title case if all caps)
-      title = titleLine.trim();
+    // Only use title from text if we didn't get one from filename
+    if (title === 'Unknown Title' && titleFromText) {
+      title = titleFromText.trim();
       if (title === title.toUpperCase() && title.length < 50) {
         // Convert "POVÍDKY" to "Povídky"
         title = title.charAt(0) + title.slice(1).toLowerCase();

@@ -27,14 +27,14 @@ export interface ProcessResult {
 /**
  * Extract character names from tagged text
  * 
- * Scans for [VOICE=CHARACTER_NAME] tags and collects unique names
+ * Scans for SPEAKER: format lines and collects unique speaker names
  * Excludes NARRATOR from character list
  * 
- * @param taggedText - Text with voice tags
+ * @param taggedText - Text with SPEAKER: format tags
  * @returns Set of unique character names (UPPERCASE)
  */
 function extractCharacterNames(taggedText: string): Set<string> {
-  const voiceTagRegex = /\[VOICE=([^\]]+)\]/g;
+  const voiceTagRegex = /^([A-Z][A-Z0-9]*):\s/gm;
   const characters = new Set<string>();
   
   let match;
@@ -103,8 +103,8 @@ async function buildCharacterProfiles(
     
     const characters: Character[] = [];
     for (const name of characterNames) {
-      // Extract character's dialogue
-      const dialogueRegex = new RegExp(`\\[VOICE=${name}\\]([\\s\\S]*?)\\[\\/VOICE\\]`, 'g');
+      // Extract character's dialogue (new SPEAKER: format)
+      const dialogueRegex = new RegExp(`^${name}:\\s*(.+)$`, 'gm');
       const dialogues: string[] = [];
       let match;
       while ((match = dialogueRegex.exec(taggedText)) !== null) {

@@ -17,6 +17,21 @@ import { cleanText, CleaningConfig } from './textCleaner.js';
 import { Chapter } from './bookChunker.js';
 
 /**
+ * Convert a character name to valid TTS speaker alias
+ * Rules per Gemini TTS official docs:
+ * - ALL CAPS
+ * - Alphanumeric only (A-Z, 0-9)
+ * - No spaces, underscores, hyphens, dots, diacritics, emojis
+ * - Multi-word names concatenated (e.g., "Joseph Ragowski" → "JOSEPHRAGOWSKI")
+ */
+export function toTTSSpeakerAlias(name: string): string {
+  // Normalize diacritics (á→a, č→c, etc.)
+  const normalized = name.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  // Remove all non-alphanumeric characters and convert to uppercase
+  return normalized.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+}
+
+/**
  * Result from initial character analysis (Phase 1)
  */
 export interface InitialAnalysisResult {
@@ -367,19 +382,23 @@ ${cleanedText.substring(0, 250000)}`;
   }
   
   /**
-   * Tag a single chapter with voice tags
+   * Tag a single chapter with voice tags using Gemini TTS format
    */
   async tagChapterWithVoices(chapterText: string, characters: CharacterProfile[]): Promise<string> {
     console.log(`  🏷️  Tagging chapter (${(chapterText.length / 1000).toFixed(1)}k chars)...`);
     
-    const characterList = characters
-      .map(c => `- ${c.name} (${c.gender})`)
+    // Convert character names to valid TTS aliases (ALLCAPS, alphanumeric only)
+    const characterAliases = characters
+      .map(c => {
+        const alias = toTTSSpeakerAlias(c.name);
+        return `- ${alias} (original: ${c.name}, ${c.gender})`;
+      })
       .join('\n');
     
-    const prompt = `You are tagging text for text-to-speech dramatization. Add [VOICE=CHARACTER] tags to separate dialogue from narration.
+    const prompt = `You are tagging text for Gemini TTS multi-speaker synthesis. Format: SPEAKER: text on same line.
 
-CHARACTERS IN THIS BOOK:
-${characterList}
+SPEAKER ALIASES (use EXACTLY as shown):
+${characterAliases}
 
 CRITICAL RULES FOR DIALOGUE VS NARRATOR:
 1. CHARACTER voice = ONLY the quoted speech itself (text inside „..." or "...")
@@ -388,57 +407,47 @@ CRITICAL RULES FOR DIALOGUE VS NARRATOR:
    - Dialogue ATTRIBUTION phrases like "zvolal", "řekla", "said John", "she whispered"
    - Text AFTER the quote that describes how it was said (e.g., "zatímco si prohlížel...")
    - Character descriptions and reactions
-3. When a sentence has dialogue AND attribution, SPLIT IT:
-   - BAD: [VOICE=JOHN] „Hello," he said with a smile.
-   - GOOD: [VOICE=JOHN] „Hello," [VOICE=NARRATOR] he said with a smile.
+3. When a sentence has dialogue AND attribution, SPLIT IT properly.
 
-TAG FORMAT:
-- Use UPPERCASE with underscores: [VOICE=JOSEPH_RAGOWSKI]
-- Match character names from list above exactly
+SPEAKER ALIAS FORMAT:
+- ALL CAPS, alphanumeric only (A-Z, 0-9), NO spaces/underscores/diacritics
+- Multi-word names concatenated: "Joseph Ragowski" → JOSEPHRAGOWSKI
+- Use aliases from list above EXACTLY
+
+OUTPUT FORMAT (each line = SPEAKER: text):
+SPEAKER: text content on same line
 
 DETAILED EXAMPLES:
 
 EXAMPLE 1 - Attribution AFTER quote must be NARRATOR:
 INPUT: „Jen se podívejte," zvolal, zatímco si prohlížel mágů.
 OUTPUT:
-[VOICE=JOSEPH_RAGOWSKI]
-„Jen se podívejte,"
-[VOICE=NARRATOR]
-zvolal, zatímco si prohlížel mágů.
+JOSEPHRAGOWSKI: „Jen se podívejte,"
+NARRATOR: zvolal, zatímco si prohlížel mágů.
 
 EXAMPLE 2 - Multiple quotes by same character:
 INPUT: „První věta," řekl John. „Druhá věta!"
 OUTPUT:
-[VOICE=JOHN]
-„První věta,"
-[VOICE=NARRATOR]
-řekl John.
-[VOICE=JOHN]
-„Druhá věta!"
+JOHN: „První věta,"
+NARRATOR: řekl John.
+JOHN: „Druhá věta!"
 
 EXAMPLE 3 - Continuous narration:
 INPUT: Joseph pozvedl hlas. „Podívejte se," zvolal. Pak se rozhlédl.
 OUTPUT:
-[VOICE=NARRATOR]
-Joseph pozvedl hlas.
-[VOICE=JOSEPH]
-„Podívejte se,"
-[VOICE=NARRATOR]
-zvolal. Pak se rozhlédl.
+NARRATOR: Joseph pozvedl hlas.
+JOSEPH: „Podívejte se,"
+NARRATOR: zvolal. Pak se rozhlédl.
 
 EXAMPLE 4 - Complete Czech paragraph:
 INPUT: Joseph Ragowski pozvedl hlas. „Jen se na sebe podívejte," zvolal, zatímco si zkoumavě prohlížel pětici mágů. „Všichni vypadáte jako mátohy!"
 OUTPUT:
-[VOICE=NARRATOR]
-Joseph Ragowski pozvedl hlas.
-[VOICE=JOSEPH_RAGOWSKI]
-„Jen se na sebe podívejte,"
-[VOICE=NARRATOR]
-zvolal, zatímco si zkoumavě prohlížel pětici mágů.
-[VOICE=JOSEPH_RAGOWSKI]
-„Všichni vypadáte jako mátohy!"
+NARRATOR: Joseph Ragowski pozvedl hlas.
+JOSEPHRAGOWSKI: „Jen se na sebe podívejte,"
+NARRATOR: zvolal, zatímco si zkoumavě prohlížel pětici mágů.
+JOSEPHRAGOWSKI: „Všichni vypadáte jako mátohy!"
 
-Now tag this chapter text. Remember: ONLY quoted text gets character voice, ALL attribution and description gets NARRATOR:
+Now tag this chapter text. Output ONLY lines in format SPEAKER: text. Remember: ONLY quoted text gets character voice, ALL attribution and description gets NARRATOR:
 
 ${chapterText}`;
     
@@ -457,8 +466,8 @@ ${chapterText}`;
       return cleaned;
     } catch (error) {
       console.error('  ❌ Chapter tagging failed:', error);
-      // Fallback: Return original text with NARRATOR tag
-      return `[VOICE=NARRATOR]\n${chapterText}`;
+      // Fallback: Return original text with NARRATOR prefix
+      return `NARRATOR: ${chapterText}`;
     }
   }
   

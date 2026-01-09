@@ -9,16 +9,20 @@
  * Expected cost reduction: 60-80% vs pure LLM
  * Expected accuracy: 97-99%
  * 
+ * OUTPUT FORMAT: Official Gemini TTS multi-speaker format
+ * - Each line: "SPEAKER: text"
+ * - Speaker aliases: ALL CAPS, alphanumeric only, no spaces/diacritics
+ * - Example: "NARRATOR: He walked in.\nJOHN: Hello there!"
+ * 
  * INNER VOICE / THOUGHTS:
  * - WITH quotes: "Did he lie?" she thought → Rule-based can detect
  * - WITHOUT quotes: She wondered if he lied → LLM required (narrator paraphrase vs actual thought)
- * - Must be CHARACTER voice, not NARRATOR: [VOICE=MARY:THOUGHT] not [VOICE=NARRATOR:THOUGHT]
  * 
  * Limitation: Unquoted internal thoughts are very hard for rule-based detection.
  * These cases will trigger LLM fallback for proper attribution and style tagging.
  */
 
-import { CharacterProfile } from './llmCharacterAnalyzer.js';
+import { CharacterProfile, toTTSSpeakerAlias } from './llmCharacterAnalyzer.js';
 
 export interface TaggingResult {
   taggedText: string;
@@ -103,22 +107,6 @@ export function inferGender(characterName: string, contextText: string = ''): 'm
   
   // Default: neutral if no clear pattern
   return 'neutral';
-}
-
-/**
- * Parse voice tag with optional style modifier
- * Examples: [VOICE=JOHN], [VOICE=JOHN:WHISPER], [VOICE=NARRATOR:THOUGHT]
- */
-export function parseVoiceTag(tag: string): VoiceStyle {
-  const match = tag.match(/\[VOICE=([^:\]]+)(?::([^\]]+))?\]/);
-  if (!match) {
-    return { character: 'NARRATOR', style: 'normal' };
-  }
-  
-  const character = match[1].trim();
-  const style = (match[2]?.trim().toLowerCase() || 'normal') as VoiceStyle['style'];
-  
-  return { character, style };
 }
 
 /**
@@ -231,11 +219,15 @@ export function applyRuleBasedTagging(
   // Create character name lookup (case-insensitive)
   const characterNames = new Set<string>();
   const aliasToMainName = new Map<string, string>();
+  const mainNameToTTSAlias = new Map<string, string>(); // Map main name to TTS alias
   
   for (const char of characters) {
     const mainName = char.name.toUpperCase();
+    const ttsAlias = toTTSSpeakerAlias(char.name); // Convert to TTS alias (concatenated, no diacritics)
+    
     characterNames.add(mainName);
     aliasToMainName.set(mainName, mainName);
+    mainNameToTTSAlias.set(mainName, ttsAlias);
     
     if (char.aliases) {
       for (const alias of char.aliases) {
@@ -245,6 +237,12 @@ export function applyRuleBasedTagging(
       }
     }
   }
+  
+  // Helper to convert character name to TTS alias
+  const toSpeakerAlias = (name: string): string => {
+    const mainName = aliasToMainName.get(name.toUpperCase()) || name.toUpperCase();
+    return mainNameToTTSAlias.get(mainName) || toTTSSpeakerAlias(name);
+  };
   
   // Speech verbs (English + Czech)
   const speechVerbs = 'said|asked|replied|answered|shouted|whispered|muttered|exclaimed|thought|wondered|pondered|mused|realized|called|cried|yelled|screamed|murmured|demanded|inquired|responded|suggested|added|continued|began|started|finished|concluded|agreed|disagreed|argued|explained|announced|declared|stated|mentioned|noted|observed|remarked|commented|repeated|echoed|insisted|urged|warned|promised|admitted|confessed|denied|lied|joked|laughed|sighed|groaned|moaned|gasped|breathed|hissed|growled|snarled|snapped|barked|roared|bellowed|boomed|thundered|smiled|grinned|frowned|nodded|shrugged|cleared|řekl|řekla|zvolal|zvolala|poznamenal|poznamenala|odpověděl|odpověděla|prohlásil|prohlásila|dodal|dodala|podotkl|podotkla|zeptal|zeptala|pomyslel|pomyslela|uvažoval|uvažovala|přemýšlel|přemýšlela|zavolal|zavolala|křikl|křikla|zašeptal|zašeptala|zabručel|zabručela|zasmál|zasmála|povzdechl|povzdechla|zasténal|zasténala|zaúpěl|zaúpěla';
@@ -290,11 +288,8 @@ export function applyRuleBasedTagging(
         lastMentionedCharacter = mentionedChar;
       }
       
-      // Narration line
-      if (taggedLines.length === 0 || !taggedLines[taggedLines.length - 1].startsWith('[VOICE=NARRATOR]')) {
-        taggedLines.push('[VOICE=NARRATOR]');
-      }
-      taggedLines.push(line);
+      // Narration line - output in Gemini TTS format
+      taggedLines.push(`NARRATOR: ${line}`);
       linesSinceLastDialogue++;
       continue;
     }
@@ -410,15 +405,11 @@ export function applyRuleBasedTagging(
     // Detect if this is a thought
     const isThought = /\b(thought|wondered|pondered|mused|realized|pomyslel|pomyslela|uvažoval|uvažovala|přemýšlel|přemýšlela)\b/i.test(line);
     
-    // Tag each segment
-    let lastTaggedSpeaker = '';
+    // Tag each segment - output in Gemini TTS format "SPEAKER: text"
     for (const segment of segments) {
       if (segment.type === 'narration') {
-        if (lastTaggedSpeaker !== 'NARRATOR') {
-          taggedLines.push('[VOICE=NARRATOR]');
-          lastTaggedSpeaker = 'NARRATOR';
-        }
-        taggedLines.push(segment.text);
+        // NARRATOR segment
+        taggedLines.push(`NARRATOR: ${segment.text}`);
         
         // Track character mentioned in narration part
         const mentionedInNarration = findCharacterInText(segment.text);
@@ -426,14 +417,9 @@ export function applyRuleBasedTagging(
           lastMentionedCharacter = mentionedInNarration;
         }
       } else {
-        const voiceTag = isThought && speaker !== 'NARRATOR' 
-          ? `[VOICE=${speaker}:THOUGHT]` 
-          : `[VOICE=${speaker}]`;
-        if (lastTaggedSpeaker !== speaker) {
-          taggedLines.push(voiceTag);
-          lastTaggedSpeaker = speaker;
-        }
-        taggedLines.push(segment.text);
+        // Dialogue segment - convert speaker to TTS alias (concatenated, no diacritics)
+        const speakerAlias = toSpeakerAlias(speaker);
+        taggedLines.push(`${speakerAlias}: ${segment.text}`);
       }
     }
   }
@@ -442,8 +428,8 @@ export function applyRuleBasedTagging(
   const attributionRate = totalDialogues > 0 ? successfulAttributions / totalDialogues : 1.0;
   const confidence = attributionRate * 0.9 + 0.05;
   
-  // POST-PROCESSING: Consolidate consecutive same-voice segments and add closing tags
-  const finalLines = consolidateAndAddClosingTags(taggedLines);
+  // POST-PROCESSING: Merge consecutive same-speaker lines
+  const finalLines = mergeConsecutiveSpeakerLines(taggedLines);
   
   return {
     taggedText: finalLines.join('\n'),
@@ -452,114 +438,99 @@ export function applyRuleBasedTagging(
 }
 
 /**
- * Consolidate consecutive same-voice segments and add closing tags
+ * Merge consecutive lines from the same speaker
  * 
- * This ensures:
- * 1. No redundant consecutive voice tags (e.g., [VOICE=NARRATOR] three times in a row)
- * 2. Explicit [/VOICE] closing tags for TTS to correctly handle voice transitions
+ * Optimizes output by combining consecutive "SPEAKER: text" lines
+ * into a single line when the speaker is the same.
  * 
- * @param lines - Array of lines with voice tags
- * @returns Consolidated lines with closing tags
+ * @param lines - Array of lines in "SPEAKER: text" format
+ * @returns Merged lines with no consecutive duplicates
  */
-export function consolidateAndAddClosingTags(lines: string[]): string[] {
+export function mergeConsecutiveSpeakerLines(lines: string[]): string[] {
+  if (lines.length === 0) return [];
+  
   const result: string[] = [];
-  let currentVoice: string | null = null;
-  let currentSegment: string[] = [];
+  const speakerPattern = /^([A-Z][A-Z0-9]*): (.+)$/;
+  
+  let currentSpeaker: string | null = null;
+  let currentTexts: string[] = [];
   
   for (const line of lines) {
-    const voiceTagMatch = line.match(/^\[VOICE=([^\]]+)\]$/);
+    const match = line.match(speakerPattern);
     
-    if (voiceTagMatch) {
-      const newVoice = voiceTagMatch[1];
+    if (match) {
+      const [, speaker, text] = match;
       
-      // If we have accumulated content for previous voice, output it with closing tag
-      if (currentVoice && currentSegment.length > 0) {
-        result.push(`[VOICE=${currentVoice}]`);
-        result.push(...currentSegment);
-        result.push('[/VOICE]');
-        currentSegment = [];
+      if (speaker === currentSpeaker) {
+        // Same speaker - accumulate text
+        currentTexts.push(text);
+      } else {
+        // Different speaker - flush previous and start new
+        if (currentSpeaker && currentTexts.length > 0) {
+          result.push(`${currentSpeaker}: ${currentTexts.join(' ')}`);
+        }
+        currentSpeaker = speaker;
+        currentTexts = [text];
       }
-      
-      // Start new voice segment
-      currentVoice = newVoice;
     } else {
-      // Accumulate content lines
-      currentSegment.push(line);
+      // Line doesn't match pattern - flush and add as-is
+      if (currentSpeaker && currentTexts.length > 0) {
+        result.push(`${currentSpeaker}: ${currentTexts.join(' ')}`);
+        currentSpeaker = null;
+        currentTexts = [];
+      }
+      if (line.trim()) {
+        result.push(line);
+      }
     }
   }
   
-  // Output final segment if any
-  if (currentVoice && currentSegment.length > 0) {
-    result.push(`[VOICE=${currentVoice}]`);
-    result.push(...currentSegment);
-    result.push('[/VOICE]');
+  // Flush final segment
+  if (currentSpeaker && currentTexts.length > 0) {
+    result.push(`${currentSpeaker}: ${currentTexts.join(' ')}`);
   }
   
   return result;
 }
 
 /**
- * Add closing tags to already-tagged text
- * 
- * This is a utility wrapper that takes a string with [VOICE=X] tags
- * and ensures each voice segment has proper [/VOICE] closing tags.
- * Use this to post-process any tagged text from LLM or other sources.
- * 
- * @param taggedText - Text with [VOICE=X] opening tags
- * @returns Text with proper [VOICE=X]...[/VOICE] structure
- */
-export function addClosingTagsToText(taggedText: string): string {
-  // Skip if already has closing tags
-  if (taggedText.includes('[/VOICE]')) {
-    console.log('  [addClosingTagsToText] Text already has closing tags, skipping');
-    return taggedText;
-  }
-  
-  // Split into lines and apply consolidation with closing tags
-  const lines = taggedText.split('\n');
-  const result = consolidateAndAddClosingTags(lines);
-  
-  console.log(`  [addClosingTagsToText] Added closing tags (${(taggedText.match(/\[VOICE=/g) || []).length} voice segments)`);
-  return result.join('\n');
-}
-
-/**
  * Calculate confidence score for tagged text
+ * 
+ * Now works with SPEAKER: format (Gemini TTS official format)
  * 
  * Checks:
  * - All dialogues have speaker tags
  * - Speakers match known characters
  * - Quote marks are properly paired
- * - No consecutive same-speaker tags
  */
 export function calculateConfidence(
   taggedText: string,
   characters: CharacterProfile[]
 ): number {
   const characterNames = new Set(
-    characters.map(c => c.name.toUpperCase())
+    characters.map(c => c.name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase())
   );
   characterNames.add('NARRATOR');
   
   let score = 1.0;
   
-  // Extract voice tags
-  const voiceTags = taggedText.match(/\[VOICE=([^\]]+)\]/g) || [];
+  // Extract speakers from SPEAKER: format
+  const speakerMatches = taggedText.match(/^([A-Z][A-Z0-9]*):/gm) || [];
   
-  if (voiceTags.length === 0) {
+  if (speakerMatches.length === 0) {
     return 0.0; // No tags found
   }
   
   // Check 1: All speakers are known characters
   let unknownSpeakers = 0;
-  for (const tag of voiceTags) {
-    const parsed = parseVoiceTag(tag);
-    if (!characterNames.has(parsed.character)) {
+  for (const match of speakerMatches) {
+    const speaker = match.replace(':', '');
+    if (!characterNames.has(speaker)) {
       unknownSpeakers++;
     }
   }
   if (unknownSpeakers > 0) {
-    score *= Math.max(0.5, 1 - unknownSpeakers / voiceTags.length);
+    score *= Math.max(0.5, 1 - unknownSpeakers / speakerMatches.length);
   }
   
   // Check 2: Quote marks are paired
@@ -572,7 +543,7 @@ export function calculateConfidence(
   
   // Check 3: Reasonable tag density
   const lines = taggedText.split('\n').length;
-  const tagDensity = voiceTags.length / lines;
+  const tagDensity = speakerMatches.length / lines;
   if (tagDensity < 0.01 || tagDensity > 0.5) {
     score *= 0.8; // Suspicious density
   }
@@ -581,126 +552,25 @@ export function calculateConfidence(
 }
 
 /**
- * Post-process tagged text to ensure narration (non-quoted text) is tagged as NARRATOR
- * 
- * Safety net for LLM output - uses the same splitIntoDialogueNarration() logic
- * as the rule-based tagger for consistency.
- * 
- * @param taggedText - Text with [VOICE=] tags
- * @returns Text with narration properly tagged as NARRATOR
- */
-function postProcessNarration(taggedText: string): string {
-  // Split by voice tags, keeping the tags
-  const parts = taggedText.split(/(\[VOICE=[^\]]+\])/);
-  const result: string[] = [];
-  let currentSpeaker = 'NARRATOR';
-  
-  for (const part of parts) {
-    const voiceTagMatch = part.match(/^\[VOICE=([^\]]+)\]$/);
-    
-    if (voiceTagMatch) {
-      currentSpeaker = voiceTagMatch[1].split(':')[0]; // Handle style suffix like :THOUGHT
-      continue;
-    }
-    
-    const content = part.trim();
-    if (!content) continue;
-    
-    if (currentSpeaker === 'NARRATOR') {
-      // Already narrator, just add
-      if (result.length === 0 || !result[result.length - 1].startsWith('[VOICE=NARRATOR]')) {
-        result.push(`[VOICE=NARRATOR]\n${content}`);
-      } else {
-        result[result.length - 1] += `\n${content}`;
-      }
-    } else {
-      // Character speaker - use shared function to split dialogue/narration
-      const segments = splitIntoDialogueNarration(content);
-      
-      for (const segment of segments) {
-        if (segment.type === 'narration') {
-          result.push(`[VOICE=NARRATOR]\n${segment.text}`);
-        } else {
-          result.push(`[VOICE=${currentSpeaker}]\n${segment.text}`);
-        }
-      }
-    }
-  }
-  
-  return result.join('\n');
-}
-
-/**
  * Merge LLM-tagged dialogues back into full chapter with narration
  * 
- * The LLM returns text with [VOICE=X] tags, which may use single newlines
- * between segments. This function ensures proper merging.
+ * Uses SPEAKER: format (Gemini TTS official format)
  */
 export function mergeWithNarration(
   originalText: string,
   taggedDialogues: string,
   characters: CharacterProfile[]
 ): string {
-  // If the LLM output already contains multiple VOICE tags properly formatted,
-  // post-process to ensure narration is tagged correctly
-  const voiceTagCount = (taggedDialogues.match(/\[VOICE=/g) || []).length;
+  // Check if output is in SPEAKER: format
+  const speakerLineCount = (taggedDialogues.match(/^[A-Z][A-Z0-9]*:\s/gm) || []).length;
   
-  if (voiceTagCount > 1) {
-    // LLM already tagged the full text with multiple speakers
-    // Bypass post-processing: assume all segments are properly tagged
-    console.log(`  [mergeWithNarration] LLM returned ${voiceTagCount} voice tags - bypassing postProcessNarration`);
+  if (speakerLineCount > 1) {
+    // Properly tagged with multiple speakers
+    console.log(`  [mergeWithNarration] LLM returned ${speakerLineCount} SPEAKER: lines - returning as-is`);
     return taggedDialogues.trim();
   }
   
-  // Fallback: Original merging logic for partial tagging
-  console.log(`  [mergeWithNarration] Only ${voiceTagCount} voice tag(s) - attempting merge`);
-  
-  // Split original into paragraphs
-  const paragraphs = originalText.split(/\n\n+/);
-  const result: string[] = [];
-  
-  // Extract tagged dialogue segments - split by VOICE tag, not double newline
-  const dialogueMap = new Map<string, string>();
-  const segments = taggedDialogues.split(/(?=\[VOICE=)/);
-  
-  for (const segment of segments) {
-    if (!segment.trim()) continue;
-    // Extract original text without tags
-    const withoutTags = segment.replace(/\[VOICE=[^\]]+\]\s*/g, '').trim();
-    if (withoutTags) {
-      dialogueMap.set(withoutTags, segment.trim());
-    }
-  }
-  
-  // Merge back
-  for (const para of paragraphs) {
-    const trimmed = para.trim();
-    if (!trimmed) continue;
-    
-    if (dialogueMap.has(trimmed)) {
-      result.push(dialogueMap.get(trimmed)!);
-    } else {
-      // Check if this paragraph is part of a longer tagged segment
-      let found = false;
-      for (const [key, value] of dialogueMap) {
-        if (key.includes(trimmed) || trimmed.includes(key)) {
-          result.push(value);
-          found = true;
-          break;
-        }
-      }
-      
-      if (!found) {
-        // Narration paragraph - add tag if needed
-        if (result.length === 0 || !result[result.length - 1].startsWith('[VOICE=NARRATOR]')) {
-          result.push(`[VOICE=NARRATOR]\n${para}`);
-        } else {
-          // Append to existing NARRATOR section
-          result[result.length - 1] += `\n${para}`;
-        }
-      }
-    }
-  }
-  
-  return result.join('\n');
+  // Fallback: wrap everything in NARRATOR
+  console.log(`  [mergeWithNarration] Only ${speakerLineCount} tag(s) - wrapping as NARRATOR`);
+  return `NARRATOR: ${originalText}`;
 }

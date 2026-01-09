@@ -111,7 +111,7 @@ export function getDramatizationCacheStats(): { cached: number; inProgress: numb
 /**
  * Core dramatization logic - used by both on-demand and pre-dramatization
  * @param plainText - Raw text without voice tags
- * @returns Tagged text with [VOICE=] tags
+ * @returns Tagged text with SPEAKER: format
  */
 async function dramatizeTextCore(plainText: string): Promise<string> {
   const characters = (global as any).DRAMATIZATION_CHARACTERS;
@@ -119,7 +119,7 @@ async function dramatizeTextCore(plainText: string): Promise<string> {
   
   if (!characters || !geminiConfig) {
     console.log('[Dramatization Debug] No characters or geminiConfig, returning narrator only.');
-    return `[VOICE=NARRATOR]\n${plainText}`;
+    return `NARRATOR: ${plainText}`;
   }
 
   try {
@@ -129,7 +129,7 @@ async function dramatizeTextCore(plainText: string): Promise<string> {
     // Check if this chunk has any dialogue
     if (!hasDialogue(plainText)) {
       console.log('[Dramatization Debug] No dialogue detected, returning narrator only.');
-      return `[VOICE=NARRATOR]\n${plainText}`;
+      return `NARRATOR: ${plainText}`;
     }
 
     // Try rule-based first (free, instant)
@@ -157,7 +157,7 @@ async function dramatizeTextCore(plainText: string): Promise<string> {
 
   } catch (error) {
     console.error('  ❌ Dramatization failed:', error);
-    return `[VOICE=NARRATOR]\n${plainText}`;
+    return `NARRATOR: ${plainText}`;
   }
 }
 
@@ -212,8 +212,8 @@ export async function startPreDramatization(
         continue;
       }
       
-      // Skip if chunk already has voice tags
-      if (/\[VOICE=.*?\]/.test(chunks[currentIndex])) {
+      // Skip if chunk already has voice tags (SPEAKER: format)
+      if (/^[A-Z][A-Z0-9]*:\s/m.test(chunks[currentIndex])) {
         currentIndex++;
         continue;
       }
@@ -233,7 +233,7 @@ export async function startPreDramatization(
       } catch (error) {
         console.error(`  ❌ Pre-dramatization failed for chunk ${currentIndex}:`, error);
         // Store fallback narrator-only text
-        dramatizationCache.set(currentIndex, `[VOICE=NARRATOR]\n${chunks[currentIndex]}`);
+        dramatizationCache.set(currentIndex, `NARRATOR: ${chunks[currentIndex]}`);
       } finally {
         dramatizationInProgress.delete(currentIndex);
       }
@@ -271,7 +271,7 @@ export function stopPreDramatization(): void {
  * 
  * @param chunkIndex - Index of the chunk (for cache lookup)
  * @param plainText - Raw text without voice tags
- * @returns Tagged text with [VOICE=] tags
+ * @returns Tagged text with SPEAKER: format
  */
 async function dramatizeChunkOnDemand(chunkIndex: number, plainText: string): Promise<string> {
   // Check pre-dramatization cache first
@@ -430,7 +430,7 @@ export interface TempChunkResult {
  * - Saves to temp file immediately after generation
  * 
  * @param chunkIndex - Global chunk index
- * @param chunkText - Text to synthesize (with [VOICE=] tags for multi-voice)
+ * @param chunkText - Text to synthesize (with SPEAKER: format for multi-voice)
  * @param bookTitle - Sanitized book title
  * @param voiceMap - Character to voice mapping
  * @param defaultVoice - Default voice for narrator (default: 'Algieba')
@@ -472,7 +472,7 @@ export async function generateAndSaveTempChunk(
     // Using TRUE multi-speaker TTS via Gemini's multiSpeakerVoiceConfig
     const uniqueSpeakers = [...new Set(voiceSegments.map(s => s.speaker))];
     console.log(`  Multi-voice chunk: ${voiceSegments.length} segments, ${uniqueSpeakers.length} speakers`);
-    // Persist the tagged text (with [VOICE=] tags) for this chunk
+    // Persist the tagged text (with SPEAKER: format) for this chunk
     taggedTextToPersist = chunkText;
     // CRITICAL: Gemini TTS multi-speaker requires EXACTLY 2 speakers
     if (uniqueSpeakers.length === 1) {

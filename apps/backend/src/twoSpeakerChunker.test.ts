@@ -1,17 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import { chunkForTwoSpeakers, formatForMultiSpeakerTTS } from './twoSpeakerChunker';
 
-// Helper: create tagged text with N speakers
+// Helper: create tagged text with N speakers (Gemini TTS format: SPEAKER: text)
 function makeTaggedText(speakers: string[], linesPerSpeaker: number = 2): string {
   return speakers.map(speaker =>
-    Array(linesPerSpeaker).fill(`[VOICE=${speaker}] Hello from ${speaker}.`).join('\n')
+    Array(linesPerSpeaker).fill(`${speaker}: Hello from ${speaker}.`).join('\n')
   ).join('\n');
 }
 
 describe('chunkForTwoSpeakers', () => {
     it('splits only at sentence boundaries', () => {
       // This text has two sentences in one segment, and should split only at the period
-      const text = '[VOICE=ALICE] First sentence. Second sentence. Third sentence.';
+      const text = 'ALICE: First sentence. Second sentence. Third sentence.';
       // Set a low byte limit to force splitting
       const chunks = chunkForTwoSpeakers(text, { maxBytes: 25, minBytes: 0 });
       // Each chunk should end with a period (sentence boundary)
@@ -28,19 +28,19 @@ describe('chunkForTwoSpeakers', () => {
     it('throws if a segment cannot be split at a sentence boundary', () => {
       // This text is a single long sentence (no split possible)
       const longSentence = 'A'.repeat(100);
-      const text = `[VOICE=ALICE] ${longSentence}`;
+      const text = `ALICE: ${longSentence}`;
       expect(() => {
         chunkForTwoSpeakers(text, { maxBytes: 10, minBytes: 0 });
       }).toThrow();
     });
   it('never produces chunk with >2 speakers', () => {
     const text = [
-      '[VOICE=ALICE] Hello.',
-      '[VOICE=BOB] Hi!',
-      '[VOICE=CAROL] Hey there.',
-      '[VOICE=ALICE] How are you?',
-      '[VOICE=BOB] Good.',
-      '[VOICE=CAROL] Fine.'
+      'ALICE: Hello.',
+      'BOB: Hi!',
+      'CAROL: Hey there.',
+      'ALICE: How are you?',
+      'BOB: Good.',
+      'CAROL: Fine.'
     ].join('\n');
     const chunks = chunkForTwoSpeakers(text);
     chunks.forEach(chunk => {

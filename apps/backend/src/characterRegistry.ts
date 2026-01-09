@@ -9,7 +9,7 @@
  */
 
 import { GoogleAuth } from 'google-auth-library';
-import { GeminiConfig } from './llmCharacterAnalyzer.js';
+import { GeminiConfig, toTTSSpeakerAlias } from './llmCharacterAnalyzer.js';
 import { selectVoiceForCharacter, GeminiVoice } from './geminiVoices.js';
 
 /**
@@ -21,6 +21,9 @@ export interface RegisteredCharacter {
   
   /** Primary name (first encountered) */
   primaryName: string;
+  
+  /** TTS speaker alias (ALL CAPS, alphanumeric only) */
+  ttsAlias: string;
   
   /** All names/aliases for this character */
   aliases: string[];
@@ -251,7 +254,15 @@ Return ONLY valid JSON, no markdown or explanation.`;
         if (!existing.aliases.includes(normalizedName)) {
           existing.aliases.push(normalizedName);
           this.nameToId.set(normalizedName, existingId);
-          console.log(`   🔗 Alias: "${normalizedName}" → "${existing.primaryName}"`);
+          
+          // Also add TTS alias for this name
+          const ttsAlias = toTTSSpeakerAlias(normalizedName);
+          if (!existing.aliases.includes(ttsAlias)) {
+            existing.aliases.push(ttsAlias);
+            this.nameToId.set(ttsAlias, existingId);
+          }
+          
+          console.log(`   🔗 Alias: "${normalizedName}" (${ttsAlias}) → "${existing.primaryName}"`);
         }
         
         // Merge traits
@@ -267,6 +278,9 @@ Return ONLY valid JSON, no markdown or explanation.`;
     
     // New character - assign voice using selectVoiceForCharacter
     const id = `char_${this.nextId++}`;
+    
+    // Generate TTS alias (ALL CAPS, alphanumeric only) for voice lookup
+    const ttsAlias = toTTSSpeakerAlias(normalizedName);
     
     // Map gender for voice selection
     const voiceGender = charInfo.gender === 'unknown' ? 'neutral' : charInfo.gender;
@@ -284,7 +298,8 @@ Return ONLY valid JSON, no markdown or explanation.`;
     const newChar: RegisteredCharacter = {
       id,
       primaryName: normalizedName,
-      aliases: [normalizedName], // Primary name is also in aliases for easy lookup
+      ttsAlias,
+      aliases: [normalizedName, ttsAlias], // Include TTS alias for voice lookup
       voice,
       gender: charInfo.gender,
       traits: charInfo.traits,
@@ -293,8 +308,9 @@ Return ONLY valid JSON, no markdown or explanation.`;
     
     this.characters.set(id, newChar);
     this.nameToId.set(normalizedName, id);
+    this.nameToId.set(ttsAlias, id); // Also map TTS alias to character ID
     
-    console.log(`   👤 New: "${normalizedName}" (${charInfo.gender}) → ${voice}`);
+    console.log(`   👤 New: "${normalizedName}" (${ttsAlias}, ${charInfo.gender}) → ${voice}`);
   }
   
   /**

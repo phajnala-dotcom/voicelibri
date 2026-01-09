@@ -65,12 +65,12 @@ async function testTextCleaner() {
       console.log(`✓ Reduction: ${((result.bytesRemoved / result.originalLength) * 100).toFixed(1)}%`);
       console.log(`✓ Patterns matched: ${result.patternsMatched.join(', ')}`);
       
-      // Check if voice tags are preserved
-      const hasVoiceTags = /\[VOICE=.*?\]/.test(result.cleanedText);
+      // Check if voice tags are preserved (SPEAKER: format)
+      const hasVoiceTags = /^[A-Z][A-Z0-9]*:\s/m.test(result.cleanedText);
       console.log(`✓ Voice tags preserved: ${hasVoiceTags}`);
       
-      // Count voice tags
-      const voiceTagCount = (result.cleanedText.match(/\[VOICE=.*?\]/g) || []).length;
+      // Count voice tags (SPEAKER: format)
+      const voiceTagCount = (result.cleanedText.match(/^[A-Z][A-Z0-9]*:\s/gm) || []).length;
       console.log(`✓ Voice tags found: ${voiceTagCount}`);
     } else {
       console.log('⚠ File not found, skipping test');
@@ -137,12 +137,12 @@ async function testTextCleaner() {
   console.log(`✓ Preserved: ${cleanResult.cleanedText === cleanInput}`);
   console.log(`✓ Bytes removed: ${cleanResult.bytesRemoved}`);
   
-  // Voice tags preservation
-  const voiceTaggedInput = '[VOICE=NARRATOR]\nOnce upon a time.\n[VOICE=CHARACTER]\n"Hello!"';
+  // Voice tags preservation (new Gemini TTS format: SPEAKER: text)
+  const voiceTaggedInput = 'NARRATOR: Once upon a time.\nCHARACTER: "Hello!"';
   const voiceTaggedResult = cleanText(voiceTaggedInput);
-  console.log(`✓ Voice tags preserved: ${/\[VOICE=/.test(voiceTaggedResult.cleanedText)}`);
+  console.log(`✓ Voice tags preserved: ${/^[A-Z]+:\s/m.test(voiceTaggedResult.cleanedText)}`);
   console.log(`✓ Voice tag result: "${voiceTaggedResult.cleanedText.substring(0, 50)}..."`);
-  
+
   console.log('\n═'.repeat(60));
   console.log('✓ Text Cleaner Tests Complete\n');
 }

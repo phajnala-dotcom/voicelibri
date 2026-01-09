@@ -31,7 +31,7 @@ export class MockGeminiClient {
     // Detect request type from prompt
     if (prompt.includes('extract information about ALL characters')) {
       return this.getMockCharacterAnalysis();
-    } else if (prompt.includes('Add [VOICE=') || prompt.includes('Tag the following chapter text')) {
+    } else if (prompt.includes('SPEAKER: text') || prompt.includes('Tag the following chapter text')) {
       return this.getMockChapterTagging(prompt);
     }
     
@@ -84,22 +84,27 @@ export class MockGeminiClient {
   
   /**
    * Mock chapter tagging response
-   * Adds voice tags to dialogue in text
+   * Adds voice tags to dialogue using Gemini TTS format (SPEAKER: text)
    */
   private getMockChapterTagging(prompt: string): string {
     // Extract text from prompt (between "Chapter text:" and next instruction)
     const textMatch = prompt.match(/Chapter text:\s*```([\s\S]*?)```/);
     if (!textMatch) {
-      return '[VOICE=NARRATOR]\nMocked chapter text with dialogue.\n[VOICE=JOHN]\n"Hello, world!"';
+      return 'NARRATOR: Mocked chapter text with dialogue.\nJOHN: "Hello, world!"';
     }
     
     let text = textMatch[1];
     
-    // Simple mock tagging: Add voice tags before quoted dialogue
-    text = text.replace(/^([^"\n]+)$/gm, '[VOICE=NARRATOR]\n$1');
-    text = text.replace(/("[^"]+")(?!\[VOICE)/g, '[VOICE=JOHN]\n$1');
+    // Simple mock tagging: Add voice tags using Gemini TTS format
+    const lines = text.split('\n').filter(l => l.trim());
+    const taggedLines = lines.map(line => {
+      if (line.includes('"')) {
+        return `JOHN: ${line}`;
+      }
+      return `NARRATOR: ${line}`;
+    });
     
-    return text;
+    return taggedLines.join('\n');
   }
   
   getCallCount(): number {
@@ -170,7 +175,8 @@ ${sampleText}
     console.log(`✓ Original length: ${sampleText.length} characters`);
     console.log(`✓ Tagged length: ${tagged.length} characters`);
     
-    const voiceTags = (tagged.match(/\[VOICE=.*?\]/g) || []).length;
+    // Count voice tags (Gemini TTS format: SPEAKER: text)
+    const voiceTags = (tagged.match(/^[A-Z][A-Z0-9]*:\s/gm) || []).length;
     console.log(`✓ Voice tags added: ${voiceTags}`);
     console.log(`✓ API calls made: ${client.getCallCount()}`);
     

@@ -8,6 +8,15 @@
  * 4. Generates metadata with speaker information
  * 
  * Part of Dramatized TTS implementation (PoC Phase)
+ * 
+ * FORMAT: Uses official Gemini TTS multi-speaker format:
+ *   SPEAKER: text content on same line
+ * 
+ * Character alias rules (per Gemini TTS docs):
+ * - Only alphanumeric characters (A-Z, a-z, 0-9)
+ * - ALL CAPS for speaker names
+ * - No spaces, underscores, hyphens, dots, emojis or diacritics
+ * - Multi-word names are CONCATENATED (e.g., JOSEPHRAGOWSKI)
  */
 
 import fs from 'fs/promises';
@@ -46,79 +55,67 @@ export interface ChunkingResult {
 /**
  * Extract voice segments from tagged text
  * 
- * Supports BOTH formats:
- * 1. Old format: [VOICE=SPEAKER]...[/VOICE]
- * 2. New hybrid format: [VOICE=SPEAKER]\ntext\n[VOICE=NEXT]
+ * Parses the official Gemini TTS multi-speaker format:
+ *   SPEAKER: text content
  * 
- * @param text - Tagged text with voice markers
+ * Each line starting with "SPEAKER: " is a new voice segment.
+ * Speaker names are ALL CAPS alphanumeric only.
+ * 
+ * @param text - Tagged text with "SPEAKER: text" format
  * @returns Array of voice segments
  */
 export function extractVoiceSegments(text: string): VoiceSegment[] {
   const segments: VoiceSegment[] = [];
   
-  // First try OLD format with closing tags: [VOICE=X]...[/VOICE]
-  const oldFormatRegex = /\[VOICE=([^\]]+)\]([\s\S]*?)\[\/VOICE\]/g;
-  let match;
-  while ((match = oldFormatRegex.exec(text)) !== null) {
-    segments.push({
-      speaker: match[1].trim(),
-      text: match[2].trim(),
-      startIndex: match.index,
-      endIndex: match.index + match[0].length
-    });
-  }
+  // Pattern: Line starts with ALLCAPS speaker name followed by colon and space
+  // Speaker names: only A-Z and 0-9, no spaces/underscores/diacritics
+  const speakerLinePattern = /^([A-Z][A-Z0-9]*): (.+)$/;
   
-  // If we found old-format segments, return them
-  if (segments.length > 0) {
-    return segments;
-  }
-  
-  // Otherwise, parse NEW hybrid format: [VOICE=SPEAKER:STYLE?]\ntext\n[VOICE=NEXT]
   const lines = text.split('\n');
   let currentSpeaker: string | null = null;
   let currentText: string[] = [];
   let startIndex = 0;
+  let currentLineStart = 0;
   
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const voiceTagMatch = line.match(/^\[VOICE=([^\]]+)\]$/);
+    const speakerMatch = line.match(speakerLinePattern);
     
-    if (voiceTagMatch) {
-      // Save previous segment
+    if (speakerMatch) {
+      // Save previous segment if exists
       if (currentSpeaker && currentText.length > 0) {
-        const segmentText = currentText.join('\n').trim();
+        const segmentText = currentText.join(' ').trim();
         if (segmentText) {
           segments.push({
             speaker: currentSpeaker,
             text: segmentText,
             startIndex,
-            endIndex: startIndex + segmentText.length
+            endIndex: currentLineStart
           });
         }
       }
       
-      // Start new segment
-      // Extract speaker (may include style like "JOHN:WHISPER")
-      const speakerTag = voiceTagMatch[1].trim();
-      // Remove style suffix if present (e.g., "JOHN:WHISPER" → "JOHN")
-      currentSpeaker = speakerTag.split(':')[0];
-      currentText = [];
-      startIndex = text.indexOf(line) + line.length;
-    } else if (currentSpeaker) {
-      // Add line to current segment
-      currentText.push(line);
+      // Start new segment with speaker from this line
+      currentSpeaker = speakerMatch[1];
+      currentText = [speakerMatch[2]]; // Text after "SPEAKER: "
+      startIndex = currentLineStart;
+    } else if (currentSpeaker && line.trim()) {
+      // Continuation line - append to current segment
+      currentText.push(line.trim());
     }
+    
+    currentLineStart += line.length + 1; // +1 for newline
   }
   
   // Save final segment
   if (currentSpeaker && currentText.length > 0) {
-    const segmentText = currentText.join('\n').trim();
+    const segmentText = currentText.join(' ').trim();
     if (segmentText) {
       segments.push({
         speaker: currentSpeaker,
         text: segmentText,
         startIndex,
-        endIndex: startIndex + segmentText.length
+        endIndex: currentLineStart
       });
     }
   }
@@ -141,13 +138,21 @@ function estimateDuration(text: string): number {
 }
 
 /**
- * Remove voice tags from text
+ * Remove speaker labels from text to get plain content
  * 
- * @param text - Text with voice tags
- * @returns Plain text without tags
+ * @param text - Text with "SPEAKER: text" format
+ * @returns Plain text without speaker labels
  */
 export function removeVoiceTags(text: string): string {
-  return text.replace(/\[VOICE=.*?\]|\[\/VOICE\]/g, '').trim();
+  // Remove "SPEAKER: " prefix from each line (ALLCAPS followed by colon+space)
+  return text
+    .split('\n')
+    .map(line => {
+      const match = line.match(/^[A-Z][A-Z0-9]*: (.+)$/);
+      return match ? match[1] : line;
+    })
+    .join('\n')
+    .trim();
 }
 
 /**
@@ -223,15 +228,15 @@ export function chunkTaggedText(
 /**
  * Build chunk text from voice segments
  * 
- * Reconstructs tagged text with proper formatting
+ * Reconstructs text in official Gemini TTS format: "SPEAKER: text"
  * 
  * @param segments - Voice segments to include
- * @returns Formatted chunk text with tags
+ * @returns Formatted chunk text for TTS API
  */
 function buildChunkFromSegments(segments: VoiceSegment[]): string {
   return segments
-    .map(seg => `[VOICE=${seg.speaker}]\n${seg.text}\n[/VOICE]`)
-    .join('\n\n');
+    .map(seg => `${seg.speaker}: ${seg.text}`)
+    .join('\n');
 }
 
 /**

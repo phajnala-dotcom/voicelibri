@@ -48,8 +48,7 @@ const DEFAULT_CONFIG: TwoSpeakerChunkConfig = {
 /**
  * Format voice segments into TTS-compatible text
  * 
- * Converts [VOICE=SPEAKER] format to "Speaker: text" format
- * that Gemini TTS multiSpeakerVoiceConfig expects.
+ * Outputs SPEAKER: text format that Gemini TTS multiSpeakerVoiceConfig expects.
  * 
  * @param segments - Voice segments to format (only speaker and text required)
  * @returns Formatted text for TTS API
@@ -164,7 +163,7 @@ function splitSegmentAtSentence(
  * 3. Respect byte limits and don't break mid-sentence
  * 4. Format output for Gemini TTS multiSpeakerVoiceConfig
  * 
- * @param taggedText - Text with [VOICE=SPEAKER] tags
+ * @param taggedText - Text with SPEAKER: format tags
  * @param config - Chunking configuration
  * @param chapterIndex - Optional chapter index for metadata
  * @returns Array of two-speaker chunks
@@ -178,7 +177,7 @@ export function chunkForTwoSpeakers(
   
   if (allSegments.length === 0) {
     // No voice tags, treat entire text as NARRATOR
-    const plainText = taggedText.replace(/\[VOICE=.*?\]|\[\/VOICE\]/g, '').trim();
+    const plainText = taggedText.replace(/^[A-Z][A-Z0-9]*:\s*/gm, '').trim();
     if (!plainText) {
       return [];
     }
@@ -306,7 +305,7 @@ export function chunkForTwoSpeakers(
 /**
  * Chunk a full book (multiple chapters) for two-speaker TTS
  * 
- * @param chapters - Array of chapter texts with [VOICE=] tags
+ * @param chapters - Array of chapter texts with SPEAKER: format tags
  * @param config - Chunking configuration
  * @returns Array of all chunks across all chapters with global indices
  */

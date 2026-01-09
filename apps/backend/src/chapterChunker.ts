@@ -181,13 +181,13 @@ export function validateVoiceSegment(segment: VoiceSegment): void {
 }
 
 /**
- * Build chunk text from voice segments (preserves voice tags)
+ * Build chunk text from voice segments in Gemini TTS format
  * 
  * @param segments - Array of voice segments
- * @returns Chunk text with voice tags
+ * @returns Chunk text in "SPEAKER: text" format
  */
 function buildChunkFromSegments(segments: VoiceSegment[]): string {
-  return segments.map(seg => `[VOICE=${seg.speaker}]\n${seg.text}\n[/VOICE]`).join('\n');
+  return segments.map(seg => `${seg.speaker}: ${seg.text}`).join('\n');
 }
 
 // ========================================
@@ -257,9 +257,9 @@ export function chunkChapter(
  * Algorithm:
  * 1. Use twoSpeakerChunker to ensure max 2 speakers per chunk (Gemini TTS limit)
  * 2. Each chunk stays within byte limits
- * 3. Chunks are formatted with [VOICE=X] tags for TTS processing
+ * 3. Chunks are formatted in SPEAKER: format for TTS processing
  * 
- * @param chapter - Chapter with voice tags
+ * @param chapter - Chapter with SPEAKER: format tags
  * @returns Array of chunk texts with voice tags preserved
  */
 export function chunkDramatizedChapter(chapter: Chapter): string[] {
@@ -277,10 +277,10 @@ export function chunkDramatizedChapter(chapter: Chapter): string[] {
     minBytes: 0,  // Allow small chunks when 3rd speaker forces a split
   }, chapter.index);
   
-  // Convert TwoSpeakerChunk format back to tagged text format
+  // Convert TwoSpeakerChunk format to Gemini TTS format
   const chunks: string[] = twoSpeakerChunks.map(chunk => {
-    // Rebuild [VOICE=X] tagged text from segments
-    return chunk.segments.map(seg => `[VOICE=${seg.speaker}]\n${seg.text}\n[/VOICE]`).join('\n');
+    // Build "SPEAKER: text" format for TTS API
+    return chunk.segments.map(seg => `${seg.speaker}: ${seg.text}`).join('\n');
   });
   
   console.log(`  Chapter ${chapter.index} (dramatized) chunked: ${chunks.length} chunks from ${rawSegments.length} voice segments`);
