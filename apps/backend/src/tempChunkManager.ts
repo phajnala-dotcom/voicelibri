@@ -485,6 +485,23 @@ export async function generateAndSaveTempChunk(
       const combinedText = voiceSegments.map(s => s.text).join(' ');
       audioBuffer = await synthesizeText(combinedText, voice);
       
+    } else {
+      // BYPASS TEST: Force single-speaker TTS for all segments (PART 1: pre-tagged chunks)
+      console.log(`  🧪 BYPASS: ${uniqueSpeakers.length} speakers - using single-speaker TTS for each segment`);
+      const audioBuffers: Buffer[] = [];
+      
+      for (const seg of voiceSegments) {
+        const voice = lookupVoice(seg.speaker, voiceMap, defaultVoice);
+        const segAudio = await synthesizeText(seg.text, voice);
+        audioBuffers.push(segAudio);
+      }
+      
+      // Concatenate all audio buffers
+      audioBuffer = concatenateWavBuffers(audioBuffers);
+      console.log(`  ✓ Generated and concatenated ${audioBuffers.length} single-speaker segments`);
+    }
+    
+    /* ORIGINAL MULTI-SPEAKER CODE (bypassed for testing):
     } else if (uniqueSpeakers.length > 2) {
       // More than 2 speakers - use twoSpeakerChunker to split and generate multiple audio pieces
       console.log(`  📦 ${uniqueSpeakers.length} speakers in pre-tagged chunk - using twoSpeakerChunker`);
@@ -547,6 +564,7 @@ export async function generateAndSaveTempChunk(
       );
       audioBuffer = await synthesizeMultiSpeaker(formattedText, speakerConfigs);
     }
+    */
     
     console.log(`  ✓ Generated ${audioBuffer.length} bytes`);
     
@@ -567,11 +585,28 @@ export async function generateAndSaveTempChunk(
         const uniqueSpeakers = [...new Set(dramatizedSegments.map(s => s.speaker))];
         console.log(`    ✓ Dramatized: ${dramatizedSegments.length} segments, ${uniqueSpeakers.length} speakers`);
         
+        // BYPASS TEST: Force single-speaker TTS for all segments to eliminate voice bleed
+        console.log(`    🧪 BYPASS: Using single-speaker TTS for each segment (testing voice consistency)`);
+        const audioBuffers: Buffer[] = [];
+        
+        for (const seg of dramatizedSegments) {
+          const voice = lookupVoice(seg.speaker, voiceMap, defaultVoice);
+          const segAudio = await synthesizeText(seg.text, voice);
+          audioBuffers.push(segAudio);
+        }
+        
+        // Concatenate all audio buffers
+        audioBuffer = concatenateWavBuffers(audioBuffers);
+        console.log(`    ✓ Generated and concatenated ${audioBuffers.length} single-speaker segments`);
+        
+        /* ORIGINAL MULTI-SPEAKER CODE (bypassed for testing):
         if (uniqueSpeakers.length === 1) {
           // Single speaker after dramatization
           const speaker = uniqueSpeakers[0];
           const voice = lookupVoice(speaker, voiceMap, defaultVoice);
-          const combinedText = dramatizedSegments.map(s => s.text).join(' ');
+          const combinedText = dramatizedSegments
+            .map(s => s.text)
+            .join(' ');
           audioBuffer = await synthesizeText(combinedText, voice);
           
         } else if (uniqueSpeakers.length === 2) {
@@ -617,6 +652,7 @@ export async function generateAndSaveTempChunk(
           audioBuffer = concatenateWavBuffers(audioBuffers);
           console.log(`       ✓ Generated and concatenated ${audioBuffers.length} audio pieces`);
         }
+        */
       } else {
         // Dramatization didn't produce voice tags - use single voice
         console.log(`    📝 No dialogue found, using narrator voice`);
@@ -1297,6 +1333,21 @@ export async function generateSubChunk(
       // Generate TTS audio based on speaker count
       let audioBuffer: Buffer;
       
+      // BYPASS TEST: Force single-speaker TTS for all segments (PART 3: sub-chunk generation)
+      console.log(`  🧪 BYPASS: ${subChunk.speakers.length} speakers - generating ${subChunk.segments.length} single-speaker segments`);
+      const audioBuffers: Buffer[] = [];
+      
+      for (const seg of subChunk.segments) {
+        const voice = lookupVoice(seg.speaker, voiceMap, defaultVoice);
+        const segAudio = await synthesizeText(seg.text, voice);
+        audioBuffers.push(segAudio);
+      }
+      
+      // Concatenate all audio buffers
+      audioBuffer = concatenateWavBuffers(audioBuffers);
+      console.log(`  ✅ Concatenated ${audioBuffers.length} single-speaker segments`);
+      
+      /* ORIGINAL SUB-CHUNK MULTI-SPEAKER CODE (bypassed for testing):
       if (subChunk.speakers.length === 1) {
         // Single speaker - use single-voice synthesis
         const speaker = subChunk.speakers[0];
@@ -1316,6 +1367,7 @@ export async function generateSubChunk(
         console.log(`  🎭 Multi-speaker: ${speakerConfigs.map(s => `${s.speaker}→${s.voiceName}`).join(', ')}`);
         audioBuffer = await synthesizeMultiSpeaker(subChunk.formattedText, speakerConfigs);
       }
+      */
     
       // Save to temp file
       const tempDir = getTempFolder(bookTitle);

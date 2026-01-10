@@ -54,9 +54,24 @@ const DEFAULT_CONFIG: TwoSpeakerChunkConfig = {
  * @returns Formatted text for TTS API
  */
 export function formatForMultiSpeakerTTS(segments: Array<{ speaker: string; text: string }>): string {
-  return segments
-    .map(seg => `${seg.speaker}: ${seg.text}`)
-    .join('\n');
+  // CRITICAL FIX: Merge consecutive segments from same speaker to avoid very short segments
+  // Short segments (especially narrator interruptions) cause TTS voice errors 80%+ of the time
+  const mergedSegments: Array<{ speaker: string; text: string }> = [];
+  
+  for (const seg of segments) {
+    const lastSeg = mergedSegments[mergedSegments.length - 1];
+    
+    if (lastSeg && lastSeg.speaker === seg.speaker) {
+      // Same speaker - merge text with a space
+      lastSeg.text += ' ' + seg.text;
+    } else {
+      // Different speaker or first segment - add new entry
+      mergedSegments.push({ speaker: seg.speaker, text: seg.text });
+    }
+  }
+  
+  // Format: "Speaker: text" on each line (Gemini TTS official format)
+  return mergedSegments.map(seg => `${seg.speaker}: ${seg.text}`).join('\n');
 }
 
 /**

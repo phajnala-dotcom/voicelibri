@@ -397,59 +397,80 @@ ${cleanedText.substring(0, 250000)}`;
     
     const prompt = `You are tagging text for Gemini TTS multi-speaker synthesis. Format: SPEAKER: text on same line.
 
-SPEAKER ALIASES (use EXACTLY as shown):
-${characterAliases}
+  SPEAKER ALIASES (use EXACTLY as shown):
+  ${characterAliases}
 
-CRITICAL RULES FOR DIALOGUE VS NARRATOR:
-1. CHARACTER voice = ONLY the quoted speech itself (text inside „..." or "...")
-2. NARRATOR voice = EVERYTHING ELSE including:
-   - Scene descriptions and actions
-   - Dialogue ATTRIBUTION phrases like "zvolal", "řekla", "said John", "she whispered"
-   - Text AFTER the quote that describes how it was said (e.g., "zatímco si prohlížel...")
-   - Character descriptions and reactions
-3. When a sentence has dialogue AND attribution, SPLIT IT properly.
+  CRITICAL RULES - DIALOGUE VS NARRATOR:
+  1. CHARACTER voice = ONLY the quoted speech itself (text inside „..." or "..." quotes)
+  2. NARRATOR voice = EVERYTHING ELSE including:
+     - Scene descriptions and actions
+     - Dialogue ATTRIBUTION phrases ("said", "began", "whispered", "replied", "zvolal", "řekla")
+     - Text AFTER the quote describing how it was said
+     - Parenthetical or descriptive text before/after a quote
+  3. ALWAYS SPLIT when a sentence has dialogue AND attribution - NEVER combine them!
+  4. NEVER repeat quoted text in NARRATOR lines. The quote must appear only once, as the character.
+  5. Consecutive narration sentences should be grouped into a single NARRATOR line unless interrupted by dialogue.
 
-SPEAKER ALIAS FORMAT:
-- ALL CAPS, alphanumeric only (A-Z, 0-9), NO spaces/underscores/diacritics
-- Multi-word names concatenated: "Joseph Ragowski" → JOSEPHRAGOWSKI
-- Use aliases from list above EXACTLY
+  SPEAKER ALIAS FORMAT:
+  - ALL CAPS, alphanumeric only (A-Z, 0-9)
+  - NO spaces, underscores, or diacritics
+  - Use aliases from list above EXACTLY
 
-OUTPUT FORMAT (each line = SPEAKER: text):
-SPEAKER: text content on same line
+  OUTPUT: Each line = SPEAKER: text (one speaker per line)
 
-DETAILED EXAMPLES:
+  EXAMPLES - English:
 
-EXAMPLE 1 - Attribution AFTER quote must be NARRATOR:
-INPUT: „Jen se podívejte," zvolal, zatímco si prohlížel mágů.
-OUTPUT:
-JOSEPHRAGOWSKI: „Jen se podívejte,"
-NARRATOR: zvolal, zatímco si prohlížel mágů.
+  EXAMPLE 1 - Quote with attribution and parenthesis:
+  INPUT: Mrs. Dursley had a perfectly nice, ordinary day. Over dinner, she told her husband about the neighbour's wife's problems with her daughter, and about Dudley learning a new word ("I won't!").
+  CORRECT OUTPUT:
+  NARRATOR: Mrs. Dursley had a perfectly nice, ordinary day. Over dinner, she told her husband about the neighbour's wife's problems with her daughter, and about Dudley learning a new word (
+  DUDLEY: "I won't!"
+  NARRATOR: ).
 
-EXAMPLE 2 - Multiple quotes by same character:
-INPUT: „První věta," řekl John. „Druhá věta!"
-OUTPUT:
-JOHN: „První věta,"
-NARRATOR: řekl John.
-JOHN: „Druhá věta!"
+  EXAMPLE 2 - Quote with attribution MUST be split:
+  INPUT: "Well," began the second presenter, "I don't know about that."
+  CORRECT OUTPUT:
+  THESECONDPRESENTER: "Well,"
+  NARRATOR: began the second presenter,
+  THESECONDPRESENTER: "I don't know about that."
 
-EXAMPLE 3 - Continuous narration:
-INPUT: Joseph pozvedl hlas. „Podívejte se," zvolal. Pak se rozhlédl.
-OUTPUT:
-NARRATOR: Joseph pozvedl hlas.
-JOSEPH: „Podívejte se,"
-NARRATOR: zvolal. Pak se rozhlédl.
+  EXAMPLE 3 - Attribution before quote:
+  INPUT: John said, "Hello there!"
+  CORRECT OUTPUT:
+  NARRATOR: John said,
+  JOHN: "Hello there!"
 
-EXAMPLE 4 - Complete Czech paragraph:
-INPUT: Joseph Ragowski pozvedl hlas. „Jen se na sebe podívejte," zvolal, zatímco si zkoumavě prohlížel pětici mágů. „Všichni vypadáte jako mátohy!"
-OUTPUT:
-NARRATOR: Joseph Ragowski pozvedl hlas.
-JOSEPHRAGOWSKI: „Jen se na sebe podívejte,"
-NARRATOR: zvolal, zatímco si zkoumavě prohlížel pětici mágů.
-JOSEPHRAGOWSKI: „Všichni vypadáte jako mátohy!"
+  EXAMPLE 4 - Description with speaker name:
+  INPUT: "Look at this," the presenter smiled.
+  CORRECT OUTPUT:
+  THEPRESENTER: "Look at this,"
+  NARRATOR: the presenter smiled.
 
-Now tag this chapter text. Output ONLY lines in format SPEAKER: text. Remember: ONLY quoted text gets character voice, ALL attribution and description gets NARRATOR:
+  EXAMPLE 5 - Grouping consecutive narration:
+  INPUT: Mr. Dursley sat frozen in his armchair. Shooting stars all over Britain? Owls flying by day? Mysterious people in cloaks all over town? And they were whispering, whispering about the Potters...
+  Mrs. Dursley came into the living room with two cups of tea. There was nothing for it. He would have to tell her.
+  He cleared his throat nervously.
+  CORRECT OUTPUT:
+  NARRATOR: Mr. Dursley sat frozen in his armchair. Shooting stars all over Britain? Owls flying by day? Mysterious people in cloaks all over town? And they were whispering, whispering about the Potters... Mrs. Dursley came into the living room with two cups of tea. There was nothing for it. He would have to tell her. He cleared his throat nervously.
 
-${chapterText}`;
+  EXAMPLES - Czech:
+
+  EXAMPLE 6 - Attribution AFTER quote:
+  INPUT: „Jen se podívejte," zvolal, zatímco si prohlížel mágů.
+  OUTPUT:
+  JOSEPHRAGOWSKI: „Jen se podívejte,"
+  NARRATOR: zvolal, zatímco si prohlížel mágů.
+
+  EXAMPLE 7 - Multiple quotes:
+  INPUT: „První věta," řekl John. „Druhá věta!"
+  OUTPUT:
+  JOHN: „První věta,"
+  NARRATOR: řekl John.
+  JOHN: „Druhá věta!"
+
+  Now tag this chapter. Output ONLY SPEAKER: text lines. CRITICAL: Split dialogue from attribution - character voice gets ONLY quoted text, NARRATOR gets attribution. Never repeat quoted text in NARRATOR lines. Group consecutive narration sentences into a single NARRATOR line unless interrupted by dialogue.
+
+  ${chapterText}`;
     
     try {
       const taggedText = await this.callGemini(prompt);

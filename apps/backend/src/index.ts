@@ -761,7 +761,12 @@ async function startBackgroundDramatization(
           await fs.promises.mkdir(bookFolder, { recursive: true });
           const debugPath = path.join(bookFolder, `chapter_${chapterNum}_dramatized.txt`);
           try {
-            await fs.promises.writeFile(debugPath, result.taggedText, 'utf8');
+            // Apply same formatting as TTS (merge same-speaker segments + blank lines)
+            const { extractVoiceSegments } = await import('./dramatizedChunkerSimple.js');
+            const { formatForMultiSpeakerTTS } = await import('./twoSpeakerChunker.js');
+            const segments = extractVoiceSegments(result.taggedText);
+            const formattedText = formatForMultiSpeakerTTS(segments);
+            await fs.promises.writeFile(debugPath, formattedText, 'utf8');
             console.log(`   📝 Debug: Saved dramatized text to ${debugPath}`);
           } catch (e) {
             console.error(`   ⚠️ Failed to save dramatized text:`, e);
