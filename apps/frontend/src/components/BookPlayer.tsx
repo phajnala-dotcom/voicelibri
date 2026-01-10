@@ -64,47 +64,49 @@ const LANGUAGE_OPTIONS = [
 // ========================================
 // Voice Configuration - All 30 Gemini TTS Voices
 // Source: https://docs.cloud.google.com/text-to-speech/docs/gemini-tts
+// Frontend displays user-friendly aliases, backend uses Gemini TTS names
 // ========================================
 
 interface VoiceConfig {
   gender: 'mužský' | 'ženský';
-  voiceName: string;       // Star name of the voice
+  alias: string;           // User-friendly name shown in UI
+  geminiName: string;      // Actual Gemini TTS voice name (star name)
 }
 
 const VOICE_MATRIX: VoiceConfig[] = [
-  // Mužské hlasy (16)
-  { gender: 'mužský', voiceName: 'Achird' },
-  { gender: 'mužský', voiceName: 'Algenib' },
-  { gender: 'mužský', voiceName: 'Algieba' },
-  { gender: 'mužský', voiceName: 'Alnilam' },
-  { gender: 'mužský', voiceName: 'Charon' },
-  { gender: 'mužský', voiceName: 'Enceladus' },
-  { gender: 'mužský', voiceName: 'Fenrir' },
-  { gender: 'mužský', voiceName: 'Iapetus' },
-  { gender: 'mužský', voiceName: 'Orus' },
-  { gender: 'mužský', voiceName: 'Puck' },
-  { gender: 'mužský', voiceName: 'Rasalgethi' },
-  { gender: 'mužský', voiceName: 'Sadachbia' },
-  { gender: 'mužský', voiceName: 'Sadaltager' },
-  { gender: 'mužský', voiceName: 'Schedar' },
-  { gender: 'mužský', voiceName: 'Umbriel' },
-  { gender: 'mužský', voiceName: 'Zubenelgenubi' },
+  // Mužské hlasy (16) - Alphabetically sorted by alias
+  { gender: 'mužský', alias: 'Albert', geminiName: 'Algieba' },
+  { gender: 'mužský', alias: 'Alex', geminiName: 'Algenib' },
+  { gender: 'mužský', alias: 'Arthur', geminiName: 'Achird' },
+  { gender: 'mužský', alias: 'Charles', geminiName: 'Charon' },
+  { gender: 'mužský', alias: 'Eric', geminiName: 'Enceladus' },
+  { gender: 'mužský', alias: 'Fero', geminiName: 'Fenrir' },
+  { gender: 'mužský', alias: 'Ian', geminiName: 'Iapetus' },
+  { gender: 'mužský', alias: 'Milan', geminiName: 'Alnilam' },
+  { gender: 'mužský', alias: 'Oliver', geminiName: 'Orus' },
+  { gender: 'mužský', alias: 'Peter', geminiName: 'Puck' },
+  { gender: 'mužský', alias: 'Ross', geminiName: 'Rasalgethi' },
+  { gender: 'mužský', alias: 'Scott', geminiName: 'Schedar' },
+  { gender: 'mužský', alias: 'Simon', geminiName: 'Sadaltager' },
+  { gender: 'mužský', alias: 'Stan', geminiName: 'Sadachbia' },
+  { gender: 'mužský', alias: 'Umberto', geminiName: 'Umbriel' },
+  { gender: 'mužský', alias: 'Zachary', geminiName: 'Zubenelgenubi' },
   
-  // Ženské hlasy (14)
-  { gender: 'ženský', voiceName: 'Achernar' },
-  { gender: 'ženský', voiceName: 'Aoede' },
-  { gender: 'ženský', voiceName: 'Autonoe' },
-  { gender: 'ženský', voiceName: 'Callirrhoe' },
-  { gender: 'ženský', voiceName: 'Despina' },
-  { gender: 'ženský', voiceName: 'Erinome' },
-  { gender: 'ženský', voiceName: 'Gacrux' },
-  { gender: 'ženský', voiceName: 'Kore' },
-  { gender: 'ženský', voiceName: 'Laomedeia' },
-  { gender: 'ženský', voiceName: 'Leda' },
-  { gender: 'ženský', voiceName: 'Pulcherrima' },
-  { gender: 'ženský', voiceName: 'Sulafat' },
-  { gender: 'ženský', voiceName: 'Vindemiatrix' },
-  { gender: 'ženský', voiceName: 'Zephyr' },
+  // Ženské hlasy (14) - Alphabetically sorted by alias
+  { gender: 'ženský', alias: 'Ada', geminiName: 'Aoede' },
+  { gender: 'ženský', alias: 'Ash', geminiName: 'Achernar' },
+  { gender: 'ženský', alias: 'Callie', geminiName: 'Callirrhoe' },
+  { gender: 'ženský', alias: 'Cora', geminiName: 'Kore' },
+  { gender: 'ženský', alias: 'Desi', geminiName: 'Despina' },
+  { gender: 'ženský', alias: 'Erin', geminiName: 'Erinome' },
+  { gender: 'ženský', alias: 'Grace', geminiName: 'Gacrux' },
+  { gender: 'ženský', alias: 'Laura', geminiName: 'Laomedeia' },
+  { gender: 'ženský', alias: 'Lea', geminiName: 'Leda' },
+  { gender: 'ženský', alias: 'Paula', geminiName: 'Pulcherrima' },
+  { gender: 'ženský', alias: 'Sue', geminiName: 'Sulafat' },
+  { gender: 'ženský', alias: 'Toni', geminiName: 'Autonoe' },
+  { gender: 'ženský', alias: 'Vinnie', geminiName: 'Vindemiatrix' },
+  { gender: 'ženský', alias: 'Zara', geminiName: 'Zephyr' },
 ];
 
 // Helper functions for filtering dropdown options
@@ -112,19 +114,25 @@ const getUniqueGenders = (): string[] => {
   return Array.from(new Set(VOICE_MATRIX.map(v => v.gender))).sort();
 };
 
-const getUniqueVoiceNames = (): string[] => {
-  return Array.from(new Set(VOICE_MATRIX.map(v => v.voiceName))).sort();
+const getUniqueVoiceAliases = (): string[] => {
+  return Array.from(new Set(VOICE_MATRIX.map(v => v.alias))).sort();
 };
 
-// Filter voice names based on selected gender
-const getFilteredVoiceNames = (gender: string | null): string[] => {
+// Filter voice aliases based on selected gender
+const getFilteredVoiceAliases = (gender: string | null): string[] => {
   if (!gender || gender === '') {
-    return getUniqueVoiceNames();
+    return getUniqueVoiceAliases();
   }
   return VOICE_MATRIX
     .filter(v => v.gender === gender)
-    .map(v => v.voiceName)
+    .map(v => v.alias)
     .sort();
+};
+
+// Convert frontend alias to backend Gemini TTS name
+const aliasToGeminiName = (alias: string): string => {
+  const voice = VOICE_MATRIX.find(v => v.alias === alias);
+  return voice?.geminiName || alias; // Fallback to alias if not found
 };
 
 // ========================================
@@ -241,8 +249,8 @@ const BookPlayer: React.FC = () => {
   const [selectedGender, setSelectedGender] = useState<string | null>(() => {
     return localStorage.getItem('preferredNarratorGender') || 'mužský';
   });
-  const [selectedVoiceName, setSelectedVoiceName] = useState<string>(() => {
-    return localStorage.getItem('preferredNarratorVoice') || 'Achird'; // Default: Achird (first male voice)
+  const [selectedVoiceAlias, setSelectedVoiceAlias] = useState<string>(() => {
+    return localStorage.getItem('preferredNarratorVoice') || 'Arthur'; // Default: Arthur (Achird - first male voice)
   });
 
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -254,7 +262,7 @@ const BookPlayer: React.FC = () => {
     const savedVoice = localStorage.getItem('preferredNarratorVoice');
     const savedGender = localStorage.getItem('preferredNarratorGender');
     if (savedVoice) {
-      setSelectedVoiceName(savedVoice);
+      setSelectedVoiceAlias(savedVoice);
     }
     if (savedGender) {
       setSelectedGender(savedGender);
@@ -414,7 +422,7 @@ interface AudioFetchResult {
       
       const requestBody: Record<string, unknown> = {
         chunkIndex, // Legacy fallback
-        voiceName: selectedVoiceName || 'Algieba',
+        voiceName: aliasToGeminiName(selectedVoiceAlias) || 'Algieba', // Convert alias to Gemini TTS name
         bookFile: bookFileOverride || currentBookFile,
       };
       
@@ -481,7 +489,7 @@ interface AudioFetchResult {
         
         const errorText = await response.text().catch(() => 'Unknown error');
         console.error(`❌ Fetch failed for chunk ${chunkIndex}:`, response.status, errorText);
-        console.error(`   Voice: ${selectedVoiceName}`);
+        console.error(`   Voice: ${selectedVoiceAlias} (${aliasToGeminiName(selectedVoiceAlias)})`);
         console.error(`   Book file: ${bookFileOverride || currentBookFile}`);
         throw new Error(`Failed to fetch chunk ${chunkIndex}: ${response.statusText} - ${errorText}`);
       }
@@ -923,21 +931,21 @@ interface AudioFetchResult {
     if (gender && gender !== '') {
       const matchingVoice = VOICE_MATRIX.find(v => v.gender === gender);
       if (matchingVoice) {
-        setSelectedVoiceName(matchingVoice.voiceName);
-        console.log(`🎙️ Voice changed to: ${matchingVoice.voiceName} (${matchingVoice.gender})`);
+        setSelectedVoiceAlias(matchingVoice.alias);
+        console.log(`🎙️ Voice changed to: ${matchingVoice.alias} (${matchingVoice.geminiName}, ${matchingVoice.gender})`);
       }
     }
   };
 
-  const handleVoiceNameChange = (voiceName: string) => {
-    setSelectedVoiceName(voiceName);
+  const handleVoiceAliasChange = (alias: string) => {
+    setSelectedVoiceAlias(alias);
     // Find the voice and set gender
-    const matchingVoice = VOICE_MATRIX.find(v => v.voiceName === voiceName);
+    const matchingVoice = VOICE_MATRIX.find(v => v.alias === alias);
     if (matchingVoice) {
       setSelectedGender(matchingVoice.gender);
-      console.log(`🎙️ Voice changed to: ${matchingVoice.voiceName} (${matchingVoice.gender})`);
+      console.log(`🎙️ Voice changed to: ${matchingVoice.alias} (${matchingVoice.geminiName}, ${matchingVoice.gender})`);
       // Save to localStorage for persistence
-      localStorage.setItem('preferredNarratorVoice', voiceName);
+      localStorage.setItem('preferredNarratorVoice', alias);
       localStorage.setItem('preferredNarratorGender', matchingVoice.gender);
     }
   };
@@ -1494,14 +1502,14 @@ interface AudioFetchResult {
 
           {/* Voice Name (filtered by gender) */}
           <select
-            value={selectedVoiceName}
-            onChange={e => handleVoiceNameChange(e.target.value)}
+            value={selectedVoiceAlias}
+            onChange={e => handleVoiceAliasChange(e.target.value)}
             style={styles.voiceSelectNarrow}
             title="Meno hlasu"
           >
-            {getFilteredVoiceNames(selectedGender).map(voiceName => (
-              <option key={voiceName} value={voiceName}>
-                {voiceName}
+            {getFilteredVoiceAliases(selectedGender).map(alias => (
+              <option key={alias} value={alias}>
+                {alias}
               </option>
             ))}
           </select>

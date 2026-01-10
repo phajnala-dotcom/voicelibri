@@ -6,59 +6,87 @@
  */
 
 export interface GeminiVoice {
-  name: string;
+  name: string;              // Original Gemini TTS name (star name)
+  alias: string;             // VoiceLibri frontend-friendly alias
   gender: 'male' | 'female';
   pitch: 'low' | 'medium' | 'high';
-  characteristic: string; // One-word description
+  characteristic: string;    // One-word description
 }
 
 /**
- * All 30 Gemini prebuilt voices
+ * All 30 Gemini prebuilt voices with VoiceLibri frontend aliases
  * 
  * Source: Google Gemini TTS Documentation
  * https://cloud.google.com/text-to-speech/docs/gemini-tts
  */
 export const GEMINI_VOICES: GeminiVoice[] = [
   // MALE VOICES (16 total)
-  { name: 'Achird', gender: 'male', pitch: 'medium', characteristic: 'neutral' },
-  { name: 'Algenib', gender: 'male', pitch: 'medium', characteristic: 'clear' },
-  { name: 'Algieba', gender: 'male', pitch: 'low', characteristic: 'deep' },
-  { name: 'Alnilam', gender: 'male', pitch: 'low', characteristic: 'authoritative' },
-  { name: 'Charon', gender: 'male', pitch: 'medium', characteristic: 'friendly' },
-  { name: 'Enceladus', gender: 'male', pitch: 'medium', characteristic: 'energetic' },
-  { name: 'Fenrir', gender: 'male', pitch: 'medium', characteristic: 'dynamic' },
-  { name: 'Iapetus', gender: 'male', pitch: 'low', characteristic: 'calm' },
-  { name: 'Orus', gender: 'male', pitch: 'medium', characteristic: 'smooth' },
-  { name: 'Puck', gender: 'male', pitch: 'high', characteristic: 'youthful' },
-  { name: 'Rasalgethi', gender: 'male', pitch: 'low', characteristic: 'mature' },
-  { name: 'Sadachbia', gender: 'male', pitch: 'medium', characteristic: 'steady' },
-  { name: 'Sadaltager', gender: 'male', pitch: 'medium', characteristic: 'warm' },
-  { name: 'Schedar', gender: 'male', pitch: 'low', characteristic: 'serious' },
-  { name: 'Umbriel', gender: 'male', pitch: 'medium', characteristic: 'gentle' },
-  { name: 'Zubenelgenubi', gender: 'male', pitch: 'medium', characteristic: 'balanced' },
+  { name: 'Achird', alias: 'Arthur', gender: 'male', pitch: 'medium', characteristic: 'neutral' },
+  { name: 'Algenib', alias: 'Alex', gender: 'male', pitch: 'medium', characteristic: 'clear' },
+  { name: 'Algieba', alias: 'Albert', gender: 'male', pitch: 'low', characteristic: 'deep' },
+  { name: 'Alnilam', alias: 'Milan', gender: 'male', pitch: 'low', characteristic: 'authoritative' },
+  { name: 'Charon', alias: 'Charles', gender: 'male', pitch: 'medium', characteristic: 'friendly' },
+  { name: 'Enceladus', alias: 'Eric', gender: 'male', pitch: 'medium', characteristic: 'energetic' },
+  { name: 'Fenrir', alias: 'Fero', gender: 'male', pitch: 'medium', characteristic: 'dynamic' },
+  { name: 'Iapetus', alias: 'Ian', gender: 'male', pitch: 'low', characteristic: 'calm' },
+  { name: 'Orus', alias: 'Oliver', gender: 'male', pitch: 'medium', characteristic: 'smooth' },
+  { name: 'Puck', alias: 'Peter', gender: 'male', pitch: 'high', characteristic: 'youthful' },
+  { name: 'Rasalgethi', alias: 'Ross', gender: 'male', pitch: 'low', characteristic: 'mature' },
+  { name: 'Sadachbia', alias: 'Stan', gender: 'male', pitch: 'medium', characteristic: 'steady' },
+  { name: 'Sadaltager', alias: 'Simon', gender: 'male', pitch: 'medium', characteristic: 'warm' },
+  { name: 'Schedar', alias: 'Scott', gender: 'male', pitch: 'low', characteristic: 'serious' },
+  { name: 'Umbriel', alias: 'Umberto', gender: 'male', pitch: 'medium', characteristic: 'gentle' },
+  { name: 'Zubenelgenubi', alias: 'Zachary', gender: 'male', pitch: 'medium', characteristic: 'balanced' },
   
   // FEMALE VOICES (14 total)
-  { name: 'Achernar', gender: 'female', pitch: 'low', characteristic: 'professional' },
-  { name: 'Aoede', gender: 'female', pitch: 'high', characteristic: 'bright' },
-  { name: 'Autonoe', gender: 'female', pitch: 'medium', characteristic: 'elegant' },
-  { name: 'Callirrhoe', gender: 'female', pitch: 'medium', characteristic: 'refined' },
-  { name: 'Despina', gender: 'female', pitch: 'medium', characteristic: 'soft' },
-  { name: 'Erinome', gender: 'female', pitch: 'medium', characteristic: 'melodic' },
-  { name: 'Gacrux', gender: 'female', pitch: 'low', characteristic: 'strong' },
-  { name: 'Kore', gender: 'female', pitch: 'medium', characteristic: 'pleasant' },
-  { name: 'Laomedeia', gender: 'female', pitch: 'medium', characteristic: 'smooth' },
-  { name: 'Leda', gender: 'female', pitch: 'high', characteristic: 'playful' },
-  { name: 'Pulcherrima', gender: 'female', pitch: 'high', characteristic: 'cheerful' },
-  { name: 'Sulafat', gender: 'female', pitch: 'low', characteristic: 'confident' },
-  { name: 'Vindemiatrix', gender: 'female', pitch: 'medium', characteristic: 'crisp' },
-  { name: 'Zephyr', gender: 'female', pitch: 'high', characteristic: 'light' },
+  { name: 'Achernar', alias: 'Ash', gender: 'female', pitch: 'low', characteristic: 'professional' },
+  { name: 'Aoede', alias: 'Ada', gender: 'female', pitch: 'high', characteristic: 'bright' },
+  { name: 'Autonoe', alias: 'Toni', gender: 'female', pitch: 'medium', characteristic: 'elegant' },
+  { name: 'Callirrhoe', alias: 'Callie', gender: 'female', pitch: 'medium', characteristic: 'refined' },
+  { name: 'Despina', alias: 'Desi', gender: 'female', pitch: 'medium', characteristic: 'soft' },
+  { name: 'Erinome', alias: 'Erin', gender: 'female', pitch: 'medium', characteristic: 'melodic' },
+  { name: 'Gacrux', alias: 'Grace', gender: 'female', pitch: 'low', characteristic: 'strong' },
+  { name: 'Kore', alias: 'Cora', gender: 'female', pitch: 'medium', characteristic: 'pleasant' },
+  { name: 'Laomedeia', alias: 'Laura', gender: 'female', pitch: 'medium', characteristic: 'smooth' },
+  { name: 'Leda', alias: 'Lea', gender: 'female', pitch: 'high', characteristic: 'playful' },
+  { name: 'Pulcherrima', alias: 'Paula', gender: 'female', pitch: 'high', characteristic: 'cheerful' },
+  { name: 'Sulafat', alias: 'Sue', gender: 'female', pitch: 'low', characteristic: 'confident' },
+  { name: 'Vindemiatrix', alias: 'Vinnie', gender: 'female', pitch: 'medium', characteristic: 'crisp' },
+  { name: 'Zephyr', alias: 'Zara', gender: 'female', pitch: 'high', characteristic: 'light' },
 ];
 
 /**
- * Get voice by name
+ * Get voice by Gemini TTS name (star name)
  */
 export function getVoiceByName(name: string): GeminiVoice | undefined {
   return GEMINI_VOICES.find(v => v.name.toLowerCase() === name.toLowerCase());
+}
+
+/**
+ * Get voice by frontend alias
+ */
+export function getVoiceByAlias(alias: string): GeminiVoice | undefined {
+  return GEMINI_VOICES.find(v => v.alias.toLowerCase() === alias.toLowerCase());
+}
+
+/**
+ * Convert frontend alias to Gemini TTS name
+ * @param alias - Frontend alias (e.g., 'Arthur', 'Ash')
+ * @returns Gemini TTS name (e.g., 'Achird', 'Achernar') or undefined if not found
+ */
+export function aliasToGeminiName(alias: string): string | undefined {
+  const voice = getVoiceByAlias(alias);
+  return voice?.name;
+}
+
+/**
+ * Convert Gemini TTS name to frontend alias
+ * @param geminiName - Gemini TTS name (e.g., 'Achird', 'Achernar')
+ * @returns Frontend alias (e.g., 'Arthur', 'Ash') or undefined if not found
+ */
+export function geminiNameToAlias(geminiName: string): string | undefined {
+  const voice = getVoiceByName(geminiName);
+  return voice?.alias;
 }
 
 /**
