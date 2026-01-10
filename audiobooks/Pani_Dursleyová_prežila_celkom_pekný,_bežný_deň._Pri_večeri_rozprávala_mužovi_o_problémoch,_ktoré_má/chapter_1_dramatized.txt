@@ -1,0 +1,31 @@
+[VOICE=NARRATOR]
+Mrs. Dursley had had a perfectly nice, ordinary day. Over dinner, she told her husband about the problems the woman next door was having with her daughter, and about Dudley learning a new word ('Shan't!'). Mr. Dursley tried to behave normally. While Mrs. Dursley was putting Dudley to bed, he went into the living room and caught the last report on the evening television news:
+[/VOICE]
+[VOICE=THE PRESENTER]
+"Bird-watchers from all over the country are reporting that owls have been behaving in a most unusual way today. Although they normally hunt at night and are rarely seen during the day, these birds have been appearing in countless places and flying in all directions since sunrise today. Scientists are unable to explain why the owls have so suddenly changed their daily rhythm."
+[/VOICE]
+[VOICE=NARRATOR]
+The presenter smiled.
+[/VOICE]
+[VOICE=THE PRESENTER]
+"A real mystery. And now, over to Jim McGuffin and his weather report. Are we to expect any more owl showers tonight, Jim?"
+[/VOICE]
+[VOICE=THE SECOND PRESENTER]
+"Well,"
+[/VOICE]
+[VOICE=NARRATOR]
+began the second presenter,
+[/VOICE]
+[VOICE=THE SECOND PRESENTER]
+"I don't know anything about that, but it's not just the owls that have been behaving strangely today. Viewers from distant counties such as Kent, Yorkshire, and Dundee have been phoning in to say that instead of the rain I predicted yesterday, they've experienced showers of falling stars! People must have started lighting bonfires a bit early – Bonfire Night isn't until next week, dear viewers, you'll have to wait a little longer! But tonight, I promise you a truly wet night."
+[/VOICE]
+[VOICE=NARRATOR]
+Mr. Dursley sat frozen in his armchair. Falling stars all over Britain? Owls flying in broad daylight? Mysterious people in cloaks all over town? And they were whispering, whispering about the Potters...
+[/VOICE]
+[VOICE=NARRATOR]
+Mrs. Dursley came into the living room with two cups of tea. There was nothing for it. He would have to tell her.
+[/VOICE]
+[VOICE=NARRATOR]
+He cleared his throat nervously.
+"Er – Petunia, darling – haven't you heard from your sister lately?"
+[/VOICE]

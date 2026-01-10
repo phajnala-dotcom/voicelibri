@@ -1304,6 +1304,7 @@ export async function generateSubChunk(
         const text = subChunk.segments.map(s => s.text).join(' ');
         
         console.log(`  📢 Single speaker: ${speaker} → ${voice}`);
+        console.log(`  📝 TTS TEXT (${text.length} chars): "${text.substring(0, 200)}..."`);
         audioBuffer = await synthesizeText(text, voice);
         
       } else {
