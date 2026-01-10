@@ -52,6 +52,7 @@ export function BottomNavigation() {
             <button
               key={item.path}
               onClick={() => navigate(item.path)}
+              style={isActive ? { fontWeight: 800 } : undefined}
               className={`
                 flex flex-col items-center justify-center
                 flex-1 py-2 px-1
@@ -71,7 +72,7 @@ export function BottomNavigation() {
                 `.replace(/\s+/g, ' ').trim()} 
               />
               <span 
-                className="text-xs mt-1 font-semibold"
+                className="text-xs mt-1"
               >
                 {item.label}
               </span>

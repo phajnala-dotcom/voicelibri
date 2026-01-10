@@ -21,19 +21,19 @@
   --neu-black: #262833;
   
   /* Gray scale */
-  --neu-gray-100: #f3f7fa;
-  --neu-gray-200: #fafbfe;
-  --neu-gray-300: #e6e7ee;
-  --neu-gray-400: #D1D9E6;
-  --neu-gray-500: #b1bcce;
-  --neu-gray-600: #93a5be;
-  --neu-gray-700: #66799e;
-  --neu-gray-800: #525480;
-  --neu-gray-900: #44476A;
-  --neu-dark: #31344b;
+  --neu-gray-100: #f3f7fb;
+  --neu-gray-200: #fafcfe;
+  --neu-gray-300: #e6e9f2;
+  --neu-gray-400: #96a0bb;
+  --neu-gray-500: #7a879c;
+  --neu-gray-600: #576886;
+  --neu-gray-700: #3a4c69;
+  --neu-gray-800: #313354;
+  --neu-gray-900: #282a42;
+  --neu-dark: #1e2030;
   
   /* Theme colors */
-  --neu-primary: #e6e7ee;
+  --neu-primary: #e6e9f2;
   --neu-secondary: #2D4CC8;
   --neu-success: #18634B;
   --neu-info: #0056B3;
@@ -41,21 +41,21 @@
   --neu-danger: #A91E2C;
   
   /* Body */
-  --neu-body-bg: #e6e7ee;
-  --neu-body-color: #44476A;
+  --neu-body-bg: #e6e9f2;
+  --neu-body-color: #282b42;
   
   /* === NEUMORPHISM SHADOWS (THE KEY EFFECT) === */
-  --neu-shadow-inset: inset 2px 2px 5px #b8b9be, inset -3px -3px 7px #FFFFFF;
-  --neu-shadow-soft: 6px 6px 12px #b8b9be, -6px -6px 12px #ffffff;
-  --neu-shadow-light: 3px 3px 6px #b8b9be, -3px -3px 6px #ffffff;
+  --neu-shadow-inset: inset 2px 2px 5px #a8a9af, inset -3px -3px 7px #FFFFFF;
+  --neu-shadow-soft: 6px 6px 12px #a8a9af, -6px -6px 12px #ffffff;
+  --neu-shadow-light: 3px 3px 6px #a8a9af, -3px -3px 6px #ffffff;
   
   /* === TYPOGRAPHY === */
   --neu-font-family: 'Nunito Sans', sans-serif;
-  --neu-font-size-base: 1rem;
-  --neu-font-size-sm: 0.875rem;
-  --neu-font-size-xs: 0.75rem;
-  --neu-font-size-lg: 1.25rem;
-  --neu-font-size-xl: 1.5rem;
+  --neu-font-size-base: 1.125rem;
+  --neu-font-size-sm: 1.0625rem;
+  --neu-font-size-xs: 1.1rem;
+  --neu-font-size-lg: 1.375rem;
+  --neu-font-size-xl: 1.625rem;
   --neu-font-weight-light: 300;
   --neu-font-weight-normal: 400;
   --neu-font-weight-bold: 600;
@@ -84,15 +84,19 @@
 
 /* === DARK MODE === */
 [data-theme="dark"] {
-  --neu-body-bg: #31344b;
-  --neu-body-color: #e6e7ee;
-  --neu-primary: #31344b;
+  --neu-body-bg: #32364e;
+  --neu-body-color: #f5f6f8;
+  --neu-primary: #32364e;
   --neu-gray-300: #3b3e59;
-  --neu-gray-400: #4a4d6a;
-  --neu-gray-500: #5a5d7a;
-  --neu-shadow-inset: inset 2px 2px 5px #272a3d, inset -3px -3px 7px #3b3e59;
-  --neu-shadow-soft: 6px 6px 12px #272a3d, -6px -6px 12px #3b3e59;
-  --neu-shadow-light: 3px 3px 6px #272a3d, -3px -3px 6px #3b3e59;
+  --neu-gray-400: #525573;
+  --neu-gray-500: #6a6d8a;
+  --neu-gray-600: #85889d;
+  --neu-gray-700: #9ea1b2;
+  --neu-gray-800: #b8bac7;
+  --neu-gray-900: #d0d2dc;
+  --neu-shadow-inset: inset 2px 2px 5px #1d2035, inset -3px -3px 7px #3b3e59;
+  --neu-shadow-soft: 6px 6px 12px #1d2035, -6px -6px 12px #3b3e59;
+  --neu-shadow-light: 3px 3px 6px #1d2035, -3px -3px 6px #3b3e59;
 }
 
 /* ============================================
@@ -181,6 +185,7 @@ a:hover {
   background-color: var(--neu-primary);
   box-shadow: var(--neu-shadow-inset);
   border-radius: var(--neu-radius);
+  font-weight: 800 !important;
 }
 
 /* === FLAT SURFACE === */
