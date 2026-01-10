@@ -4,11 +4,12 @@
  * Main library view for audiobooks
  */
 
-import { useState } from 'react';
-import { Search, Grid3X3, List, SlidersHorizontal, Plus } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Search, Grid3X3, List, Plus } from 'lucide-react';
 import { useLibraryStore } from '../stores/libraryStore';
 import { usePlayerStore } from '../stores/playerStore';
 import { BookGrid } from '../components/library';
+import { getAudiobooks, convertToBook } from '../services/api';
 import type { Book } from '../types';
 
 // Demo book for testing
@@ -34,10 +35,46 @@ const demoBook: Book = {
  * Neumorphism Library Screen
  */
 export function LibraryScreen() {
-  const { addBook, sortBy, setSortBy, searchQuery, setSearchQuery, getFilteredBooks } = useLibraryStore();
+  const { addBook, sortBy, setSortBy, searchQuery, setSearchQuery, getFilteredBooks, books } = useLibraryStore();
   const { setCurrentBook, setCurrentChapter, playPause } = usePlayerStore();
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [showSearch, setShowSearch] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Load audiobooks from backend on mount
+  useEffect(() => {
+    const loadAudiobooks = async () => {
+      // Skip if we already have books loaded
+      if (books.length > 0) return;
+      
+      setIsLoading(true);
+      try {
+        const audiobookList = await getAudiobooks();
+        // Add each audiobook to library
+        audiobookList.forEach(metadata => {
+          const book = convertToBook(metadata);
+          addBook(book);
+          
+          // If this book was last played, restore it to player
+          if (metadata.playback && metadata.playback.lastPlayedAt) {
+            const currentBook = usePlayerStore.getState().currentBook;
+            if (!currentBook) {
+              setCurrentBook(book);
+              if (book.chapters[metadata.playback.currentChapter]) {
+                setCurrentChapter(book.chapters[metadata.playback.currentChapter]);
+              }
+            }
+          }
+        });
+      } catch (error) {
+        console.error('Failed to load audiobooks:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadAudiobooks();
+  }, []); // Run once on mount
 
   const filteredBooks = getFilteredBooks();
 
@@ -67,50 +104,51 @@ export function LibraryScreen() {
       {/* Header - neumorphism card */}
       <header className="sticky top-0 z-30 bg-[var(--neu-body-bg)] shadow-[var(--neu-shadow-light)]">
         <div className="px-4 py-4">
-          <div className="flex items-center justify-between">
-            <h1 className="text-2xl font-bold text-[var(--neu-dark)]">Library</h1>
-            <div className="flex items-center gap-2">
-              {/* Search toggle */}
-              <button
-                onClick={() => setShowSearch(!showSearch)}
-                className={`
-                  neu-btn-icon-sm 
-                  ${showSearch ? 'neu-pressed' : 'neu-raised'}
-                  flex items-center justify-center
-                  text-[var(--neu-gray-700)]
-                  hover:text-[var(--neu-secondary)]
-                  transition-all duration-200
-                `}
-                aria-label="Search"
-              >
-                <Search className="w-4 h-4" />
-              </button>
-              
-              {/* View mode toggle */}
-              <button
-                onClick={() => setViewMode(viewMode === 'grid' ? 'list' : 'grid')}
-                className="
-                  neu-btn-icon-sm neu-raised
-                  flex items-center justify-center
-                  text-[var(--neu-gray-700)]
-                  hover:text-[var(--neu-secondary)]
-                  active:shadow-[var(--neu-shadow-inset)]
-                  transition-all duration-200
-                "
-                aria-label={viewMode === 'grid' ? 'Switch to list view' : 'Switch to grid view'}
-              >
-                {viewMode === 'grid' ? (
-                  <List className="w-4 h-4" />
-                ) : (
-                  <Grid3X3 className="w-4 h-4" />
-                )}
-              </button>
-            </div>
+          <h1 className="text-2xl font-bold text-[var(--neu-dark)] text-center">Library</h1>
+        </div>
+        
+        <div className="px-4 pb-4">
+          <div className="flex items-center justify-center gap-2 mb-4">
+            {/* Search toggle */}
+            <button
+              onClick={() => setShowSearch(!showSearch)}
+              className={`
+                neu-btn-icon-sm 
+                ${showSearch ? 'neu-pressed' : 'neu-raised'}
+                flex items-center justify-center
+                text-[var(--neu-gray-700)]
+                hover:text-[var(--neu-secondary)]
+                transition-all duration-200
+              `}
+              aria-label="Search"
+            >
+              <Search className="w-4 h-4" />
+            </button>
+            
+            {/* View mode toggle */}
+            <button
+              onClick={() => setViewMode(viewMode === 'grid' ? 'list' : 'grid')}
+              className="
+                neu-btn-icon-sm neu-raised
+                flex items-center justify-center
+                text-[var(--neu-gray-700)]
+                hover:text-[var(--neu-secondary)]
+                active:shadow-[var(--neu-shadow-inset)]
+                transition-all duration-200
+              "
+              aria-label={viewMode === 'grid' ? 'Switch to list view' : 'Switch to grid view'}
+            >
+              {viewMode === 'grid' ? (
+                <List className="w-4 h-4" />
+              ) : (
+                <Grid3X3 className="w-4 h-4" />
+              )}
+            </button>
           </div>
 
           {/* Search bar - neumorphism input */}
           {showSearch && (
-            <div className="mt-3">
+            <div className="mb-4">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--neu-gray-600)]" />
                 <input
@@ -125,8 +163,7 @@ export function LibraryScreen() {
           )}
 
           {/* Sort pills - neumorphism badges */}
-          <div className="flex items-center gap-2 mt-4 overflow-x-auto pb-2 scrollbar-hide">
-            <SlidersHorizontal className="w-4 h-4 text-[var(--neu-gray-600)] flex-shrink-0" />
+          <div className="flex items-center justify-center gap-2 overflow-x-auto pb-2 scrollbar-hide">
             {sortOptions.map((option) => (
               <button
                 key={option.value}
@@ -159,7 +196,7 @@ export function LibraryScreen() {
             books={filteredBooks}
             onBookPress={handleBookPress}
             onLoadDemo={loadDemoBook}
-            isLoading={false}
+            isLoading={isLoading}
           />
         )}
       </div>

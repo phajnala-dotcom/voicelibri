@@ -5,16 +5,20 @@
  */
 
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { 
   Upload, 
   FileText, 
   Sparkles, 
-  Mic2, 
   Settings2,
   Play,
-  CheckCircle
+  CheckCircle,
+  AlertCircle
 } from 'lucide-react';
 import { Button, Card, CardBody, Toggle, CircularProgress } from '../components/ui';
+import { generateAudiobook, getGenerationProgress, convertToBook, getAudiobook } from '../services/api';
+import { useLibraryStore } from '../stores/libraryStore';
+import { usePlayerStore } from '../stores/playerStore';
 
 type GenerationStep = 'upload' | 'configure' | 'processing' | 'complete';
 
@@ -22,9 +26,16 @@ type GenerationStep = 'upload' | 'configure' | 'processing' | 'complete';
  * Neumorphism Generate Screen
  */
 export function GenerateScreen() {
+  const navigate = useNavigate();
+  const { addBook } = useLibraryStore();
+  const { setCurrentBook, setCurrentChapter, play } = usePlayerStore();
+  
   const [step, setStep] = useState<GenerationStep>('upload');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [selectedStyle, setSelectedStyle] = useState('Natural');
+  const [targetLanguage, setTargetLanguage] = useState('English');
+  const [error, setError] = useState<string | null>(null);
+  const [generatedBookTitle, setGeneratedBookTitle] = useState<string>('');
+  const [progress, setProgress] = useState(0);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -35,11 +46,53 @@ export function GenerateScreen() {
   };
 
   const handleGenerate = async () => {
+    if (!selectedFile) return;
+    
     setStep('processing');
-    // Simulate processing
-    setTimeout(() => {
-      setStep('complete');
-    }, 3000);
+    setError(null);
+    setProgress(0);
+    
+    try {
+      // Create form data with file
+      const formData = new FormData();
+      formData.append('file', selectedFile);
+      
+      // Start generation
+      const result = await generateAudiobook(formData);
+      setGeneratedBookTitle(result.bookTitle);
+      
+      // Poll for progress
+      const pollInterval = setInterval(async () => {
+        try {
+          const progressData = await getGenerationProgress(result.bookTitle);
+          const progressPercent = (progressData.chaptersGenerated / progressData.totalChapters) * 100;
+          setProgress(progressPercent);
+          
+          if (progressData.status === 'completed') {
+            clearInterval(pollInterval);
+            
+            // Fetch complete audiobook metadata
+            const metadata = await getAudiobook(result.bookTitle);
+            const book = convertToBook(metadata);
+            
+            // Add to library
+            addBook(book);
+            
+            setStep('complete');
+          }
+        } catch (err) {
+          console.error('Progress polling error:', err);
+        }
+      }, 2000); // Poll every 2 seconds
+      
+      // Cleanup interval on unmount or error
+      return () => clearInterval(pollInterval);
+      
+    } catch (err) {
+      console.error('Generation error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to generate audiobook');
+      setStep('upload');
+    }
   };
 
   return (
@@ -47,7 +100,7 @@ export function GenerateScreen() {
       {/* Header */}
       <header className="sticky top-0 z-30 bg-[var(--neu-body-bg)] shadow-[var(--neu-shadow-light)]">
         <div className="px-4 py-4">
-          <h1 className="text-2xl font-bold text-[var(--neu-dark)]">Generate</h1>
+          <h1 className="text-2xl font-bold text-[var(--neu-dark)]">Create</h1>
           <p className="text-[var(--neu-gray-700)] text-sm mt-1">
             Convert text to audiobook with AI voices
           </p>
@@ -55,6 +108,18 @@ export function GenerateScreen() {
       </header>
 
       <div className="px-4 py-6">
+        {error && (
+          <Card className="mb-6 border-l-4 border-[var(--neu-danger)]">
+            <CardBody className="flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-[var(--neu-danger)] flex-shrink-0 mt-0.5" />
+              <div>
+                <h4 className="font-semibold text-[var(--neu-danger)] mb-1">Generation Failed</h4>
+                <p className="text-sm text-[var(--neu-gray-700)]">{error}</p>
+              </div>
+            </CardBody>
+          </Card>
+        )}
+        
         {step === 'upload' && (
           <div className="space-y-6">
             {/* Upload area - neumorphism inset */}
@@ -138,38 +203,39 @@ export function GenerateScreen() {
               </div>
             </Card>
 
-            {/* Voice selection */}
+            {/* Audiobook Settings */}
             <div className="space-y-3">
               <h4 className="text-[var(--neu-dark)] font-semibold flex items-center gap-2">
-                <Mic2 className="w-4 h-4" /> Voice Style
-              </h4>
-              <div className="grid grid-cols-2 gap-2">
-                {['Natural', 'Dramatized', 'Podcast', 'Storyteller'].map((style) => (
-                  <button
-                    key={style}
-                    onClick={() => setSelectedStyle(style)}
-                    className={`
-                      p-3 rounded-[var(--neu-radius)] text-sm font-medium
-                      transition-all duration-200
-                      ${selectedStyle === style
-                        ? 'neu-pressed text-[var(--neu-secondary)]'
-                        : 'neu-raised text-[var(--neu-gray-700)] hover:text-[var(--neu-dark)]'
-                      }
-                    `}
-                  >
-                    {style}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Advanced settings */}
-            <div className="space-y-3">
-              <h4 className="text-[var(--neu-dark)] font-semibold flex items-center gap-2">
-                <Settings2 className="w-4 h-4" /> Settings
+                <Settings2 className="w-4 h-4" /> Audiobook Settings
               </h4>
               <Card>
                 <CardBody className="space-y-4">
+                  {/* Target Language */}
+                  <div>
+                    <label htmlFor="target-language" className="block text-[var(--neu-body-color)] text-sm font-medium mb-2">
+                      Target Language
+                    </label>
+                    <select
+                      id="target-language"
+                      value={targetLanguage}
+                      onChange={(e) => setTargetLanguage(e.target.value)}
+                      className="neu-input"
+                      aria-label="Select target language"
+                    >
+                      <option value="English">English</option>
+                      <option value="Spanish">Spanish</option>
+                      <option value="French">French</option>
+                      <option value="German">German</option>
+                      <option value="Italian">Italian</option>
+                      <option value="Portuguese">Portuguese</option>
+                      <option value="Dutch">Dutch</option>
+                      <option value="Russian">Russian</option>
+                      <option value="Japanese">Japanese</option>
+                      <option value="Chinese">Chinese</option>
+                    </select>
+                  </div>
+                  
+                  {/* Multi-voice toggle */}
                   <div className="flex items-center justify-between">
                     <span className="text-[var(--neu-body-color)] text-sm">Multi-voice</span>
                     <Toggle defaultChecked={true} />
@@ -182,7 +248,7 @@ export function GenerateScreen() {
               </Card>
             </div>
 
-            {/* Generate button */}
+            {/* Create button */}
             <Button
               variant="secondary"
               size="lg"
@@ -190,7 +256,7 @@ export function GenerateScreen() {
               onClick={handleGenerate}
               leftIcon={<Sparkles className="w-5 h-5" />}
             >
-              Generate Audiobook
+              Create Audiobook
             </Button>
           </div>
         )}
@@ -201,8 +267,11 @@ export function GenerateScreen() {
             <h3 className="text-xl font-bold text-[var(--neu-dark)] mb-2">
               Generating audiobook...
             </h3>
-            <p className="text-[var(--neu-gray-700)] text-sm mb-8">
+            <p className="text-[var(--neu-gray-700)] text-sm mb-2">
               This may take a few minutes
+            </p>
+            <p className="text-[var(--neu-secondary)] font-semibold mb-8">
+              {progress.toFixed(0)}% complete
             </p>
             
             <Card className="max-w-xs mx-auto">
@@ -236,7 +305,26 @@ export function GenerateScreen() {
               Your audiobook has been added to the library
             </p>
             <div className="flex flex-col gap-3 max-w-xs mx-auto">
-              <Button variant="secondary" size="lg" leftIcon={<Play className="w-5 h-5" />}>
+              <Button 
+                variant="secondary" 
+                size="lg" 
+                leftIcon={<Play className="w-5 h-5" />}
+                onClick={async () => {
+                  if (!generatedBookTitle) return;
+                  try {
+                    const metadata = await getAudiobook(generatedBookTitle);
+                    const book = convertToBook(metadata);
+                    setCurrentBook(book);
+                    if (book.chapters.length > 0) {
+                      setCurrentChapter(book.chapters[0]);
+                    }
+                    play();
+                    navigate('/');
+                  } catch (err) {
+                    console.error('Failed to play audiobook:', err);
+                  }
+                }}
+              >
                 Play Now
               </Button>
               <Button 
@@ -247,7 +335,7 @@ export function GenerateScreen() {
                   setSelectedFile(null);
                 }}
               >
-                Generate Another
+                Create Another
               </Button>
             </div>
           </div>

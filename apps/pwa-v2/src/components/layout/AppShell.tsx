@@ -10,6 +10,7 @@ import { BottomNavigation } from '../navigation';
 import { MiniPlayer } from '../player';
 import { FullPlayer } from './FullPlayer';
 import { usePlayerStore } from '../../stores/playerStore';
+import { useAudioPlayback } from '../../hooks/useAudioPlayback';
 
 /**
  * Neumorphism App Shell
@@ -18,6 +19,9 @@ import { usePlayerStore } from '../../stores/playerStore';
 export function AppShell() {
   const [isPlayerExpanded, setIsPlayerExpanded] = useState(false);
   const { currentBook } = usePlayerStore();
+  
+  // Initialize audio playback
+  useAudioPlayback();
 
   return (
     <div className="min-h-screen bg-[var(--neu-body-bg)]">

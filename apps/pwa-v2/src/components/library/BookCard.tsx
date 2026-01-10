@@ -132,13 +132,13 @@ export function EmptyLibrary({ onLoadDemo }: EmptyLibraryProps) {
         Your Library is Empty
       </h2>
       <p className="text-[var(--neu-gray-700)] mb-6 max-w-sm">
-        Generate your first audiobook or explore our collection of free public domain books to get started.
+        Create your first audiobook or explore our collection of free public domain books to get started.
       </p>
       
       {/* Action buttons */}
       <div className="flex flex-wrap gap-3 justify-center">
         <button className="neu-btn neu-btn-secondary">
-          Generate Book
+          Create Book
         </button>
         <button className="neu-btn neu-btn-primary">
           Browse Library
