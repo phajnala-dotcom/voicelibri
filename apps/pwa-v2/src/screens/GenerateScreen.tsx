@@ -211,27 +211,33 @@ export function GenerateScreen() {
               <Card>
                 <CardBody className="space-y-4">
                   {/* Target Language */}
-                  <div>
-                    <label htmlFor="target-language" className="block text-[var(--neu-body-color)] text-sm font-medium mb-2">
+                  <div className="flex items-center gap-3">
+                    <label htmlFor="target-language" className="text-[var(--neu-body-color)] text-sm font-medium whitespace-nowrap">
                       Target Language
                     </label>
                     <select
                       id="target-language"
                       value={targetLanguage}
                       onChange={(e) => setTargetLanguage(e.target.value)}
-                      className="neu-input"
+                      className="neu-input w-1/3"
                       aria-label="Select target language"
                     >
+                      <option value="Chinese">Chinese</option>
+                      <option value="Czech">Czech</option>
+                      <option value="Dutch">Dutch</option>
                       <option value="English">English</option>
-                      <option value="Spanish">Spanish</option>
                       <option value="French">French</option>
                       <option value="German">German</option>
+                      <option value="Hindi">Hindi</option>
                       <option value="Italian">Italian</option>
-                      <option value="Portuguese">Portuguese</option>
-                      <option value="Dutch">Dutch</option>
-                      <option value="Russian">Russian</option>
                       <option value="Japanese">Japanese</option>
-                      <option value="Chinese">Chinese</option>
+                      <option value="Korean">Korean</option>
+                      <option value="Polish">Polish</option>
+                      <option value="Portuguese">Portuguese</option>
+                      <option value="Russian">Russian</option>
+                      <option value="Slovak">Slovak</option>
+                      <option value="Spanish">Spanish</option>
+                      <option value="Ukrainian">Ukrainian</option>
                     </select>
                   </div>
                   

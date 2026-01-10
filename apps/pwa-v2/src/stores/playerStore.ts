@@ -212,6 +212,10 @@ export const usePlayerStore = create<PlayerStore>()(
         settings: state.settings,
         speed: state.speed,
         volume: state.volume,
+        currentBook: state.currentBook,
+        currentChapter: state.currentChapter,
+        isMiniPlayerVisible: state.isMiniPlayerVisible,
+        currentTime: state.currentTime,
       }),
     }
   )

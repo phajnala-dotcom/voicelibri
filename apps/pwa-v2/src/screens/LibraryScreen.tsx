@@ -35,7 +35,7 @@ const demoBook: Book = {
  * Neumorphism Library Screen
  */
 export function LibraryScreen() {
-  const { addBook, sortBy, setSortBy, searchQuery, setSearchQuery, getFilteredBooks, books } = useLibraryStore();
+  const { addBook, sortBy, setSortBy, searchQuery, setSearchQuery, getFilteredBooks } = useLibraryStore();
   const { setCurrentBook, setCurrentChapter, playPause } = usePlayerStore();
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [showSearch, setShowSearch] = useState(false);
@@ -44,28 +44,42 @@ export function LibraryScreen() {
   // Load audiobooks from backend on mount
   useEffect(() => {
     const loadAudiobooks = async () => {
-      // Skip if we already have books loaded
-      if (books.length > 0) return;
-      
       setIsLoading(true);
       try {
         const audiobookList = await getAudiobooks();
+        let mostRecentBook: Book | null = null;
+        let mostRecentTime = 0;
+        
         // Add each audiobook to library
         audiobookList.forEach(metadata => {
           const book = convertToBook(metadata);
-          addBook(book);
           
-          // If this book was last played, restore it to player
+          // Only add if not already in library
+          const existing = useLibraryStore.getState().books.find(b => b.id === book.id);
+          if (!existing) {
+            addBook(book);
+          }
+          
+          // Track most recently played book
           if (metadata.playback && metadata.playback.lastPlayedAt) {
-            const currentBook = usePlayerStore.getState().currentBook;
-            if (!currentBook) {
-              setCurrentBook(book);
-              if (book.chapters[metadata.playback.currentChapter]) {
-                setCurrentChapter(book.chapters[metadata.playback.currentChapter]);
-              }
+            const playedTime = new Date(metadata.playback.lastPlayedAt).getTime();
+            if (playedTime > mostRecentTime) {
+              mostRecentTime = playedTime;
+              mostRecentBook = book;
             }
           }
         });
+        
+        // Restore most recently played book to player (if no book currently loaded)
+        const currentBook = usePlayerStore.getState().currentBook;
+        if (!currentBook && mostRecentBook) {
+          const bookToRestore = mostRecentBook as Book;
+          setCurrentBook(bookToRestore);
+          const metadata = audiobookList.find(m => m.title === bookToRestore.title);
+          if (metadata?.playback && bookToRestore.chapters[metadata.playback.currentChapter]) {
+            setCurrentChapter(bookToRestore.chapters[metadata.playback.currentChapter]);
+          }
+        }
       } catch (error) {
         console.error('Failed to load audiobooks:', error);
       } finally {
