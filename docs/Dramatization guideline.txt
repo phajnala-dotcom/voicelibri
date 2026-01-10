@@ -1,0 +1,32 @@
+CURRENT INCORRECT DRAMATIZATION (snippet from Harry Potter a kameň mudrcov.txt)
+
+[VOICE=NARRATOR]
+Moderátor sa usmial.
+[VOICE=MODERÁTOR]
+„Ozajstná záhada. A teraz prenechávam slovo Jimovi McGuffinovi a jeho správam o počasí. Máme dnes v noci rátať s ďalšími sovími prehánkami, Jim?“
+[VOICE=DRUHÝ_MODERÁTOR]
+„No,“
+[VOICE=NARRATOR]
+začal druhý moderátor,
+[VOICE=DRUHÝ_MODERÁTOR]
+„o tom síce nič neviem, ale nielen sovy sa dnes správali čudne."
+
+CORRECT DRAMATIZATION / TAGGING ACCORDING GEMINI TTS API OFFICIAL DOCS
+
+NARRATOR: Moderátor sa usmial.
+MODERATOR: „Ozajstná záhada. A teraz prenechávam slovo Jimovi McGuffinovi a jeho správam o počasí. Máme dnes v noci rátať s ďalšími sovími prehánkami, Jim?“
+MODERATOR2: „No,“
+NARRATOR: začal druhý moderátor,
+MODERATOR2: „o tom síce nič neviem, ale nielen sovy sa dnes správali čudne.“
+
+GUIDELINE
+
+Composition
+- Character alias and its direct speech are in one line, separated by colon + 1 space
+Rules for character aliases
+- exactly same as in voice config mapping to specific voices (e.g., Kore, Charon)
+- no rules for quotes - any of them are OK (curly, straight, single / double), French, none as well
+- only alphanumeric characters (A–Z, a–z, 0–9)
+- no spaces, underscores, hyphens, dots, emojis or diacritics
+- If 2 words alias must be used, then CONCATENATE
+- Case sensitive - use ALL CAPITALS to prevent mismatch with actual text
