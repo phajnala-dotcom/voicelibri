@@ -13,10 +13,15 @@
 1. [Executive Summary](#1-executive-summary)
    - 1.4 Competitive Analysis (Audible, Speechify, Spotify, etc.)
 2. [Business Model & Pricing Strategy](#2-business-model--pricing-strategy)
+   - 2.1 Cost Analysis (Local Storage, Google Cloud)
    - 2.6 Platform Payment Compliance (CRITICAL)
    - 2.7 System Limits & Quotas
    - 2.8 Generation Failure & Refund Policy
+   - **2.9 Referral Program (MVP - Viral Growth Engine)** ⭐ NEW
+   - 2.11 Gift Program (Phase 2)
+   - **2.18 UI/UX Reference: TortugaPower/BookPlayer** ⭐ NEW
 3. [Technology Stack Decisions](#3-technology-stack-decisions)
+   - 3.3 Storage Stack (Local-Only MVP, Sandboxed)
 4. [Architecture Overview](#4-architecture-overview)
 5. [API Contract v2.0](#5-api-contract-v20)
    - 5.6 Offline Sync & Conflict Resolution
@@ -24,6 +29,7 @@
    - 5.8 GDPR/CCPA Compliance
 6. [Mobile App Implementation](#6-mobile-app-implementation)
 7. [Backend Refactoring Guide](#7-backend-refactoring-guide)
+   - **7.5 Cloud Infrastructure (Google Cloud Platform)** ⭐ NEW
 8. [Design System](#8-design-system)
 9. [Development Phases (Realistic 4-Month MVP)](#9-development-phases-realistic-4-month-mvp)
    - Deferred Features List
@@ -297,14 +303,35 @@ The audiobook/text-to-speech market has three main segments:
 
 **Fixed/Infrastructure Costs (Monthly):**
 
-| Component | Estimated Monthly |
-|-----------|-------------------|
-| Cloud hosting (Railway/Render) | €20-50 |
-| Storage (R2/S3 for audio files) | €10-30 (scales with users) |
-| CDN bandwidth | €10-20 |
-| Monitoring/logging | €10-20 |
-| App store fees (15-30% of revenue) | Variable |
-| **Total Fixed** | **~€50-120/month base** |
+| Component | Estimated Monthly (100 users) | At Scale (1000+ users) |
+|-----------|-------------------------------|------------------------|
+| Google Cloud Run (auto-scaling) | €30-60 | €100-300 |
+| Cloud SQL (Postgres) | €15-30 | €50-100 |
+| CDN bandwidth (Cloud CDN) | €10-20 | €50-150 |
+| Monitoring (Cloud Monitoring) | €0 (free tier) | €20-50 |
+| Firebase Auth | €0 (free tier) | €0-25 |
+| App store fees (15-30% of revenue) | Variable | Variable |
+| **Total Fixed** | **~€55-110/month base** | **~€220-625/month** |
+
+**📱 Audio Storage Model (MVP):**
+> **IMPORTANT:** Audio files are stored **locally on user's device only** (sandboxed app storage).
+> - No cloud storage costs for audio files in MVP
+> - Users must re-generate if switching devices
+> - Cloud Sync planned for Phase 3+
+
+**Why Local-Only Storage for MVP:**
+| Benefit | Impact |
+|---------|--------|
+| **Zero storage costs** | No S3/R2 costs for audio files |
+| **Faster playback** | No streaming latency, instant local access |
+| **Offline guaranteed** | Works without internet after generation |
+| **Privacy** | Audio never leaves user's device |
+| **Simplified architecture** | No sync conflicts, no cloud management |
+
+**Trade-offs:**
+- ❌ No cross-device sync (must re-generate on new device)
+- ❌ Device storage used (user responsibility)
+- ❌ Lost if app deleted without backup
 
 **Blended Cost Assumption:** €0.15/hour average (mix of translated/non-translated)
 
@@ -569,24 +596,158 @@ const RETRY_CONFIG = {
 | User deletes book > 24h | No refund (prevents abuse) |
 | Quality complaint | Manual review, case-by-case |
 
-### 2.9 Revenue Optimization Strategies
+### 2.9 Referral Program (MVP - Viral Growth Engine) 🚀
+
+**Purpose:** Drive viral user acquisition through incentivized referrals. This is a KEY MVP feature for organic growth.
+
+**Program Structure:**
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│  VOICELIBRI REFERRAL PROGRAM                                            │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  WHO CAN REFER:                                                          │
+│  • Any signed-up user (even free trial users!)                           │
+│  • No subscription required to share referral links                      │
+│                                                                          │
+│  REWARD FOR REFERRER:                                                    │
+│  🎁 +20 FREE HOURS when referee makes FIRST subscription payment         │
+│  • Hours added on top of current subscription                            │
+│  • If in trial: hours available immediately for generation               │
+│  • No maximum referrals - unlimited earning potential                    │
+│                                                                          │
+│  REWARD FOR REFEREE:                                                     │
+│  • Standard free trial (2 hours OR 14 days)                              │
+│  • (Consider: +2 bonus hours for signing up via referral)                │
+│                                                                          │
+│  TRACKING:                                                               │
+│  • Unique referral link per user: voicelibri.app/r/{user_code}           │
+│  • Deep link opens App Store/Play Store with attribution                 │
+│  • Attribution tracked for 30 days after click                           │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Technical Implementation:**
+
+```typescript
+// Referral link generation
+interface ReferralCode {
+  userId: string;
+  code: string;        // e.g., "ALEX7K2M"
+  createdAt: Date;
+  totalReferrals: number;
+  successfulReferrals: number;  // Converted to paying
+  hoursEarned: number;
+}
+
+// API endpoints
+POST /api/referral/generate     → { code, link }
+GET  /api/referral/stats        → { totalClicks, signups, conversions, hoursEarned }
+POST /api/referral/validate     → Validate code on signup
+POST /api/referral/reward       → Triggered by payment webhook
+```
+
+**UI Components (MVP):**
+
+1. **Share Button in Settings/Profile:**
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  🎁 Invite Friends, Get Free Hours                              │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Share your link and earn 20 FREE hours when                    │
+│  your friend makes their first payment!                         │
+│                                                                  │
+│  Your referral link:                                            │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │ voicelibri.app/r/ALEX7K2M              [ 📋 Copy ]      │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│                                                                  │
+│  [ 📱 Share via... ]                                            │
+│                                                                  │
+│  ─────────────────────────────────────────────────────────────  │
+│  Your Stats:                                                     │
+│  👥 Friends invited: 12                                          │
+│  ✅ Successful referrals: 4                                      │
+│  🎧 Hours earned: 80                                             │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+2. **Referral Dashboard (Settings → My Referrals):**
+   - List of referrals with status (signed up, converted, pending)
+   - Total hours earned
+   - Shareable stats card for social proof
+
+**Share Options:**
+- Native share sheet (iOS/Android)
+- Direct: WhatsApp, Telegram, SMS, Email
+- Copy link to clipboard
+- Generate shareable image with stats
+
+**Anti-Fraud Measures:**
+- One referral credit per unique device/IP combination
+- Payment must be completed (not just trial signup)
+- 30-day attribution window
+- Manual review for accounts with >20 referrals/month
+
+### 2.10 Revenue Optimization Strategies
 
 **MVP (Month 1-5):**
 1. Two-tier pricing: Standard ($7.99) + Premium ($17.99)
 2. Pay-as-you-go on top of subscription
 3. First 2 hours free (credit card required at signup for auto-conversion)
+4. **Referral program active from day 1** (20 hours per conversion)
 
 **Post-Launch (Month 6-9):**
 1. Annual subscription discount (2 months free)
-2. Referral program (both get 2 free hours)
-3. Internet Archive catalog integration (see 2.11)
+2. Internet Archive catalog integration (see 2.12)
+3. Gift Program (see 2.11)
 
 **Growth (Month 10+):**
 1. Family plan ($24.99/month, 80 hours shared)
 2. Student discount (50% off)
 3. B2B API for publishers
 
-### 2.10 PWA Testing Frontend
+### 2.11 Gift Program (Phase 2)
+
+**Planned for Phase 2 release:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  🎁 GIFT VOICELIBRI HOURS                                       │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  Give the gift of audiobooks to friends & family!               │
+│                                                                  │
+│  Select gift amount:                                            │
+│  ○ 10 hours  - $5.00                                            │
+│  ○ 25 hours  - $10.00                                           │
+│  ○ 50 hours  - $17.99                                           │
+│  ● Custom    - [ 30 ] hours = $10.80                            │
+│                                                                  │
+│  Recipient email: [_________________________]                    │
+│                                                                  │
+│  Personal message (optional):                                   │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │ Happy Birthday! Enjoy your favorite books as            │    │
+│  │ audiobooks. Love, Alex                                   │    │
+│  └─────────────────────────────────────────────────────────┘    │
+│                                                                  │
+│  [ 🎁 Send Gift ]                                               │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Features (Phase 2):**
+- Gift to existing users or invite new users
+- Redeemable gift codes
+- Gift wrap email with personalized message
+- Share via email, SMS, or link
+- Pricing: $0.36/hour (discount vs pay-as-you-go $0.50)
+
+### 2.12 PWA Testing Frontend
 
 **Purpose:** A Progressive Web App that mirrors the React Native app design for testing purposes.
 
@@ -2030,6 +2191,124 @@ export const gutendexApi = {
 
 ---
 
+## 2.18 UI/UX Reference: TortugaPower/BookPlayer (CRITICAL)
+
+> **🎯 MAJOR DESIGN DECISION:** VoiceLibri will use the open-source BookPlayer app as the PRIMARY UI/UX reference for building our audiobook player interface.
+
+**Repository:** https://github.com/TortugaPower/BookPlayer
+
+**What BookPlayer Is:**
+- Open-source iOS audiobook player (Swift/SwiftUI)
+- 3,800+ GitHub stars, actively maintained
+- Feature-rich library management and player
+- Clean, professional audiobook-focused design
+- MIT licensed - free to reference and adapt concepts
+
+**How We'll Use It:**
+
+| Aspect | Approach |
+|--------|----------|
+| **UI Layouts** | Translate Swift layouts to TypeScript/React components |
+| **Feature Set** | Adopt proven audiobook UX patterns |
+| **Design Language** | Modernize with glassmorphism, updated icons |
+| **Code** | Concept adaptation, NOT direct code port |
+| **Stack** | TypeScript PWA (first) → React Native (clone) |
+
+**Key BookPlayer Features to Adopt:**
+
+1. **Library Management:**
+   - Grid/list view toggle
+   - Folder organization
+   - Sort options (title, author, date added, recently played)
+   - Search with filters
+   - Progress indicators on book covers
+
+2. **Player Interface:**
+   - Large artwork display
+   - Seek bar with chapter markers
+   - Playback speed control (0.5x - 3.0x)
+   - Sleep timer with multiple options (5/10/15/30/45/60 min, end of chapter)
+   - Skip forward/backward buttons (configurable intervals)
+   - Chapter list navigation
+   - Lock screen integration
+
+3. **Playback Features:**
+   - Smart rewind (auto-rewind after pause based on pause duration)
+   - Bookmarks with notes
+   - Volume boost option
+   - Global speed setting (same speed for all books)
+   - Auto-play next chapter
+
+4. **Settings & Customization:**
+   - Skip interval configuration
+   - Auto-sleep timer on play
+   - Progress label options (remaining vs elapsed)
+   - Theme customization
+
+**VoiceLibri Improvements Over BookPlayer:**
+
+| BookPlayer | VoiceLibri Enhancement |
+|------------|------------------------|
+| Standard iOS design | **Glassmorphism** with frosted glass effects |
+| SF Symbols icons | **Custom modern icons** (outlined, animated) |
+| Basic color themes | **Gradient accents**, glow effects |
+| Static backgrounds | **Subtle animated gradients** |
+| Standard lists | **Animated transitions**, micro-interactions |
+| Basic player | **Waveform visualization**, character voice indicators |
+
+**BookPlayer Structure to Study:**
+
+```
+BookPlayer/
+├── BookPlayer/
+│   ├── Library/           ← Library UI patterns
+│   │   ├── MiniPlayer/    ← Persistent mini-player
+│   │   └── Views/         ← List/grid components
+│   ├── Player/            ← Full player screen
+│   │   ├── Player Screen/ ← Main player UI
+│   │   ├── Controls/      ← Playback controls
+│   │   ├── SleepTimer.swift
+│   │   └── PlayerManager.swift
+│   ├── Settings/          ← Settings patterns
+│   │   └── Sections/      ← Organized settings
+│   └── Profile/           ← Account/subscription
+├── BookPlayerKit/         ← Core services
+│   └── CoreData/          ← Data models
+└── BookPlayerWidgets/     ← Home screen widgets
+```
+
+**Implementation Approach:**
+
+```
+Phase 1: PWA (Weeks 1-5)
+├── Study BookPlayer patterns
+├── Translate to React components
+├── Apply glassmorphism design system
+├── Validate all features in browser
+└── Test on iPhone via "Add to Home Screen"
+
+Phase 2: React Native (Weeks 10-14)
+├── Clone PWA component structure
+├── Same component names, props, state
+├── NativeWind (same Tailwind classes)
+├── Add native-only features (background audio, IAP)
+└── Platform-specific optimizations
+```
+
+**Specific Components to Reference:**
+
+| BookPlayer File | VoiceLibri Component |
+|-----------------|---------------------|
+| `MiniPlayerView.swift` | `<MiniPlayer />` |
+| `PlayerViewController.swift` | `<PlayerScreen />` |
+| `SleepTimer.swift` | `useSleepTimer()` hook |
+| `LibraryRootView.swift` | `<LibraryScreen />` |
+| `PlayerControlsView.swift` | `<PlaybackControls />` |
+| `BookmarkListView.swift` | `<BookmarkList />` |
+| `SettingsPlayerControlsView.swift` | `<SettingsPlayback />` |
+
+---
+
 ## 3. Technology Stack Decisions
 
 ### 3.1 Framework: Expo (NOT Bare React Native)
@@ -2090,16 +2369,150 @@ await player.seekTo(position - 15000); // Back 15s
 
 **Requires Expo Development Build** (not compatible with Expo Go)
 
-### 3.3 Storage Stack
+### 3.3 Storage Stack (Local-Only MVP)
 
-**Decision: MMKV + WatermelonDB + FileSystem**
+> **⚠️ CRITICAL:** Audio files are stored LOCALLY on device only (MVP). No cloud sync.
+
+**Decision: MMKV + WatermelonDB + FileSystem (Sandboxed)**
 
 | Data Type | Solution | Why |
 |-----------|----------|-----|
 | Auth tokens, settings | **MMKV** | 30x faster than AsyncStorage |
 | Library metadata, progress | **WatermelonDB** | SQLite with lazy loading, 10k+ books |
-| Audio files | **expo-file-system** | Native file management |
+| Audio files | **expo-file-system** | Native file management, sandboxed |
 | Server cache | **TanStack Query** | Automatic cache invalidation |
+
+**🔒 Sandboxed Storage (NOT visible in Files app):**
+
+```typescript
+// Audio Storage - Private App Directory
+// Files are NOT accessible via iOS Files app or Android file managers
+
+// iOS: Uses app's Documents directory (sandboxed)
+// Android: Uses app's internal storage (not external SD card)
+
+import * as FileSystem from 'expo-file-system';
+
+// ✅ CORRECT - Private app storage (sandboxed)
+const AUDIO_BASE_DIR = FileSystem.documentDirectory + 'audiobooks/';
+
+// ❌ WRONG - Would be visible in Files app
+// const AUDIO_BASE_DIR = FileSystem.cacheDirectory + 'audiobooks/';
+
+// Directory structure (inside app sandbox)
+// audiobooks/
+// ├── {book-id}/
+// │   ├── metadata.json       # Book info, voice assignments
+// │   ├── chapter-001.mp3
+// │   ├── chapter-002.mp3
+// │   └── cover.jpg
+// └── {another-book-id}/
+//     └── ...
+```
+
+**Why Sandboxed Storage:**
+| Benefit | Impact |
+|---------|--------|
+| **Privacy** | Users can't accidentally share/leak audiobook files |
+| **Clean UX** | Files app isn't cluttered with audio chunks |
+| **Similar to competitors** | Audible, Spotify, Podcasts all use sandboxed storage |
+| **Prevents piracy** | Harder to extract and redistribute generated audio |
+| **App control** | App manages cleanup, no orphaned files |
+
+**Storage Implementation:**
+
+```typescript
+// services/audioStorage.ts
+import * as FileSystem from 'expo-file-system';
+
+const AUDIOBOOKS_DIR = FileSystem.documentDirectory + 'audiobooks/';
+
+export const audioStorage = {
+  // Ensure base directory exists
+  async init() {
+    const dirInfo = await FileSystem.getInfoAsync(AUDIOBOOKS_DIR);
+    if (!dirInfo.exists) {
+      await FileSystem.makeDirectoryAsync(AUDIOBOOKS_DIR, { intermediates: true });
+    }
+  },
+
+  // Save generated audio chunk
+  async saveChapter(bookId: string, chapterNum: number, audioData: string) {
+    const bookDir = `${AUDIOBOOKS_DIR}${bookId}/`;
+    await FileSystem.makeDirectoryAsync(bookDir, { intermediates: true });
+    
+    const filePath = `${bookDir}chapter-${String(chapterNum).padStart(3, '0')}.mp3`;
+    await FileSystem.writeAsStringAsync(filePath, audioData, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+    return filePath;
+  },
+
+  // Get chapter file path for playback
+  getChapterPath(bookId: string, chapterNum: number): string {
+    return `${AUDIOBOOKS_DIR}${bookId}/chapter-${String(chapterNum).padStart(3, '0')}.mp3`;
+  },
+
+  // Delete entire book
+  async deleteBook(bookId: string) {
+    const bookDir = `${AUDIOBOOKS_DIR}${bookId}/`;
+    await FileSystem.deleteAsync(bookDir, { idempotent: true });
+  },
+
+  // Get total storage used
+  async getStorageUsed(): Promise<number> {
+    const dirInfo = await FileSystem.getInfoAsync(AUDIOBOOKS_DIR);
+    return dirInfo.size ?? 0;
+  },
+
+  // List all downloaded books
+  async listBooks(): Promise<string[]> {
+    const contents = await FileSystem.readDirectoryAsync(AUDIOBOOKS_DIR);
+    return contents;
+  },
+};
+```
+
+**PWA Storage (IndexedDB - also sandboxed):**
+
+```typescript
+// services/audioStoragePWA.ts
+import { openDB, IDBPDatabase } from 'idb';
+
+const DB_NAME = 'voicelibri-audio';
+const STORE_NAME = 'audioChunks';
+
+export const audioStoragePWA = {
+  async init() {
+    return openDB(DB_NAME, 1, {
+      upgrade(db) {
+        db.createObjectStore(STORE_NAME);
+      },
+    });
+  },
+
+  async saveChapter(bookId: string, chapterNum: number, audioBlob: Blob) {
+    const db = await this.init();
+    const key = `${bookId}/chapter-${chapterNum}`;
+    await db.put(STORE_NAME, audioBlob, key);
+    return key;
+  },
+
+  async getChapter(bookId: string, chapterNum: number): Promise<Blob | undefined> {
+    const db = await this.init();
+    const key = `${bookId}/chapter-${chapterNum}`;
+    return db.get(STORE_NAME, key);
+  },
+};
+```
+
+**Cloud Sync Roadmap (Phase 3+):**
+
+| Phase | Storage Model | Features |
+|-------|---------------|----------|
+| **MVP (Phase 1-2)** | Local only | Device storage, no sync |
+| **Phase 3** | Optional cloud backup | Backup to Google Drive/iCloud |
+| **Phase 4** | Full cloud sync | Cross-device library sync, streaming option |
 
 **MMKV Setup:**
 ```typescript
@@ -4089,12 +4502,158 @@ export async function idempotencyMiddleware(
 | 7 | Add tests for services | test/ folder |
 | 8 | Remove old code from index.ts | index.ts cleanup |
 
+### 7.5 Cloud Infrastructure (Google Cloud Platform)
+
+> **Decision:** Use Google Cloud for ALL infrastructure to keep services under one roof.
+
+**Why Google Cloud:**
+| Benefit | Impact |
+|---------|--------|
+| **Single ecosystem** | One billing, one console, unified IAM |
+| **Gemini integration** | Same provider as our TTS API |
+| **Auto-scaling** | Cloud Run scales to zero, no idle costs |
+| **Global CDN** | Cloud CDN with edge locations |
+| **Competitive pricing** | Often cheaper than AWS for our workload |
+
+**Infrastructure Stack:**
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  GOOGLE CLOUD PLATFORM - VoiceLibri Infrastructure                 │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  ┌──────────────────┐     ┌──────────────────┐                      │
+│  │  Cloud Run       │     │  Cloud SQL       │                      │
+│  │  (Backend API)   │────▶│  (PostgreSQL)    │                      │
+│  │  Auto-scaling    │     │  db-f1-micro     │                      │
+│  │  min: 0, max: 10 │     │  10GB storage    │                      │
+│  └────────┬─────────┘     └──────────────────┘                      │
+│           │                                                          │
+│           │  ┌──────────────────┐                                   │
+│           └─▶│  Gemini API      │                                   │
+│              │  (TTS + LLM)     │                                   │
+│              │  Same project    │                                   │
+│              └──────────────────┘                                   │
+│                                                                      │
+│  ┌──────────────────┐     ┌──────────────────┐                      │
+│  │  Cloud CDN       │     │  Cloud Tasks     │                      │
+│  │  (Static assets) │     │  (Job queue)     │                      │
+│  │  Global edge     │     │  Async gen jobs  │                      │
+│  └──────────────────┘     └──────────────────┘                      │
+│                                                                      │
+│  ┌──────────────────┐     ┌──────────────────┐                      │
+│  │  Firebase Auth   │     │  Cloud           │                      │
+│  │  (User auth)     │     │  Monitoring      │                      │
+│  │  Free tier OK    │     │  (Logs/Metrics)  │                      │
+│  └──────────────────┘     └──────────────────┘                      │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Cost Breakdown (100 Users - MVP):**
+
+| Service | Configuration | Est. Monthly Cost |
+|---------|---------------|-------------------|
+| **Cloud Run** | 1 vCPU, 512MB, scale 0-10 | €15-30 |
+| **Cloud SQL** | db-f1-micro, 10GB | €10-15 |
+| **Cloud CDN** | 10GB bandwidth | €5-10 |
+| **Cloud Tasks** | 1M requests | €0 (free tier) |
+| **Firebase Auth** | 10k MAU | €0 (free tier) |
+| **Cloud Monitoring** | Basic logs | €0 (free tier) |
+| **Secret Manager** | 5 secrets | €0 (free tier) |
+| **Total MVP** | | **~€30-55/month** |
+
+**Scaling Configuration (Auto-scale):**
+
+```yaml
+# cloud-run-service.yaml
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: voicelibri-api
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "0"      # Scale to zero
+        autoscaling.knative.dev/maxScale: "10"     # Max instances
+        run.googleapis.com/cpu-throttling: "false" # Full CPU during requests
+    spec:
+      containerConcurrency: 80   # Requests per instance
+      timeoutSeconds: 300        # TTS generation can be slow
+      containers:
+        - image: gcr.io/voicelibri/api:latest
+          resources:
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          env:
+            - name: NODE_ENV
+              value: "production"
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gemini-api-key
+                  key: latest
+```
+
+**Deployment Pipeline (Cloud Build):**
+
+```yaml
+# cloudbuild.yaml
+steps:
+  # Build
+  - name: 'node:20'
+    entrypoint: 'npm'
+    args: ['ci']
+    dir: 'apps/backend'
+  
+  - name: 'node:20'
+    entrypoint: 'npm'
+    args: ['run', 'build']
+    dir: 'apps/backend'
+  
+  # Docker build
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '-t', 'gcr.io/$PROJECT_ID/api:$COMMIT_SHA', '.']
+    dir: 'apps/backend'
+  
+  # Push to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/api:$COMMIT_SHA']
+  
+  # Deploy to Cloud Run
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'voicelibri-api'
+      - '--image=gcr.io/$PROJECT_ID/api:$COMMIT_SHA'
+      - '--region=europe-west1'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+
+timeout: '1200s'
+```
+
+**At Scale (1000+ Users):**
+
+| Service | Configuration | Est. Monthly Cost |
+|---------|---------------|-------------------|
+| **Cloud Run** | 2 vCPU, 2GB, scale 0-50 | €100-200 |
+| **Cloud SQL** | db-g1-small, 50GB | €50-80 |
+| **Cloud CDN** | 100GB bandwidth | €30-50 |
+| **Cloud Tasks** | 10M requests | €10 |
+| **Firebase Auth** | 100k MAU | €0-25 |
+| **Cloud Monitoring** | Full stack | €20-50 |
+| **Total Scaled** | | **~€210-415/month** |
+
 ---
 
 ## 8. Design System - Premium UI/UX Standards
 
 > **Goal:** App Store-featured quality design that builds instant user trust  
-> **Inspiration:** Spotify, Audible, Apple Music, Linear, Raycast  
+> **Inspiration:** Spotify, Audible, Apple Music, Linear, Raycast, **TortugaPower/BookPlayer**  
 > **Principle:** Dark-first, glass morphism accents, buttery animations
 
 ### 8.1 Design Philosophy

@@ -917,77 +917,171 @@ export async function generateChapterAudio(
 }
 ```
 
-### 10.4 Storage Client (Cloudflare R2)
+### 10.4 Audio Streaming (Local Storage Model)
+
+> **⚠️ ARCHITECTURE CHANGE:** Audio is stored LOCALLY on client devices only (MVP).
+> No cloud storage for audio files. Server streams generated audio directly to client.
 
 ```typescript
-// services/storageClient.ts
+// services/audioStreamService.ts
 
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-
-const s3Client = new S3Client({
-  region: 'auto',
-  endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-  credentials: {
-    accessKeyId: process.env.R2_ACCESS_KEY_ID!,
-    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
-  },
-});
-
-const BUCKET = process.env.R2_BUCKET_NAME!;
+import { Response } from 'express';
 
 /**
- * Upload audio file to R2
+ * Stream audio chunks directly to client during generation
+ * Client saves to local sandboxed storage
+ * 
+ * MVP Architecture:
+ * - Audio generated on-demand by backend
+ * - Streamed directly to client via SSE or chunked transfer
+ * - Client saves to sandboxed Documents directory
+ * - No server-side audio storage (no R2/S3/GCS)
  */
-export async function uploadAudio(
-  key: string,
-  buffer: Buffer,
-  contentType: string = 'audio/mpeg'
-): Promise<string> {
-  await s3Client.send(new PutObjectCommand({
-    Bucket: BUCKET,
-    Key: key,
-    Body: buffer,
-    ContentType: contentType,
-  }));
-  
-  return key;
+
+interface AudioChunk {
+  chapterNumber: number;
+  chunkIndex: number;
+  totalChunks: number;
+  audioBase64: string;  // Base64-encoded MP3 chunk
+  durationMs: number;
 }
 
 /**
- * Generate signed URL for audio playback (24h expiry)
+ * Stream audio generation progress to client
+ * Uses Server-Sent Events for real-time updates
  */
-export async function getSignedAudioUrl(key: string): Promise<string> {
-  const command = new GetObjectCommand({
-    Bucket: BUCKET,
-    Key: key,
+export async function streamAudioToClient(
+  res: Response,
+  bookId: string,
+  chapterNumber: number,
+  chunks: string[],
+  onChunkGenerated: (chunk: AudioChunk) => Promise<Buffer>
+): Promise<void> {
+  // Set up SSE headers
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  
+  for (let i = 0; i < chunks.length; i++) {
+    const audioBuffer = await onChunkGenerated({
+      chapterNumber,
+      chunkIndex: i,
+      totalChunks: chunks.length,
+      audioBase64: '',  // Will be filled by generator
+      durationMs: 0
+    });
+    
+    // Send chunk to client
+    const chunkData: AudioChunk = {
+      chapterNumber,
+      chunkIndex: i,
+      totalChunks: chunks.length,
+      audioBase64: audioBuffer.toString('base64'),
+      durationMs: estimateAudioDuration(audioBuffer)
+    };
+    
+    res.write(`data: ${JSON.stringify(chunkData)}\n\n`);
+  }
+  
+  // Signal completion
+  res.write(`data: ${JSON.stringify({ type: 'complete', chapterNumber })}\n\n`);
+  res.end();
+}
+
+/**
+ * Estimate audio duration from buffer size
+ * Assumes 128kbps MP3 encoding
+ */
+function estimateAudioDuration(buffer: Buffer): number {
+  const bitrate = 128000; // 128 kbps
+  const bytes = buffer.length;
+  return Math.round((bytes * 8 / bitrate) * 1000); // Duration in ms
+}
+
+/**
+ * Generate signed temporary URL for audio download
+ * Used for resumable downloads if streaming fails
+ * Audio is cached temporarily on server (1 hour) then deleted
+ */
+export async function createTemporaryDownloadUrl(
+  bookId: string,
+  chapterNumber: number
+): Promise<string> {
+  const token = crypto.randomUUID();
+  const expiresAt = Date.now() + 3600000; // 1 hour
+  
+  // Store in memory/Redis with auto-expiry
+  // Client can use this URL to resume failed downloads
+  return `/api/v1/audio/download/${bookId}/${chapterNumber}?token=${token}`;
+}
+```
+
+**Client-Side Storage (React Native):**
+
+```typescript
+// services/localAudioStorage.ts (client-side)
+
+import * as FileSystem from 'expo-file-system';
+
+const AUDIO_BASE_DIR = FileSystem.documentDirectory + 'audiobooks/';
+
+/**
+ * Save audio chunk to local sandboxed storage
+ * NOT visible in iOS Files app or Android file managers
+ */
+export async function saveAudioChunk(
+  bookId: string,
+  chapterNumber: number,
+  audioBase64: string
+): Promise<string> {
+  const dirPath = `${AUDIO_BASE_DIR}${bookId}/`;
+  const filePath = `${dirPath}chapter-${chapterNumber.toString().padStart(3, '0')}.mp3`;
+  
+  // Ensure directory exists
+  await FileSystem.makeDirectoryAsync(dirPath, { intermediates: true });
+  
+  // Write audio file
+  await FileSystem.writeAsStringAsync(filePath, audioBase64, {
+    encoding: FileSystem.EncodingType.Base64
   });
   
-  return getSignedUrl(s3Client, command, { expiresIn: 86400 }); // 24 hours
+  return filePath;
 }
 
 /**
- * Delete audio file
+ * Get local path for chapter audio
  */
-export async function deleteAudio(key: string): Promise<void> {
-  await s3Client.send(new DeleteObjectCommand({
-    Bucket: BUCKET,
-    Key: key,
-  }));
+export function getLocalAudioPath(bookId: string, chapterNumber: number): string {
+  return `${AUDIO_BASE_DIR}${bookId}/chapter-${chapterNumber.toString().padStart(3, '0')}.mp3`;
 }
 
 /**
- * Generate storage key for chapter audio
+ * Check if chapter audio exists locally
  */
-export function getChapterKey(bookId: string, chapterNumber: number): string {
-  return `books/${bookId}/chapters/${chapterNumber.toString().padStart(3, '0')}.mp3`;
+export async function hasLocalAudio(bookId: string, chapterNumber: number): Promise<boolean> {
+  const path = getLocalAudioPath(bookId, chapterNumber);
+  const info = await FileSystem.getInfoAsync(path);
+  return info.exists;
 }
 
 /**
- * Generate storage key for cover image
+ * Delete all audio for a book
  */
-export function getCoverKey(bookId: string): string {
-  return `books/${bookId}/cover.jpg`;
+export async function deleteBookAudio(bookId: string): Promise<void> {
+  const dirPath = `${AUDIO_BASE_DIR}${bookId}/`;
+  await FileSystem.deleteAsync(dirPath, { idempotent: true });
+}
+
+/**
+ * Get total storage used by audiobooks
+ */
+export async function getAudioStorageSize(): Promise<number> {
+  const info = await FileSystem.getInfoAsync(AUDIO_BASE_DIR);
+  if (!info.exists) return 0;
+  
+  // Recursively calculate directory size
+  // Implementation depends on file system helper
+  return calculateDirectorySize(AUDIO_BASE_DIR);
 }
 ```
 

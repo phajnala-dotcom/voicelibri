@@ -97,7 +97,7 @@ cd voicelibri-app
 # Install core dependencies
 npx expo install expo-router
 
-# Storage
+# Storage (local sandboxed - NOT visible in Files app)
 npx expo install react-native-mmkv @nozbe/watermelondb
 
 # State Management
@@ -110,8 +110,8 @@ npx expo install react-native-reanimated react-native-gesture-handler
 # Audio (requires development build)
 npm install react-native-audio-pro
 
-# Auth
-npm install @supabase/supabase-js
+# Auth (Firebase)
+npm install @react-native-firebase/app @react-native-firebase/auth
 
 # Payments
 npm install react-native-purchases

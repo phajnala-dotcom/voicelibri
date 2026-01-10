@@ -16,12 +16,13 @@
 | **Languages** | TypeScript strict mode only |
 | **Styling** | Tailwind (PWA) / NativeWind (React Native) |
 | **State** | Zustand (UI) + TanStack Query (server) |
-| **Backend** | Express/Hono + TypeScript |
-| **Database** | Supabase (Postgres) |
-| **Storage** | Cloudflare R2 (audio files) |
+| **Backend** | Express/Hono + TypeScript on **Google Cloud Run** |
+| **Database** | **Google Cloud SQL** (PostgreSQL) |
+| **Storage** | **Local-only (sandboxed)** - no cloud storage for audio |
 | **TTS Engine** | Google Gemini TTS (multi-voice) |
 | **Payments** | RevenueCat → App Store IAP + Google Play Billing |
-| **Auth** | Supabase Auth |
+| **Auth** | **Firebase Auth** |
+| **UI Reference** | TortugaPower/BookPlayer (Swift → TypeScript patterns) |
 
 ---
 
@@ -97,15 +98,37 @@
 
 **NOT using Redux** - Overkill for this app. Zustand provides same benefits with 90% less code.
 
-### 2.3 Storage Architecture
+### 2.3 Storage Architecture (Local-Only MVP)
 
-| Data Type | Storage | Sync Strategy |
-|-----------|---------|---------------|
-| Auth tokens | SecureStore | Never sync (device-local) |
-| User preferences | MMKV | Sync on login |
-| Book metadata | WatermelonDB | Offline-first with server sync |
-| Audio files | File system | Download on demand |
-| Playback position | MMKV + API | Sync every 5s while playing |
+> **⚠️ IMPORTANT:** Audio files are stored LOCALLY on device only (MVP). No cloud sync for audio.
+
+| Data Type | Storage | Sync Strategy | Location |
+|-----------|---------|---------------|----------|
+| Auth tokens | SecureStore | Never sync (device-local) | Keychain/Keystore |
+| User preferences | MMKV | Sync on login | App sandbox |
+| Book metadata | WatermelonDB | Offline-first with server sync | App sandbox |
+| **Audio files** | **File system** | **NO sync (local only)** | **App sandbox (sandboxed)** |
+| Playback position | MMKV + API | Sync every 5s while playing | App sandbox + server |
+
+**🔒 Sandboxed Audio Storage:**
+- Audio files are stored in app's private Documents directory
+- **NOT visible in iOS Files app or Android file managers**
+- Similar to Audible, Spotify, Podcasts apps
+- Users must re-generate if switching devices (MVP limitation)
+- Cloud Sync planned for Phase 3+
+
+```typescript
+// Audio files stored in private app sandbox
+// iOS: App Container/Documents/audiobooks/
+// Android: data/data/com.voicelibri/files/audiobooks/
+
+import * as FileSystem from 'expo-file-system';
+
+// ✅ CORRECT - Private sandboxed storage
+const AUDIO_BASE_DIR = FileSystem.documentDirectory + 'audiobooks/';
+
+// Structure: audiobooks/{book-id}/chapter-001.mp3
+```
 
 ### 2.4 Audio Player Decision
 
@@ -158,6 +181,27 @@ const { customerInfo } = await Purchases.purchasePackage(standardPackage);
 | `hours_15` | Consumable | $7.50 | 15 hrs |
 | `hours_30` | Consumable | $15.00 | 30 hrs |
 
+### 2.6 Cloud Infrastructure (Google Cloud Platform)
+
+> **Decision:** Use Google Cloud for ALL backend infrastructure (single ecosystem).
+
+**Why Google Cloud:**
+- Same provider as Gemini TTS API
+- Auto-scaling with Cloud Run (scale to zero)
+- Competitive pricing for our workload
+- Single console/billing for simplicity
+
+**Infrastructure Stack:**
+
+| Service | Purpose | MVP Cost (100 users) |
+|---------|---------|---------------------|
+| Cloud Run | Backend API (auto-scale 0-10) | €15-30/mo |
+| Cloud SQL | PostgreSQL (db-f1-micro) | €10-15/mo |
+| Cloud CDN | Static assets/bandwidth | €5-10/mo |
+| Cloud Tasks | Job queue for generation | €0 (free tier) |
+| Firebase Auth | User authentication | €0 (free tier) |
+| **Total MVP** | | **~€30-55/mo** |
+
 ---
 
 ## 3. Architecture Overview
@@ -181,22 +225,26 @@ const { customerInfo } = await Purchases.purchasePackage(standardPackage);
 ├────────────────────────────┼────────────────────────────────────────┤
 │                            ▼                                         │
 │   ┌─────────────────────────────────────────────────────────────┐   │
-│   │                     API GATEWAY                              │   │
-│   │              (Express/Hono + TypeScript)                     │   │
+│   │                  GOOGLE CLOUD PLATFORM                       │   │
 │   │                                                              │   │
-│   │  ┌───────────┐  ┌───────────┐  ┌───────────┐               │   │
-│   │  │   Auth    │  │  Books    │  │ Generation│               │   │
-│   │  │  Routes   │  │  Routes   │  │   Routes  │               │   │
-│   │  └───────────┘  └───────────┘  └───────────┘               │   │
+│   │  ┌───────────────────────────────────────────────────────┐  │   │
+│   │  │                 Cloud Run (Auto-scaling)              │  │   │
+│   │  │              Express/Hono + TypeScript API            │  │   │
+│   │  │                                                        │  │   │
+│   │  │  ┌───────────┐  ┌───────────┐  ┌───────────┐         │  │   │
+│   │  │  │   Auth    │  │  Books    │  │ Generation│         │  │   │
+│   │  │  │  Routes   │  │  Routes   │  │   Routes  │         │  │   │
+│   │  │  └───────────┘  └───────────┘  └───────────┘         │  │   │
+│   │  └───────────────────────────────────────────────────────┘  │   │
+│   │                            │                                 │   │
+│   │          ┌─────────────────┼─────────────────┐              │   │
+│   │          ▼                 ▼                 ▼               │   │
+│   │   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐      │   │
+│   │   │  Cloud SQL  │   │ Firebase    │   │   Gemini    │      │   │
+│   │   │ (PostgreSQL)│   │    Auth     │   │   API       │      │   │
+│   │   └─────────────┘   └─────────────┘   │ (TTS+LLM)   │      │   │
+│   │                                        └─────────────┘      │   │
 │   └─────────────────────────────────────────────────────────────┘   │
-│                            │                                         │
-│          ┌─────────────────┼─────────────────┐                      │
-│          ▼                 ▼                 ▼                       │
-│   ┌─────────────┐   ┌─────────────┐   ┌─────────────┐              │
-│   │  Supabase   │   │ Cloudflare  │   │   Gemini    │              │
-│   │  (Postgres  │   │     R2      │   │    TTS      │              │
-│   │   + Auth)   │   │  (Storage)  │   │   (Voice)   │              │
-│   └─────────────┘   └─────────────┘   └─────────────┘              │
 │                                                                      │
 ├─────────────────────────────────────────────────────────────────────┤
 │                      EXTERNAL SERVICES                               │
@@ -238,8 +286,8 @@ User uploads ebook
          │
          ▼
 ┌───────────────────┐
-│  5. Store audio   │  Upload to R2
-│     + metadata    │  Create signed URLs
+│  5. Stream audio  │  Stream directly to client
+│     + save local  │  Store in sandboxed Documents
 └────────┬──────────┘
          │
          ▼
@@ -313,12 +361,14 @@ apps/pwa/
     │   ├── useLibrary.ts
     │   ├── useGeneration.ts
     │   ├── useLocalizedBook.ts
+    │   ├── useReferral.ts     # Referral program hook
     │   └── useSubscription.ts
     │
     ├── services/
     │   ├── api.ts             # API client (axios/fetch)
-    │   ├── auth.ts            # Supabase auth wrapper
+    │   ├── auth.ts            # Firebase auth wrapper
     │   ├── gutendex.ts        # Gutenberg API
+    │   ├── referral.ts        # Referral link generation & tracking
     │   └── titleLocalization.ts
     │
     ├── stores/
@@ -422,6 +472,7 @@ apps/backend/
 │   │   ├── generation.ts
 │   │   ├── playback.ts
 │   │   ├── subscription.ts
+│   │   ├── referral.ts          # Referral program routes
 │   │   └── classics.ts          # Gutenberg processing
 │   │
 │   ├── services/
@@ -431,7 +482,7 @@ apps/backend/
 │   │   ├── ttsClient.ts         # Gemini TTS
 │   │   ├── voiceAssigner.ts     # Voice assignment
 │   │   ├── gutenbergProcessor.ts # PG header stripper
-│   │   └── storageClient.ts     # R2 operations
+│   │   └── referralService.ts   # Referral tracking & rewards
 │   │
 │   ├── parsers/
 │   │   ├── txtParser.ts
@@ -442,7 +493,7 @@ apps/backend/
 │   │   └── docxParser.ts
 │   │
 │   ├── middleware/
-│   │   ├── auth.ts              # JWT validation
+│   │   ├── auth.ts              # Firebase Auth validation
 │   │   ├── rateLimit.ts
 │   │   └── errorHandler.ts
 │   │
@@ -668,13 +719,14 @@ interface GenerationEstimate {
 ### 6.1 PWA (`.env`)
 
 ```bash
-# API
+# API (Google Cloud Run)
 VITE_API_URL=https://api.voicelibri.app
 VITE_API_VERSION=v1
 
-# Supabase
-VITE_SUPABASE_URL=https://xxx.supabase.co
-VITE_SUPABASE_ANON_KEY=eyJ...
+# Firebase Auth
+VITE_FIREBASE_API_KEY=xxx
+VITE_FIREBASE_AUTH_DOMAIN=voicelibri.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=voicelibri
 
 # Analytics (optional)
 VITE_SENTRY_DSN=https://xxx@sentry.io/xxx
@@ -688,8 +740,9 @@ export default {
   expo: {
     extra: {
       apiUrl: process.env.API_URL,
-      supabaseUrl: process.env.SUPABASE_URL,
-      supabaseAnonKey: process.env.SUPABASE_ANON_KEY,
+      firebaseApiKey: process.env.FIREBASE_API_KEY,
+      firebaseAuthDomain: process.env.FIREBASE_AUTH_DOMAIN,
+      firebaseProjectId: process.env.FIREBASE_PROJECT_ID,
       revenueCatIosKey: process.env.REVENUECAT_IOS_KEY,
       revenueCatAndroidKey: process.env.REVENUECAT_ANDROID_KEY,
       sentryDsn: process.env.SENTRY_DSN,
@@ -701,19 +754,16 @@ export default {
 ### 6.3 Backend (`.env`)
 
 ```bash
-# Server
+# Server (Google Cloud Run)
 PORT=3001
 NODE_ENV=production
+GCP_PROJECT_ID=voicelibri
 
-# Database
-SUPABASE_URL=https://xxx.supabase.co
-SUPABASE_SERVICE_KEY=eyJ...
+# Database (Google Cloud SQL)
+DATABASE_URL=postgresql://user:pass@/voicelibri?host=/cloudsql/project:region:instance
 
-# Storage
-R2_ACCOUNT_ID=xxx
-R2_ACCESS_KEY_ID=xxx
-R2_SECRET_ACCESS_KEY=xxx
-R2_BUCKET_NAME=voicelibri-audio
+# Firebase Admin (Auth verification)
+FIREBASE_SERVICE_ACCOUNT=xxx  # or use Application Default Credentials
 
 # TTS
 GEMINI_API_KEY=xxx
@@ -724,6 +774,10 @@ REVENUECAT_WEBHOOK_SECRET=xxx
 # Security
 JWT_SECRET=xxx
 CORS_ORIGINS=https://voicelibri.app,https://app.voicelibri.app
+
+# Referral Program
+REFERRAL_REWARD_HOURS=20  # Hours credited on successful referral
+REFERRAL_ATTRIBUTION_DAYS=30  # Attribution window
 ```
 
 ---
