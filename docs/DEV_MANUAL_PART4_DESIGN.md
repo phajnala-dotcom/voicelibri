@@ -20,6 +20,78 @@ VoiceLibri uses a **premium dark mode aesthetic** with carefully crafted gradien
 
 ---
 
+## 1.5 Design Reference: TortugaPower/BookPlayer
+
+> **PRIMARY UI/UX REFERENCE:** https://github.com/TortugaPower/BookPlayer
+
+BookPlayer is an open-source iOS audiobook player with excellent UX patterns. Use it as the **primary reference** for VoiceLibri's audiobook player features.
+
+### Key Patterns to Adopt:
+
+| Feature | BookPlayer Implementation | VoiceLibri Adaptation |
+|---------|--------------------------|----------------------|
+| **Library Grid** | 2-column grid with cover art, clean cards | Same pattern, add glassmorphism effect |
+| **Player Screen** | Large cover art, centered controls, minimalist | Same layout with gradient background |
+| **Sleep Timer** | Bottom sheet with preset options + custom | Adopt presets: 5, 10, 15, 30, 45, 60 min + chapter end |
+| **Playback Speed** | 0.5x to 2.0x with 0.05x increments | Same range, add speed presets |
+| **Chapter Navigation** | List view with duration, swipe actions | Same pattern, add search |
+| **Mini Player** | Bottom bar with play/pause, tap to expand | Same, add progress indicator |
+| **Bookmarks** | Long-press to create, list view to manage | Same, add note capability |
+
+### Design Improvements Over BookPlayer:
+
+| BookPlayer | VoiceLibri Enhancement |
+|------------|----------------------|
+| Flat design | Premium glassmorphism with depth |
+| Basic dark mode | Rich gradient accents (violet→cyan) |
+| iOS native icons | Custom animated icons |
+| Static transitions | Fluid spring animations |
+| Basic progress bar | Waveform visualization option |
+
+### Feature Parity Checklist:
+
+```
+[MVP] Features to implement:
+✓ Library grid with covers
+✓ Full-screen player
+✓ Sleep timer with presets
+✓ Playback speed control
+✓ Chapter list navigation
+✓ Mini player bar
+✓ Continue playing position
+
+[Phase 2] Advanced features:
+- Bookmarks with notes
+- Playlists/collections
+- Import from Files app
+- CarPlay/Android Auto
+```
+
+### Implementation Approach:
+
+BookPlayer is written in Swift. **Do NOT port code directly.** Instead:
+
+1. **Study UX flows** - How does navigation feel? What gestures are used?
+2. **Analyze layouts** - Spacing, hierarchy, component sizes
+3. **Note interactions** - Swipe actions, long-press menus, haptic feedback
+4. **Adapt for TypeScript** - Implement same concepts in React/React Native
+
+```typescript
+// Example: Sleep timer presets inspired by BookPlayer
+const SLEEP_TIMER_PRESETS = [
+  { label: '5 minutes', minutes: 5 },
+  { label: '10 minutes', minutes: 10 },
+  { label: '15 minutes', minutes: 15 },
+  { label: '30 minutes', minutes: 30 },
+  { label: '45 minutes', minutes: 45 },
+  { label: '1 hour', minutes: 60 },
+  { label: 'End of chapter', type: 'chapter-end' },
+  { label: 'Custom', type: 'custom' },
+];
+```
+
+---
+
 ## 2. Color System
 
 ### 2.1 Foundation Colors

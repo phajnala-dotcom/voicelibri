@@ -1,0 +1,767 @@
+/**
+ * VoiceLibri - Neumorphism UI Design System
+ * Based exclusively on Themesberg Neumorphism UI Kit
+ * https://github.com/themesberg/neumorphism-ui-bootstrap
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@300;400;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================
+   CSS CUSTOM PROPERTIES (Design Tokens)
+   Directly from neumorphism/_variables.scss
+   ============================================ */
+
+:root {
+  /* === NEUMORPHISM COLOR PALETTE === */
+  --neu-white: #ECF0F3;
+  --neu-black: #262833;
+  
+  /* Gray scale */
+  --neu-gray-100: #f3f7fa;
+  --neu-gray-200: #fafbfe;
+  --neu-gray-300: #e6e7ee;
+  --neu-gray-400: #D1D9E6;
+  --neu-gray-500: #b1bcce;
+  --neu-gray-600: #93a5be;
+  --neu-gray-700: #66799e;
+  --neu-gray-800: #525480;
+  --neu-gray-900: #44476A;
+  --neu-dark: #31344b;
+  
+  /* Theme colors */
+  --neu-primary: #e6e7ee;
+  --neu-secondary: #2D4CC8;
+  --neu-success: #18634B;
+  --neu-info: #0056B3;
+  --neu-warning: #F0B400;
+  --neu-danger: #A91E2C;
+  
+  /* Body */
+  --neu-body-bg: #e6e7ee;
+  --neu-body-color: #44476A;
+  
+  /* === NEUMORPHISM SHADOWS (THE KEY EFFECT) === */
+  --neu-shadow-inset: inset 2px 2px 5px #b8b9be, inset -3px -3px 7px #FFFFFF;
+  --neu-shadow-soft: 6px 6px 12px #b8b9be, -6px -6px 12px #ffffff;
+  --neu-shadow-light: 3px 3px 6px #b8b9be, -3px -3px 6px #ffffff;
+  
+  /* === TYPOGRAPHY === */
+  --neu-font-family: 'Nunito Sans', sans-serif;
+  --neu-font-size-base: 1rem;
+  --neu-font-size-sm: 0.875rem;
+  --neu-font-size-xs: 0.75rem;
+  --neu-font-size-lg: 1.25rem;
+  --neu-font-size-xl: 1.5rem;
+  --neu-font-weight-light: 300;
+  --neu-font-weight-normal: 400;
+  --neu-font-weight-bold: 600;
+  
+  /* === SPACING === */
+  --neu-spacer: 1rem;
+  --neu-spacer-sm: 0.5rem;
+  --neu-spacer-lg: 1.5rem;
+  --neu-spacer-xl: 2rem;
+  
+  /* === BORDER RADIUS === */
+  --neu-radius: 0.55rem;
+  --neu-radius-sm: 0.3rem;
+  --neu-radius-lg: 0.95rem;
+  --neu-radius-pill: 2rem;
+  --neu-radius-circle: 50%;
+  
+  /* === TRANSITIONS === */
+  --neu-transition: all 0.2s ease;
+  
+  /* === LAYOUT === */
+  --nav-height: 72px;
+  --mini-player-height: 80px;
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+/* === DARK MODE === */
+[data-theme="dark"] {
+  --neu-body-bg: #31344b;
+  --neu-body-color: #e6e7ee;
+  --neu-primary: #31344b;
+  --neu-gray-300: #3b3e59;
+  --neu-gray-400: #4a4d6a;
+  --neu-gray-500: #5a5d7a;
+  --neu-shadow-inset: inset 2px 2px 5px #272a3d, inset -3px -3px 7px #3b3e59;
+  --neu-shadow-soft: 6px 6px 12px #272a3d, -6px -6px 12px #3b3e59;
+  --neu-shadow-light: 3px 3px 6px #272a3d, -3px -3px 6px #3b3e59;
+}
+
+/* ============================================
+   BASE STYLES
+   ============================================ */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  margin: 0;
+  font-family: var(--neu-font-family);
+  font-size: var(--neu-font-size-base);
+  font-weight: var(--neu-font-weight-light);
+  line-height: 1.6;
+  color: var(--neu-body-color);
+  background-color: var(--neu-body-bg);
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--neu-font-family);
+  font-weight: var(--neu-font-weight-bold);
+  color: var(--neu-dark);
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+  line-height: 1.3;
+}
+
+[data-theme="dark"] h1,
+[data-theme="dark"] h2,
+[data-theme="dark"] h3,
+[data-theme="dark"] h4,
+[data-theme="dark"] h5,
+[data-theme="dark"] h6 {
+  color: var(--neu-white);
+}
+
+p {
+  margin-top: 0;
+  margin-bottom: 1rem;
+}
+
+a {
+  color: var(--neu-dark);
+  text-decoration: none;
+  transition: var(--neu-transition);
+}
+
+a:hover {
+  color: var(--neu-black);
+}
+
+/* ============================================
+   NEUMORPHISM COMPONENT CLASSES
+   ============================================ */
+
+/* === RAISED SURFACE (default neumorphism) === */
+.neu-raised {
+  background-color: var(--neu-primary);
+  box-shadow: var(--neu-shadow-light);
+  border-radius: var(--neu-radius);
+  transition: var(--neu-transition);
+}
+
+.neu-raised:hover {
+  box-shadow: var(--neu-shadow-soft);
+}
+
+/* === PRESSED/INSET SURFACE === */
+.neu-pressed {
+  background-color: var(--neu-primary);
+  box-shadow: var(--neu-shadow-inset);
+  border-radius: var(--neu-radius);
+}
+
+/* === FLAT SURFACE === */
+.neu-flat {
+  background-color: var(--neu-primary);
+  box-shadow: none;
+  border-radius: var(--neu-radius);
+}
+
+/* ============================================
+   BUTTON COMPONENT
+   ============================================ */
+
+.neu-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.95rem;
+  font-family: var(--neu-font-family);
+  font-size: var(--neu-font-size-base);
+  font-weight: var(--neu-font-weight-normal);
+  line-height: 1.5;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+  color: var(--neu-body-color);
+  background-color: var(--neu-primary);
+  border: 1px solid var(--neu-gray-400);
+  border-radius: var(--neu-radius);
+  box-shadow: var(--neu-shadow-light);
+  cursor: pointer;
+  transition: var(--neu-transition);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.neu-btn:hover,
+.neu-btn:focus {
+  box-shadow: var(--neu-shadow-inset);
+  outline: none;
+}
+
+.neu-btn:active {
+  box-shadow: var(--neu-shadow-inset);
+  transform: translateY(1px);
+}
+
+.neu-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  box-shadow: var(--neu-shadow-light);
+}
+
+/* Button variants */
+.neu-btn-primary {
+  color: var(--neu-secondary);
+}
+
+.neu-btn-secondary {
+  background-color: var(--neu-secondary);
+  color: var(--neu-white);
+  border-color: var(--neu-secondary);
+}
+
+.neu-btn-success {
+  color: var(--neu-success);
+}
+
+.neu-btn-danger {
+  color: var(--neu-danger);
+}
+
+.neu-btn-warning {
+  color: var(--neu-warning);
+}
+
+/* Button sizes */
+.neu-btn-sm {
+  padding: 0.45rem 0.5rem;
+  font-size: var(--neu-font-size-sm);
+}
+
+.neu-btn-lg {
+  padding: 0.875rem 1rem;
+  font-size: var(--neu-font-size-lg);
+}
+
+/* Pill button */
+.neu-btn-pill {
+  border-radius: var(--neu-radius-pill);
+}
+
+/* Icon-only button */
+.neu-btn-icon {
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  border-radius: var(--neu-radius-circle);
+}
+
+.neu-btn-icon-sm {
+  width: 2.25rem;
+  height: 2.25rem;
+}
+
+.neu-btn-icon-lg {
+  width: 3.5rem;
+  height: 3.5rem;
+}
+
+/* ============================================
+   CARD COMPONENT
+   ============================================ */
+
+.neu-card {
+  background-color: var(--neu-primary);
+  border: 1px solid transparent;
+  border-radius: var(--neu-radius);
+  box-shadow: var(--neu-shadow-light);
+  overflow: hidden;
+  transition: var(--neu-transition);
+}
+
+.neu-card:hover {
+  box-shadow: var(--neu-shadow-soft);
+}
+
+.neu-card-body {
+  padding: 1.25rem 1.5rem;
+}
+
+.neu-card-header {
+  padding: 1rem 1.5rem;
+  border-bottom: 1px solid var(--neu-gray-400);
+}
+
+.neu-card-footer {
+  padding: 1rem 1.5rem;
+  border-top: 1px solid var(--neu-gray-400);
+}
+
+/* ============================================
+   INPUT COMPONENT
+   ============================================ */
+
+.neu-input {
+  display: block;
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  font-family: var(--neu-font-family);
+  font-size: var(--neu-font-size-base);
+  font-weight: var(--neu-font-weight-light);
+  line-height: 1.5;
+  color: var(--neu-body-color);
+  background-color: var(--neu-primary);
+  border: 1px solid var(--neu-gray-400);
+  border-radius: var(--neu-radius);
+  box-shadow: var(--neu-shadow-inset);
+  transition: var(--neu-transition);
+}
+
+.neu-input:focus {
+  outline: none;
+  border-color: var(--neu-gray-400);
+}
+
+.neu-input::placeholder {
+  color: var(--neu-gray-700);
+}
+
+/* ============================================
+   PROGRESS BAR
+   ============================================ */
+
+.neu-progress {
+  height: 0.7rem;
+  background-color: var(--neu-primary);
+  border-radius: var(--neu-radius-pill);
+  box-shadow: var(--neu-shadow-inset);
+  overflow: hidden;
+}
+
+.neu-progress-bar {
+  height: 100%;
+  background-color: var(--neu-secondary);
+  border-radius: var(--neu-radius-pill);
+  transition: width 0.3s ease;
+}
+
+.neu-progress-lg {
+  height: 0.9rem;
+}
+
+/* ============================================
+   BADGE
+   ============================================ */
+
+.neu-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.275rem 0.425rem;
+  font-size: 0.7rem;
+  font-weight: var(--neu-font-weight-bold);
+  line-height: 1;
+  color: var(--neu-body-color);
+  background-color: transparent;
+  border-radius: var(--neu-radius);
+  box-shadow: var(--neu-shadow-inset);
+}
+
+.neu-badge-pill {
+  border-radius: 10rem;
+  padding-left: 0.875em;
+  padding-right: 0.875em;
+}
+
+.neu-badge-primary { color: var(--neu-secondary); }
+.neu-badge-success { color: var(--neu-success); }
+.neu-badge-warning { color: var(--neu-warning); }
+.neu-badge-danger { color: var(--neu-danger); }
+
+/* ============================================
+   NAV / TAB PILLS
+   ============================================ */
+
+.neu-nav {
+  display: flex;
+  flex-wrap: wrap;
+  padding-left: 0;
+  margin-bottom: 0;
+  list-style: none;
+}
+
+.neu-nav-pills {
+  gap: 0.5rem;
+}
+
+.neu-nav-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem 0.85rem;
+  font-size: var(--neu-font-size-sm);
+  font-weight: var(--neu-font-weight-normal);
+  color: var(--neu-body-color);
+  background-color: var(--neu-primary);
+  border: 1px solid var(--neu-gray-400);
+  border-radius: var(--neu-radius);
+  box-shadow: var(--neu-shadow-light);
+  cursor: pointer;
+  transition: var(--neu-transition);
+  text-decoration: none;
+}
+
+.neu-nav-link:hover,
+.neu-nav-link.active {
+  box-shadow: var(--neu-shadow-inset);
+  color: var(--neu-dark);
+}
+
+/* ============================================
+   LIST GROUP
+   ============================================ */
+
+.neu-list-group {
+  display: flex;
+  flex-direction: column;
+  padding-left: 0;
+  margin-bottom: 0;
+  border-radius: var(--neu-radius);
+}
+
+.neu-list-group-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 1rem;
+  color: var(--neu-gray-900);
+  background-color: transparent;
+  border: 1px solid var(--neu-gray-400);
+  transition: var(--neu-transition);
+}
+
+.neu-list-group-item:first-child {
+  border-top-left-radius: var(--neu-radius);
+  border-top-right-radius: var(--neu-radius);
+}
+
+.neu-list-group-item:last-child {
+  border-bottom-left-radius: var(--neu-radius);
+  border-bottom-right-radius: var(--neu-radius);
+}
+
+.neu-list-group-item:hover {
+  background-color: var(--neu-gray-300);
+  box-shadow: var(--neu-shadow-inset);
+}
+
+.neu-list-group-item.active {
+  background-color: var(--neu-primary);
+  box-shadow: var(--neu-shadow-inset);
+  color: var(--neu-gray-800);
+}
+
+/* ============================================
+   ICON SHAPE
+   ============================================ */
+
+.neu-icon-shape {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 4.5rem;
+  height: 4.5rem;
+  background-color: var(--neu-primary);
+  border-radius: var(--neu-radius-circle);
+  box-shadow: var(--neu-shadow-light);
+}
+
+.neu-icon-shape-sm {
+  width: 2.5rem;
+  height: 2.5rem;
+}
+
+.neu-icon-shape-lg {
+  width: 5.5rem;
+  height: 5.5rem;
+}
+
+.neu-icon-shape-pressed {
+  box-shadow: var(--neu-shadow-inset);
+}
+
+/* ============================================
+   DROPDOWN
+   ============================================ */
+
+.neu-dropdown {
+  position: relative;
+  display: inline-block;
+}
+
+.neu-dropdown-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 1000;
+  display: none;
+  min-width: 10rem;
+  padding: 0.7rem;
+  margin: 0.825rem 0 0;
+  font-size: var(--neu-font-size-sm);
+  color: var(--neu-body-color);
+  background-color: var(--neu-primary);
+  border: 1px solid var(--neu-gray-400);
+  border-radius: var(--neu-radius);
+  box-shadow: var(--neu-shadow-soft);
+}
+
+.neu-dropdown-menu.show {
+  display: block;
+}
+
+.neu-dropdown-item {
+  display: block;
+  width: 100%;
+  padding: 0.5rem 1rem;
+  clear: both;
+  font-weight: var(--neu-font-weight-light);
+  color: var(--neu-body-color);
+  text-align: inherit;
+  background-color: transparent;
+  border: 0;
+  border-radius: var(--neu-radius-sm);
+  cursor: pointer;
+  transition: var(--neu-transition);
+}
+
+.neu-dropdown-item:hover {
+  background-color: var(--neu-primary);
+  box-shadow: var(--neu-shadow-inset);
+  color: var(--neu-dark);
+}
+
+/* ============================================
+   SLIDER / RANGE
+   ============================================ */
+
+.neu-slider {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 5px;
+  background: var(--neu-dark);
+  border-radius: 5px;
+  outline: none;
+}
+
+.neu-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 15px;
+  height: 15px;
+  background: var(--neu-primary);
+  border-radius: 50%;
+  box-shadow: 2px 2px 4px #b8b9be, -2px -2px 4px #ffffff;
+  cursor: pointer;
+  transition: var(--neu-transition);
+}
+
+.neu-slider::-webkit-slider-thumb:hover {
+  box-shadow: var(--neu-shadow-inset);
+}
+
+/* ============================================
+   UTILITY CLASSES
+   ============================================ */
+
+/* Text colors */
+.text-primary { color: var(--neu-body-color) !important; }
+.text-secondary { color: var(--neu-secondary) !important; }
+.text-success { color: var(--neu-success) !important; }
+.text-danger { color: var(--neu-danger) !important; }
+.text-warning { color: var(--neu-warning) !important; }
+.text-muted { color: var(--neu-gray-700) !important; }
+.text-dark { color: var(--neu-dark) !important; }
+.text-light { color: var(--neu-gray-400) !important; }
+
+/* Background colors */
+.bg-primary { background-color: var(--neu-primary) !important; }
+.bg-secondary { background-color: var(--neu-secondary) !important; }
+.bg-body { background-color: var(--neu-body-bg) !important; }
+
+/* Shadow utilities */
+.shadow-soft { box-shadow: var(--neu-shadow-soft) !important; }
+.shadow-light { box-shadow: var(--neu-shadow-light) !important; }
+.shadow-inset { box-shadow: var(--neu-shadow-inset) !important; }
+.shadow-none { box-shadow: none !important; }
+
+/* Border radius utilities */
+.rounded-neu { border-radius: var(--neu-radius) !important; }
+.rounded-neu-lg { border-radius: var(--neu-radius-lg) !important; }
+.rounded-neu-pill { border-radius: var(--neu-radius-pill) !important; }
+.rounded-circle { border-radius: var(--neu-radius-circle) !important; }
+
+/* Font utilities */
+.font-light { font-weight: var(--neu-font-weight-light) !important; }
+.font-normal { font-weight: var(--neu-font-weight-normal) !important; }
+.font-bold { font-weight: var(--neu-font-weight-bold) !important; }
+
+/* ============================================
+   APP-SPECIFIC STYLES
+   ============================================ */
+
+/* Safe area padding for mobile */
+.pb-safe {
+  padding-bottom: var(--safe-area-bottom);
+}
+
+/* Hide scrollbar but keep functionality */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Glass effect for headers (neumorphism adaptation) */
+.glass-header {
+  background-color: rgba(230, 231, 238, 0.95);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+
+[data-theme="dark"] .glass-header {
+  background-color: rgba(49, 52, 75, 0.95);
+}
+
+/* ============================================
+   PLAYER-SPECIFIC STYLES
+   ============================================ */
+
+.player-progress-track {
+  height: 4px;
+  background-color: var(--neu-primary);
+  border-radius: var(--neu-radius-pill);
+  box-shadow: var(--neu-shadow-inset);
+  cursor: pointer;
+}
+
+.player-progress-fill {
+  height: 100%;
+  background-color: var(--neu-secondary);
+  border-radius: var(--neu-radius-pill);
+  transition: width 0.1s linear;
+}
+
+.player-control-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: var(--neu-primary);
+  border: none;
+  border-radius: var(--neu-radius-circle);
+  box-shadow: var(--neu-shadow-light);
+  cursor: pointer;
+  transition: var(--neu-transition);
+  color: var(--neu-body-color);
+}
+
+.player-control-btn:hover {
+  box-shadow: var(--neu-shadow-soft);
+}
+
+.player-control-btn:active,
+.player-control-btn.active {
+  box-shadow: var(--neu-shadow-inset);
+}
+
+.player-control-btn-primary {
+  width: 4rem;
+  height: 4rem;
+  color: var(--neu-secondary);
+}
+
+.player-control-btn-secondary {
+  width: 3rem;
+  height: 3rem;
+}
+
+.player-control-btn-tertiary {
+  width: 2.5rem;
+  height: 2.5rem;
+}
+
+/* ============================================
+   ANIMATIONS
+   ============================================ */
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { 
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to { 
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.2s ease-out;
+}
+
+.animate-slide-up {
+  animation: slideUp 0.3s ease-out;
+}
+
+.animate-scale-in {
+  animation: scaleIn 0.2s ease-out;
+}
+
+button:focus,
+button:focus-visible {
+  outline: none;
+}

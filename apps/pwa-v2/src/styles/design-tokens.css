@@ -1,0 +1,230 @@
+/**
+ * VoiceLibri Design System
+ * Based exclusively on Neumorphism UI Kit by Themesberg
+ * https://github.com/themesberg/neumorphism-ui-bootstrap
+ * 
+ * DO NOT modify these tokens without consulting the source theme.
+ * All values are directly derived from neumorphism/_variables.scss
+ */
+
+/* ============================================
+   COLOR PALETTE (from _variables.scss)
+   ============================================ */
+
+:root {
+  /* === BASE NEUMORPHISM COLORS === */
+  --color-white: #ECF0F3;
+  --color-black: #262833;
+  
+  /* Shades of Grey (neumorphism palette) */
+  --color-gray-100: #f3f7fa;
+  --color-gray-200: #fafbfe;
+  --color-gray-300: #e6e7ee;  /* Primary neumorphism surface */
+  --color-gray-400: #D1D9E6;
+  --color-gray-500: #b1bcce;
+  --color-gray-600: #93a5be;
+  --color-gray-700: #66799e;
+  --color-gray-800: #525480;
+  --color-gray-900: #44476A;
+  --color-dark: #31344b;
+  
+  /* === THEME COLORS === */
+  --color-default: #262833;
+  --color-primary: #e6e7ee;     /* Main neumorphism surface */
+  --color-secondary: #2D4CC8;   /* Accent blue */
+  --color-tertiary: #e6e7ee;
+  
+  /* Semantic Colors */
+  --color-success: #18634B;
+  --color-info: #0056B3;
+  --color-warning: #F0B400;
+  --color-danger: #A91E2C;
+  
+  /* === BODY & BACKGROUND === */
+  --body-bg: #e6e7ee;           /* Soft neumorphism background */
+  --body-color: #44476A;        /* Default text color */
+  
+  /* === NEUMORPHISM SHADOWS (CRITICAL) === */
+  /* These create the signature soft 3D effect */
+  --shadow-inset: inset 2px 2px 5px #b8b9be, inset -3px -3px 7px #FFFFFF;
+  --shadow-soft: 6px 6px 12px #b8b9be, -6px -6px 12px #ffffff;
+  --shadow-light: 3px 3px 6px #b8b9be, -3px -3px 6px #ffffff;
+  
+  /* Button group specific shadow */
+  --shadow-btn-group: 3px 3px 6px #b8b9be, 0px -3px 6px #ffffff;
+  
+  /* Toast/Card shadows */
+  --shadow-toast: 3px 3px 6px #b8b9be, -3px -3px 6px #ffffff;
+  
+  /* Slider/Range shadow */
+  --shadow-slider: 2px 2px 4px #b8b9be, -2px -2px 4px #ffffff;
+  
+  /* Timeline inset */
+  --shadow-timeline-inset: inset 1px 2px 1px #d2d2d2, inset -3px -3px 7px #eff0f5;
+  
+  /* Checkbox inset */
+  --shadow-checkbox-inset: inset 1px 2px 2px #b8b9be, inset -5px -2px 4px #FFFFFF;
+  
+  /* Dot shadow */
+  --shadow-dot: 2px 1px 5px #b8b9be, -2px -1px 5px #ffffff;
+
+  /* === TYPOGRAPHY === */
+  --font-family-base: 'Nunito Sans', sans-serif;
+  --font-family-headers: 'Nunito Sans', sans-serif;
+  
+  --font-size-base: 1rem;
+  --font-size-xxl: 2rem;
+  --font-size-xl: 1.5rem;
+  --font-size-lg: 1.25rem;
+  --font-size-md: 1rem;
+  --font-size-sm: 0.875rem;
+  --font-size-xs: 0.75rem;
+  
+  --font-weight-light: 300;
+  --font-weight-normal: 400;
+  --font-weight-bold: 600;
+  --font-weight-bolder: 700;
+  
+  --line-height-base: 1.5;
+  --paragraph-line-height: 1.6;
+  
+  /* Heading sizes */
+  --h1-font-size: 2.5rem;
+  --h2-font-size: 2rem;
+  --h3-font-size: 1.75rem;
+  --h4-font-size: 1.5rem;
+  --h5-font-size: 1.25rem;
+  --h6-font-size: 1rem;
+
+  /* === SPACING (from spacers map) === */
+  --spacer: 1rem;
+  --spacer-1: 0.25rem;
+  --spacer-2: 0.5rem;
+  --spacer-3: 1rem;
+  --spacer-4: 1.5rem;
+  --spacer-5: 3rem;
+  --spacer-6: 5rem;
+  --spacer-7: 8rem;
+  --spacer-8: 10rem;
+  
+  /* === BORDER RADIUS === */
+  --border-radius: 0.55rem;
+  --border-radius-sm: 0.1rem;
+  --border-radius-md: 0.2rem;
+  --border-radius-lg: 0.3rem;
+  --border-radius-xl: 0.95rem;
+  --border-radius-pill: 2rem;
+  --border-radius-circle: 50%;
+  
+  /* === BORDER WIDTH === */
+  --border-width: 0.0625rem;
+  --border-width-md: 0.125rem;
+  --border-width-lg: 0.25rem;
+  --border-width-xl: 0.375rem;
+  
+  /* === TRANSITIONS === */
+  --transition-base: all 0.2s ease;
+  --transition-transform: transform 0.2s ease;
+  --transition-fade: opacity 0.15s linear;
+  --transition-collapse: height 0.35s ease;
+  
+  /* === COMPONENT SIZES === */
+  --btn-padding-y: 0.55rem;
+  --btn-padding-x: 0.95rem;
+  --btn-font-size: 1rem;
+  --btn-line-height: 1.5;
+  
+  --btn-padding-y-sm: 0.45rem;
+  --btn-padding-x-sm: 0.5rem;
+  
+  --btn-padding-y-lg: 0.875rem;
+  --btn-padding-x-lg: 1rem;
+  
+  /* Input sizes */
+  --input-padding-y: 0.6rem;
+  --input-padding-x: 0.75rem;
+  --input-font-size: 1rem;
+  --input-line-height: 1.5;
+  --input-border-radius: 0.55rem;
+  
+  /* Card spacing */
+  --card-spacer-y: 1.25rem;
+  --card-spacer-x: 1.5rem;
+  --card-border-radius: 0.55rem;
+  
+  /* Icon sizes */
+  --icon-size-xs: 1.25rem;
+  --icon-size-sm: 1.75rem;
+  --icon-size: 2.25rem;
+  --icon-size-lg: 3rem;
+  --icon-shape-xs: 2.5rem;
+  --icon-shape-sm: 4.5rem;
+  --icon-shape: 5.5rem;
+  --icon-shape-lg: 6.5rem;
+  
+  /* === NAV & LAYOUT === */
+  --nav-height: 64px;
+  --mini-player-height: 72px;
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  
+  /* === DROPDOWN === */
+  --dropdown-padding-y: 0.7rem;
+  --dropdown-padding-x: 0.7rem;
+  --dropdown-border-radius: 0.55rem;
+  
+  /* === PROGRESS === */
+  --progress-height: 0.7rem;
+  --progress-height-lg: 0.9rem;
+  
+  /* === BADGE === */
+  --badge-font-size: 0.7rem;
+  --badge-padding-y: 0.275rem;
+  --badge-padding-x: 0.425rem;
+  --badge-border-radius: 0.55rem;
+  --badge-pill-border-radius: 10rem;
+}
+
+/* ============================================
+   DARK MODE ADJUSTMENTS
+   Neumorphism adapts shadows for dark surfaces
+   ============================================ */
+
+[data-theme="dark"] {
+  /* Dark neumorphism uses inverted shadow logic */
+  --body-bg: #31344b;
+  --body-color: #e6e7ee;
+  --color-primary: #31344b;
+  
+  /* Dark shadows - softer, inverted */
+  --shadow-inset: inset 2px 2px 5px #272a3d, inset -3px -3px 7px #3b3e59;
+  --shadow-soft: 6px 6px 12px #272a3d, -6px -6px 12px #3b3e59;
+  --shadow-light: 3px 3px 6px #272a3d, -3px -3px 6px #3b3e59;
+  --shadow-btn-group: 3px 3px 6px #272a3d, 0px -3px 6px #3b3e59;
+  --shadow-toast: 3px 3px 6px #272a3d, -3px -3px 6px #3b3e59;
+  --shadow-slider: 2px 2px 4px #272a3d, -2px -2px 4px #3b3e59;
+  --shadow-checkbox-inset: inset 1px 2px 2px #272a3d, inset -5px -2px 4px #3b3e59;
+  --shadow-dot: 2px 1px 5px #272a3d, -2px -1px 5px #3b3e59;
+  
+  /* Text colors for dark mode */
+  --color-gray-100: #3b3e59;
+  --color-gray-200: #43466a;
+  --color-gray-300: #4b4e7a;
+  --color-gray-400: #5a5d8a;
+  --color-gray-500: #7a7d9a;
+  --color-gray-600: #9a9dba;
+  --color-gray-700: #babdda;
+  --color-gray-800: #dadcea;
+  --color-gray-900: #e6e7ee;
+}
+
+/* System preference dark mode */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --body-bg: #31344b;
+    --body-color: #e6e7ee;
+    --color-primary: #31344b;
+    --shadow-inset: inset 2px 2px 5px #272a3d, inset -3px -3px 7px #3b3e59;
+    --shadow-soft: 6px 6px 12px #272a3d, -6px -6px 12px #3b3e59;
+    --shadow-light: 3px 3px 6px #272a3d, -3px -3px 6px #3b3e59;
+  }
+}
