@@ -2,14 +2,20 @@
  * VoiceLibri - Neumorphism Library Screen
  * COMPLETELY based on themesberg/neumorphism-ui-bootstrap
  * Main library view for audiobooks
+ * 
+ * BookPlayer-style display logic:
+ * - Click on book cover = open FullPlayer
+ * - Click elsewhere on book row = expand chapters
+ * - Click chapter = open FullPlayer at that chapter
  */
 
-import { useState } from 'react';
-import { Search, Grid3X3, List, SlidersHorizontal, Plus } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Search, List } from 'lucide-react';
 import { useLibraryStore } from '../stores/libraryStore';
 import { usePlayerStore } from '../stores/playerStore';
 import { BookGrid } from '../components/library';
-import type { Book } from '../types';
+import { getAudiobooks, convertToBook } from '../services/api';
+import type { Book, Chapter } from '../types';
 
 // Demo book for testing
 const demoBook: Book = {
@@ -35,24 +41,86 @@ const demoBook: Book = {
  */
 export function LibraryScreen() {
   const { addBook, sortBy, setSortBy, searchQuery, setSearchQuery, getFilteredBooks } = useLibraryStore();
-  const { setCurrentBook, setCurrentChapter, playPause } = usePlayerStore();
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const { setCurrentBook, setCurrentChapter, openFullPlayer, showMiniPlayer } = usePlayerStore();
   const [showSearch, setShowSearch] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+
+  // Load audiobooks from backend on mount
+  useEffect(() => {
+    const loadAudiobooks = async () => {
+      setIsLoading(true);
+      try {
+        const audiobookList = await getAudiobooks();
+        let mostRecentBook: Book | null = null;
+        let mostRecentTime = 0;
+        
+        // Add each audiobook to library
+        audiobookList.forEach(metadata => {
+          const book = convertToBook(metadata);
+          
+          // Only add if not already in library
+          const existing = useLibraryStore.getState().books.find(b => b.id === book.id);
+          if (!existing) {
+            addBook(book);
+          }
+          
+          // Track most recently played book
+          if (metadata.playback && metadata.playback.lastPlayedAt) {
+            const playedTime = new Date(metadata.playback.lastPlayedAt).getTime();
+            if (playedTime > mostRecentTime) {
+              mostRecentTime = playedTime;
+              mostRecentBook = book;
+            }
+          }
+        });
+        
+        // Restore most recently played book to player (if no book currently loaded)
+        const currentBook = usePlayerStore.getState().currentBook;
+        if (!currentBook && mostRecentBook) {
+          const bookToRestore = mostRecentBook as Book;
+          setCurrentBook(bookToRestore);
+          const metadata = audiobookList.find(m => m.title === bookToRestore.title);
+          if (metadata?.playback && bookToRestore.chapters[metadata.playback.currentChapter]) {
+            setCurrentChapter(bookToRestore.chapters[metadata.playback.currentChapter]);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to load audiobooks:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadAudiobooks();
+  }, []); // Run once on mount
 
   const filteredBooks = getFilteredBooks();
 
-  const handleBookPress = (book: Book) => {
+  // Cover click = open FullPlayer with the book
+  const handleCoverPress = (book: Book) => {
     setCurrentBook(book);
     if (book.chapters.length > 0) {
-      setCurrentChapter(book.chapters[0]);
+      // Restore to saved position or start from beginning
+      const chapterIndex = book.progress?.chapterIndex ?? 0;
+      setCurrentChapter(book.chapters[chapterIndex]);
     }
-    playPause();
+    showMiniPlayer();
+    openFullPlayer();
+  };
+
+  // Chapter click = select chapter in MiniPlayer (do NOT open FullPlayer)
+  const handleChapterPress = (book: Book, chapter: Chapter) => {
+    setCurrentBook(book);
+    setCurrentChapter(chapter);
+    showMiniPlayer();
+    // Note: Do NOT call openFullPlayer() - same behavior as row click
   };
 
   const loadDemoBook = () => {
     addBook(demoBook);
     setCurrentBook(demoBook);
     setCurrentChapter(demoBook.chapters[0]);
+    showMiniPlayer();
   };
 
   const sortOptions = [
@@ -67,50 +135,31 @@ export function LibraryScreen() {
       {/* Header - neumorphism card */}
       <header className="sticky top-0 z-30 bg-[var(--neu-body-bg)] shadow-[var(--neu-shadow-light)]">
         <div className="px-4 py-4">
-          <div className="flex items-center justify-between">
-            <h1 className="text-2xl font-bold text-[var(--neu-dark)]">Library</h1>
-            <div className="flex items-center gap-2">
-              {/* Search toggle */}
-              <button
-                onClick={() => setShowSearch(!showSearch)}
-                className={`
-                  neu-btn-icon-sm 
-                  ${showSearch ? 'neu-pressed' : 'neu-raised'}
-                  flex items-center justify-center
-                  text-[var(--neu-gray-700)]
-                  hover:text-[var(--neu-secondary)]
-                  transition-all duration-200
-                `}
-                aria-label="Search"
-              >
-                <Search className="w-4 h-4" />
-              </button>
-              
-              {/* View mode toggle */}
-              <button
-                onClick={() => setViewMode(viewMode === 'grid' ? 'list' : 'grid')}
-                className="
-                  neu-btn-icon-sm neu-raised
-                  flex items-center justify-center
-                  text-[var(--neu-gray-700)]
-                  hover:text-[var(--neu-secondary)]
-                  active:shadow-[var(--neu-shadow-inset)]
-                  transition-all duration-200
-                "
-                aria-label={viewMode === 'grid' ? 'Switch to list view' : 'Switch to grid view'}
-              >
-                {viewMode === 'grid' ? (
-                  <List className="w-4 h-4" />
-                ) : (
-                  <Grid3X3 className="w-4 h-4" />
-                )}
-              </button>
-            </div>
+          <h1 className="text-2xl font-bold text-[var(--neu-dark)]">Library</h1>
+        </div>
+        
+        <div className="px-4 pb-4">
+          <div className="flex items-center gap-2 mb-4">
+            {/* Search toggle */}
+            <button
+              onClick={() => setShowSearch(!showSearch)}
+              className={`
+                neu-btn-icon-sm 
+                ${showSearch ? 'neu-pressed' : 'neu-raised'}
+                flex items-center justify-center
+                text-[var(--neu-gray-700)]
+                hover:text-[var(--neu-secondary)]
+                transition-all duration-200
+              `}
+              aria-label="Search"
+            >
+              <Search className="w-4 h-4" />
+            </button>
           </div>
 
           {/* Search bar - neumorphism input */}
           {showSearch && (
-            <div className="mt-3">
+            <div className="mb-4">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--neu-gray-600)]" />
                 <input
@@ -125,8 +174,7 @@ export function LibraryScreen() {
           )}
 
           {/* Sort pills - neumorphism badges */}
-          <div className="flex items-center gap-2 mt-4 overflow-x-auto pb-2 scrollbar-hide">
-            <SlidersHorizontal className="w-4 h-4 text-[var(--neu-gray-600)] flex-shrink-0" />
+          <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-hide">
             {sortOptions.map((option) => (
               <button
                 key={option.value}
@@ -157,30 +205,13 @@ export function LibraryScreen() {
         ) : (
           <BookGrid
             books={filteredBooks}
-            onBookPress={handleBookPress}
+            onCoverPress={handleCoverPress}
+            onChapterPress={handleChapterPress}
             onLoadDemo={loadDemoBook}
-            isLoading={false}
+            isLoading={isLoading}
           />
         )}
       </div>
-
-      {/* FAB - neumorphism floating action button */}
-      <button
-        className="
-          fixed right-4 z-30
-          w-14 h-14 
-          neu-btn-secondary
-          rounded-full 
-          shadow-[var(--neu-shadow-soft)]
-          flex items-center justify-center
-          active:shadow-[var(--neu-shadow-inset)]
-          transition-all duration-200
-        "
-        style={{ bottom: 'calc(var(--nav-height) + var(--safe-area-bottom) + 1rem)' }}
-        aria-label="Add book"
-      >
-        <Plus className="w-6 h-6 text-white" />
-      </button>
     </div>
   );
 }

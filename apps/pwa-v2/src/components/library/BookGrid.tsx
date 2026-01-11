@@ -1,24 +1,25 @@
 /**
  * VoiceLibri - Neumorphism Book Grid
  * COMPLETELY based on themesberg/neumorphism-ui-bootstrap
- * 2-column responsive grid for library display
+ * List layout for library display with BookPlayer-style click zones
  */
 
 import { BookCard, EmptyLibrary } from './BookCard';
-import type { Book } from '../../types';
+import type { Book, Chapter } from '../../types';
 
 interface BookGridProps {
   books: Book[];
-  onBookPress: (book: Book) => void;
+  onCoverPress: (book: Book) => void;      // Opens FullPlayer
+  onChapterPress: (book: Book, chapter: Chapter) => void;  // Opens FullPlayer at specific chapter
   onLoadDemo?: () => void;
   isLoading?: boolean;
 }
 
 /**
- * Neumorphism Book Grid
- * Grid layout with neumorphism cards
+ * Neumorphism Book List
+ * List layout with neumorphism cards and expandable chapters
  */
-export function BookGrid({ books, onBookPress, onLoadDemo, isLoading }: BookGridProps) {
+export function BookGrid({ books, onCoverPress, onChapterPress, onLoadDemo, isLoading }: BookGridProps) {
   if (isLoading) {
     return <BookGridSkeleton />;
   }
@@ -28,12 +29,13 @@ export function BookGrid({ books, onBookPress, onLoadDemo, isLoading }: BookGrid
   }
 
   return (
-    <div className="grid grid-cols-2 gap-4">
+    <div className="flex flex-col gap-3">
       {books.map((book) => (
         <BookCard
           key={book.id}
           book={book}
-          onPress={() => onBookPress(book)}
+          onCoverPress={() => onCoverPress(book)}
+          onChapterPress={(chapter) => onChapterPress(book, chapter)}
         />
       ))}
     </div>

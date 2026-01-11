@@ -89,11 +89,14 @@ export const usePlayerStore = create<PlayerStore>()(
       },
       
       // Setters
-      setCurrentBook: (book) => set({ 
-        currentBook: book,
-        isMiniPlayerVisible: book !== null,
-        currentChapter: book?.chapters[0] ?? null,
-      }),
+      setCurrentBook: (book) => {
+        const shouldShowPlayer = book !== null;
+        set({ 
+          currentBook: book,
+          isMiniPlayerVisible: shouldShowPlayer,
+          currentChapter: book?.chapters[0] ?? null,
+        });
+      },
       setCurrentChapter: (chapter) => set({ currentChapter: chapter }),
       setPlaybackState: (state) => set({ playbackState: state }),
       setCurrentTime: (time) => set({ currentTime: time }),
@@ -209,6 +212,10 @@ export const usePlayerStore = create<PlayerStore>()(
         settings: state.settings,
         speed: state.speed,
         volume: state.volume,
+        currentBook: state.currentBook,
+        currentChapter: state.currentChapter,
+        isMiniPlayerVisible: state.isMiniPlayerVisible,
+        currentTime: state.currentTime,
       }),
     }
   )

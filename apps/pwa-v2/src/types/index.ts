@@ -119,7 +119,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
 // NAVIGATION TYPES
 // ============================================
 
-export type TabRoute = 'library' | 'generate' | 'explore' | 'settings';
+export type TabRoute = 'library' | 'create' | 'explore' | 'settings';
 
 export interface NavigationState {
   activeTab: TabRoute;
