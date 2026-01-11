@@ -1,103 +1,246 @@
 /**
  * VoiceLibri - Neumorphism Generate Screen
  * COMPLETELY based on themesberg/neumorphism-ui-bootstrap
- * Convert text/ebooks to audiobooks with AI
+ * 
+ * ALL-IN-ONE page with 4 sections:
+ * A. Upload section - title + upload button + text box in one row
+ * B. Audiobook Settings - Target Language, Narrator Gender, Narrator Voice, Multi-voice
+ * C. Create button
+ * D. MiniPlayer (handled by AppShell, persistent across all tabs)
  */
 
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useRef } from 'react';
 import { 
   Upload, 
-  FileText, 
-  Sparkles, 
   Settings2,
-  Play,
-  CheckCircle,
+  Sparkles,
   AlertCircle
 } from 'lucide-react';
-import { Button, Card, CardBody, Toggle, CircularProgress } from '../components/ui';
-import { generateAudiobook, getGenerationProgress, convertToBook, getAudiobook } from '../services/api';
+import { Card, CardBody, Toggle } from '../components/ui';
+import { selectBook, convertToBook, getGenerationStatus, getAudiobooks } from '../services/api';
 import { useLibraryStore } from '../stores/libraryStore';
 import { usePlayerStore } from '../stores/playerStore';
 
-type GenerationStep = 'upload' | 'configure' | 'processing' | 'complete';
+// Voice options - separated by gender
+const MALE_VOICES = [
+  { alias: 'Arthur', geminiName: 'Achird' },
+  { alias: 'Albert', geminiName: 'Algieba' },
+  { alias: 'Alex', geminiName: 'Algenib' },
+  { alias: 'Charles', geminiName: 'Charon' },
+  { alias: 'Eric', geminiName: 'Enceladus' },
+  { alias: 'Fero', geminiName: 'Fenrir' },
+  { alias: 'Ian', geminiName: 'Iapetus' },
+  { alias: 'Milan', geminiName: 'Alnilam' },
+  { alias: 'Oliver', geminiName: 'Orus' },
+  { alias: 'Peter', geminiName: 'Puck' },
+  { alias: 'Ross', geminiName: 'Rasalgethi' },
+  { alias: 'Scott', geminiName: 'Schedar' },
+  { alias: 'Simon', geminiName: 'Sadaltager' },
+  { alias: 'Stan', geminiName: 'Sadachbia' },
+  { alias: 'Umberto', geminiName: 'Umbriel' },
+  { alias: 'Zachary', geminiName: 'Zubenelgenubi' },
+];
+
+const FEMALE_VOICES = [
+  { alias: 'Ada', geminiName: 'Aoede' },
+  { alias: 'Ash', geminiName: 'Achernar' },
+  { alias: 'Callie', geminiName: 'Callirrhoe' },
+  { alias: 'Cora', geminiName: 'Kore' },
+  { alias: 'Desi', geminiName: 'Despina' },
+  { alias: 'Erin', geminiName: 'Erinome' },
+  { alias: 'Grace', geminiName: 'Gacrux' },
+  { alias: 'Laura', geminiName: 'Laomedeia' },
+  { alias: 'Lea', geminiName: 'Leda' },
+  { alias: 'Paula', geminiName: 'Pulcherrima' },
+  { alias: 'Sue', geminiName: 'Sulafat' },
+  { alias: 'Toni', geminiName: 'Autonoe' },
+  { alias: 'Vinnie', geminiName: 'Vindemiatrix' },
+  { alias: 'Zara', geminiName: 'Zephyr' },
+];
 
 /**
- * Neumorphism Generate Screen
+ * Neumorphism Generate Screen - ALL IN ONE
  */
 export function GenerateScreen() {
-  const navigate = useNavigate();
-  const { addBook } = useLibraryStore();
-  const { setCurrentBook, setCurrentChapter, play } = usePlayerStore();
+  const { addBook, books } = useLibraryStore();
+  const { setCurrentBook, setCurrentChapter, play, showMiniPlayer } = usePlayerStore();
   
-  const [step, setStep] = useState<GenerationStep>('upload');
+  // Upload state
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [targetLanguage, setTargetLanguage] = useState('English');
+  const [pastedText, setPastedText] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  
+  // Settings state
+  const [targetLanguage, setTargetLanguage] = useState('Original');
+  const [narratorGender, setNarratorGender] = useState<'Female' | 'Male'>('Female');
+  const [narratorVoice, setNarratorVoice] = useState('Ada');
+  const [multiVoice, setMultiVoice] = useState(true);
+  
+  // Generation state
+  const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [generatedBookTitle, setGeneratedBookTitle] = useState<string>('');
   const [progress, setProgress] = useState(0);
+
+  // Get voices based on selected gender
+  const availableVoices = narratorGender === 'Female' ? FEMALE_VOICES : MALE_VOICES;
+
+  // Reset voice when gender changes
+  const handleGenderChange = (gender: 'Female' | 'Male') => {
+    setNarratorGender(gender);
+    // Set first voice of the new gender
+    setNarratorVoice(gender === 'Female' ? FEMALE_VOICES[0].alias : MALE_VOICES[0].alias);
+  };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       setSelectedFile(file);
-      setStep('configure');
+      setPastedText(''); // Clear pasted text when file is selected
     }
   };
 
-  const handleGenerate = async () => {
-    if (!selectedFile) return;
+  const handleUploadClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const text = e.clipboardData.getData('text');
+    if (text) {
+      setPastedText(text);
+      setSelectedFile(null); // Clear file when text is pasted
+    }
+  };
+
+  // Convert alias to Gemini TTS voice name
+  const aliasToGeminiName = (alias: string): string => {
+    const allVoices = [...MALE_VOICES, ...FEMALE_VOICES];
+    const voice = allVoices.find(v => v.alias === alias);
+    return voice?.geminiName || 'Aoede';
+  };
+
+  const handleCreate = async () => {
+    if (!selectedFile && !pastedText) {
+      setError('Please upload an e-book or paste text first');
+      return;
+    }
     
-    setStep('processing');
+    setIsGenerating(true);
     setError(null);
     setProgress(0);
     
     try {
       // Backend expects files to be in assets/ folder
-      // For now, use the filename directly - user should place files in assets folder
-      // TODO: Add file upload endpoint to backend for proper file uploads
-      const bookFile = selectedFile.name;
+      const bookFile = selectedFile?.name || 'pasted_text.txt';
       
-      // Start generation with proper JSON payload
-      const result = await generateAudiobook({
-        bookFile,
-        targetLanguage: targetLanguage !== 'English' ? targetLanguage : undefined,
+      // Convert target language to backend format
+      const langMap: Record<string, string> = {
+        'Original': 'original',
+        'Chinese': 'zh-CN',
+        'Czech': 'cs-CZ',
+        'Dutch': 'nl-NL',
+        'English': 'en-US',
+        'French': 'fr-FR',
+        'German': 'de-DE',
+        'Hindi': 'hi-IN',
+        'Italian': 'it-IT',
+        'Japanese': 'ja-JP',
+        'Korean': 'ko-KR',
+        'Polish': 'pl-PL',
+        'Portuguese': 'pt-BR',
+        'Russian': 'ru-RU',
+        'Slovak': 'sk-SK',
+        'Spanish': 'es-ES',
+        'Ukrainian': 'uk-UA',
+      };
+      const targetLangCode = langMap[targetLanguage] || 'original';
+      
+      // Use the correct API: /api/book/select with dramatize=true
+      const result = await selectBook({
+        filename: bookFile,
+        narratorVoice: aliasToGeminiName(narratorVoice),
+        targetLanguage: targetLangCode,
+        dramatize: true,
       });
-      setGeneratedBookTitle(result.bookTitle);
       
-      // Poll for progress
+      const bookTitle = result.audiobookTitle || result.title;
+      
+      // Create book object and add to library IMMEDIATELY
+      if (result.chapters && result.chapters.length > 0) {
+        const book = {
+          id: bookTitle,
+          title: result.title,
+          author: result.author || 'Unknown Author',
+          totalDuration: result._internal?.durationSeconds || 0,
+          chapters: result.chapters.map((ch: any, i: number) => ({
+            id: `ch-${i}`,
+            title: ch.title,
+            index: i,
+            start: 0,
+            end: 0,
+            duration: 0,
+          })),
+          audioUrl: '',
+          isFinished: false,
+          createdAt: new Date(),
+        };
+        
+        // Add to library immediately
+        const existingBook = books.find(b => b.id === bookTitle);
+        if (!existingBook) {
+          addBook(book);
+        }
+        
+        // Start MiniPlayer playback IMMEDIATELY
+        setCurrentBook(book);
+        setCurrentChapter(book.chapters[0]);
+        showMiniPlayer();
+        play(); // Start playback immediately
+      }
+      
+      // Poll for generation status (stay on Create tab)
       const pollInterval = setInterval(async () => {
         try {
-          const progressData = await getGenerationProgress(result.bookTitle);
-          const progressPercent = (progressData.chaptersGenerated / progressData.totalChapters) * 100;
-          setProgress(progressPercent);
+          const statusData = await getGenerationStatus();
           
-          if (progressData.status === 'completed') {
+          // Calculate progress
+          if (statusData.totalChapters > 0) {
+            const progressPercent = (statusData.currentChapter / statusData.totalChapters) * 100;
+            setProgress(progressPercent);
+          }
+          
+          // Check if completed
+          if (statusData.phase === 'complete' || statusData.phase === 'idle') {
             clearInterval(pollInterval);
+            setIsGenerating(false);
+            setProgress(100);
             
-            // Fetch complete audiobook metadata
-            const metadata = await getAudiobook(result.bookTitle);
-            const book = convertToBook(metadata);
-            
-            // Add to library
-            addBook(book);
-            
-            setStep('complete');
+            // Refresh the book in library with updated metadata
+            try {
+              const audiobooks = await getAudiobooks();
+              const metadata = audiobooks.find(a => a.title === result.title);
+              if (metadata) {
+                const updatedBook = convertToBook(metadata);
+                addBook(updatedBook);
+              }
+            } catch (e) {
+              console.log('Could not refresh book metadata:', e);
+            }
           }
         } catch (err) {
-          console.error('Progress polling error:', err);
+          console.error('Status polling error:', err);
         }
-      }, 2000); // Poll every 2 seconds
-      
-      // Cleanup interval on unmount or error
-      return () => clearInterval(pollInterval);
+      }, 3000);
       
     } catch (err) {
       console.error('Generation error:', err);
       setError(err instanceof Error ? err.message : 'Failed to generate audiobook');
-      setStep('upload');
+      setIsGenerating(false);
     }
   };
+
+  // Display text for the text box
+  const displayText = selectedFile?.name || pastedText || '';
+  const placeholderText = 'Paste text from clipboard here';
 
   return (
     <div className="min-h-screen bg-[var(--neu-body-bg)]">
@@ -105,250 +248,206 @@ export function GenerateScreen() {
       <header className="sticky top-0 z-30 bg-[var(--neu-body-bg)] shadow-[var(--neu-shadow-light)]">
         <div className="px-4 py-4">
           <h1 className="text-2xl font-bold text-[var(--neu-dark)]">Create</h1>
-          <p className="text-[var(--neu-gray-700)] text-sm mt-1">
-            Convert text to audiobook with AI voices
-          </p>
         </div>
       </header>
 
-      <div className="px-4 py-6">
+      <div className="px-4 py-6 space-y-6">
+        {/* Error message */}
         {error && (
-          <Card className="mb-6 border-l-4 border-[var(--neu-danger)]">
+          <Card className="border-l-4 border-[var(--neu-danger)]">
             <CardBody className="flex items-start gap-3">
               <AlertCircle className="w-5 h-5 text-[var(--neu-danger)] flex-shrink-0 mt-0.5" />
               <div>
-                <h4 className="font-semibold text-[var(--neu-danger)] mb-1">Generation Failed</h4>
+                <h4 className="font-semibold text-[var(--neu-danger)] mb-1">Error</h4>
                 <p className="text-sm text-[var(--neu-gray-700)]">{error}</p>
               </div>
             </CardBody>
           </Card>
         )}
-        
-        {step === 'upload' && (
-          <div className="space-y-6">
-            {/* Upload area - neumorphism inset */}
-            <label className="block">
-              <div className="
-                neu-pressed p-8 
-                rounded-[var(--neu-radius-lg)] 
-                text-center 
-                cursor-pointer
-                hover:shadow-[var(--neu-shadow-soft)]
-                transition-all duration-200
-              ">
-                <input
-                  type="file"
-                  accept=".txt,.epub,.pdf"
-                  onChange={handleFileSelect}
-                  className="hidden"
-                />
-                <div className="w-16 h-16 mx-auto mb-4 neu-raised rounded-full flex items-center justify-center">
-                  <Upload className="w-8 h-8 text-[var(--neu-secondary)]" />
-                </div>
-                <h3 className="text-lg font-semibold text-[var(--neu-dark)] mb-2">
-                  Upload your book
-                </h3>
-                <p className="text-[var(--neu-gray-700)] text-sm">
-                  Supports TXT, EPUB, PDF files
-                </p>
-              </div>
-            </label>
 
-            {/* Quick options - neumorphism cards */}
-            <div className="grid grid-cols-2 gap-3">
-              <Card className="p-4 cursor-pointer active:shadow-[var(--neu-shadow-inset)]">
-                <FileText className="w-6 h-6 text-[var(--neu-info)] mb-2" />
-                <h4 className="text-[var(--neu-dark)] font-semibold text-sm">Paste Text</h4>
-                <p className="text-[var(--neu-gray-600)] text-xs mt-1">From clipboard</p>
-              </Card>
-              <Card className="p-4 cursor-pointer active:shadow-[var(--neu-shadow-inset)]">
-                <Sparkles className="w-6 h-6 text-[var(--neu-warning)] mb-2" />
-                <h4 className="text-[var(--neu-dark)] font-semibold text-sm">AI Sample</h4>
-                <p className="text-[var(--neu-gray-600)] text-xs mt-1">Try with demo text</p>
-              </Card>
-            </div>
-
-            {/* Features list */}
-            <Card>
-              <CardBody>
-                <h4 className="text-[var(--neu-dark)] font-semibold mb-3">What you get:</h4>
-                <ul className="space-y-2">
-                  {[
-                    'Multi-voice character detection',
-                    'Dramatized narration',
-                    'Chapter-aware processing',
-                    'Background audio sync',
-                  ].map((feature, i) => (
-                    <li key={i} className="flex items-center gap-2 text-sm text-[var(--neu-gray-700)]">
-                      <div className="w-1.5 h-1.5 rounded-full bg-[var(--neu-secondary)]" />
-                      {feature}
-                    </li>
-                  ))}
-                </ul>
-              </CardBody>
-            </Card>
-          </div>
-        )}
-
-        {step === 'configure' && selectedFile && (
-          <div className="space-y-6">
-            {/* Selected file */}
-            <Card className="flex items-center gap-3 p-4">
-              <div className="w-12 h-12 neu-pressed rounded-[var(--neu-radius)] flex items-center justify-center">
-                <FileText className="w-6 h-6 text-[var(--neu-secondary)]" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h4 className="text-[var(--neu-dark)] font-semibold truncate">
-                  {selectedFile.name}
-                </h4>
-                <p className="text-[var(--neu-gray-600)] text-sm">
-                  {(selectedFile.size / 1024).toFixed(1)} KB
-                </p>
-              </div>
-            </Card>
-
-            {/* Audiobook Settings */}
-            <div className="space-y-3">
-              <h4 className="text-[var(--neu-dark)] font-semibold flex items-center gap-2">
-                <Settings2 className="w-4 h-4" /> Audiobook Settings
-              </h4>
-              <Card>
-                <CardBody className="space-y-4">
-                  {/* Target Language */}
-                  <div className="flex items-center gap-3">
-                    <label htmlFor="target-language" className="text-[var(--neu-body-color)] text-sm font-medium whitespace-nowrap">
-                      Target Language
-                    </label>
-                    <select
-                      id="target-language"
-                      value={targetLanguage}
-                      onChange={(e) => setTargetLanguage(e.target.value)}
-                      className="neu-input text-sm font-medium"
-                      style={{ width: '25%', minWidth: '80px' }}
-                      aria-label="Select target language"
-                    >
-                      <option value="Chinese">Chinese</option>
-                      <option value="Czech">Czech</option>
-                      <option value="Dutch">Dutch</option>
-                      <option value="English">English</option>
-                      <option value="French">French</option>
-                      <option value="German">German</option>
-                      <option value="Hindi">Hindi</option>
-                      <option value="Italian">Italian</option>
-                      <option value="Japanese">Japanese</option>
-                      <option value="Korean">Korean</option>
-                      <option value="Polish">Polish</option>
-                      <option value="Portuguese">Portuguese</option>
-                      <option value="Russian">Russian</option>
-                      <option value="Slovak">Slovak</option>
-                      <option value="Spanish">Spanish</option>
-                      <option value="Ukrainian">Ukrainian</option>
-                    </select>
-                  </div>
-                  
-                  {/* Multi-voice toggle */}
-                  <div className="flex items-center justify-between">
-                    <span className="text-[var(--neu-body-color)] text-sm">Multi-voice</span>
-                    <Toggle defaultChecked={true} />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-[var(--neu-body-color)] text-sm">Background music</span>
-                    <Toggle defaultChecked={false} />
-                  </div>
-                </CardBody>
-              </Card>
-            </div>
-
-            {/* Create button */}
-            <Button
-              variant="secondary"
-              size="lg"
-              block
-              onClick={handleGenerate}
-              leftIcon={<Sparkles className="w-5 h-5" />}
+        {/* ==================== SECTION A: Upload ==================== */}
+        <div className="space-y-3">
+          <h4 className="text-[var(--neu-dark)] font-semibold flex items-center gap-2">
+            <Upload className="w-4 h-4" /> Upload your e-book
+          </h4>
+          
+          {/* Row: Upload button + Text box */}
+          <div className="flex items-center gap-3">
+            {/* Upload button */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".txt,.epub,.pdf"
+              onChange={handleFileSelect}
+              className="hidden"
+            />
+            <button
+              onClick={handleUploadClick}
+              className="
+                neu-btn neu-btn-secondary
+                px-4 py-2.5
+                flex items-center gap-2
+                text-white font-semibold text-sm
+                flex-shrink-0
+              "
             >
-              Create Audiobook
-            </Button>
-          </div>
-        )}
-
-        {step === 'processing' && (
-          <div className="text-center py-12">
-            <CircularProgress size="lg" className="mx-auto mb-6" />
-            <h3 className="text-xl font-bold text-[var(--neu-dark)] mb-2">
-              Generating audiobook...
-            </h3>
-            <p className="text-[var(--neu-gray-700)] text-sm mb-2">
-              This may take a few minutes
-            </p>
-            <p className="text-[var(--neu-secondary)] font-semibold mb-8">
-              {progress.toFixed(0)}% complete
-            </p>
+              <Upload className="w-4 h-4" />
+              Upload
+            </button>
             
-            <Card className="max-w-xs mx-auto">
-              <CardBody className="space-y-2">
-                {['Analyzing text', 'Detecting characters', 'Generating voices'].map((status, i) => (
-                  <div key={i} className="flex items-center gap-2 text-sm">
-                    {i < 2 ? (
-                      <CheckCircle className="w-4 h-4 text-[var(--neu-success)]" />
-                    ) : (
-                      <div className="w-4 h-4 rounded-full border-2 border-[var(--neu-gray-400)] border-t-[var(--neu-secondary)] animate-spin" />
-                    )}
-                    <span className={i < 2 ? 'text-[var(--neu-gray-600)]' : 'text-[var(--neu-dark)]'}>
-                      {status}
-                    </span>
-                  </div>
-                ))}
-              </CardBody>
-            </Card>
+            {/* Text box - same style as search box */}
+            <div className="flex-1 relative">
+              <input
+                type="text"
+                value={displayText}
+                onPaste={handlePaste}
+                onChange={(e) => {
+                  setPastedText(e.target.value);
+                  if (e.target.value) setSelectedFile(null);
+                }}
+                placeholder={placeholderText}
+                className="
+                  neu-input w-full
+                  text-sm
+                  placeholder:text-[var(--neu-gray-500)]
+                "
+              />
+            </div>
           </div>
-        )}
+        </div>
 
-        {step === 'complete' && (
-          <div className="text-center py-12">
-            <div className="w-20 h-20 mx-auto mb-6 neu-raised rounded-full flex items-center justify-center">
-              <CheckCircle className="w-10 h-10 text-[var(--neu-success)]" />
+        {/* ==================== SECTION B: Audiobook Settings ==================== */}
+        <div className="space-y-3">
+          <h4 className="text-[var(--neu-dark)] font-semibold flex items-center gap-2">
+            <Settings2 className="w-4 h-4" /> Audiobook Settings
+          </h4>
+          <Card>
+            <CardBody className="space-y-4">
+              {/* Target Language */}
+              <div className="flex items-center justify-between">
+                <label htmlFor="target-language" className="text-[var(--neu-body-color)] text-sm font-medium whitespace-nowrap">
+                  Target Language
+                </label>
+                <select
+                  id="target-language"
+                  value={targetLanguage}
+                  onChange={(e) => setTargetLanguage(e.target.value)}
+                  className="neu-input text-sm font-medium"
+                  style={{ width: '35%', minWidth: '100px' }}
+                >
+                  <option value="Original">Original</option>
+                  <option value="Chinese">Chinese</option>
+                  <option value="Czech">Czech</option>
+                  <option value="Dutch">Dutch</option>
+                  <option value="English">English</option>
+                  <option value="French">French</option>
+                  <option value="German">German</option>
+                  <option value="Hindi">Hindi</option>
+                  <option value="Italian">Italian</option>
+                  <option value="Japanese">Japanese</option>
+                  <option value="Korean">Korean</option>
+                  <option value="Polish">Polish</option>
+                  <option value="Portuguese">Portuguese</option>
+                  <option value="Russian">Russian</option>
+                  <option value="Slovak">Slovak</option>
+                  <option value="Spanish">Spanish</option>
+                  <option value="Ukrainian">Ukrainian</option>
+                </select>
+              </div>
+              
+              {/* Narrator Gender */}
+              <div className="flex items-center justify-between">
+                <label htmlFor="narrator-gender" className="text-[var(--neu-body-color)] text-sm font-medium whitespace-nowrap">
+                  Narrator Gender
+                </label>
+                <select
+                  id="narrator-gender"
+                  value={narratorGender}
+                  onChange={(e) => handleGenderChange(e.target.value as 'Female' | 'Male')}
+                  className="neu-input text-sm font-medium"
+                  style={{ width: '35%', minWidth: '100px' }}
+                >
+                  <option value="Female">Female</option>
+                  <option value="Male">Male</option>
+                </select>
+              </div>
+              
+              {/* Narrator Voice */}
+              <div className="flex items-center justify-between">
+                <label htmlFor="narrator-voice" className="text-[var(--neu-body-color)] text-sm font-medium whitespace-nowrap">
+                  Narrator Voice
+                </label>
+                <select
+                  id="narrator-voice"
+                  value={narratorVoice}
+                  onChange={(e) => setNarratorVoice(e.target.value)}
+                  className="neu-input text-sm font-medium"
+                  style={{ width: '35%', minWidth: '100px' }}
+                >
+                  {availableVoices.map((voice) => (
+                    <option key={voice.alias} value={voice.alias}>
+                      {voice.alias}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              
+              {/* Multi-voice toggle */}
+              <div className="flex items-center justify-between">
+                <span className="text-[var(--neu-body-color)] text-sm font-medium">Multi-voice</span>
+                <Toggle 
+                  checked={multiVoice}
+                  onChange={setMultiVoice}
+                />
+              </div>
+            </CardBody>
+          </Card>
+        </div>
+
+        {/* ==================== SECTION C: Create Button ==================== */}
+        <button
+          onClick={handleCreate}
+          disabled={isGenerating || (!selectedFile && !pastedText)}
+          className={`
+            w-full py-4 rounded-[var(--neu-radius)]
+            font-bold text-lg
+            flex items-center justify-center gap-3
+            transition-all duration-200
+            ${isGenerating || (!selectedFile && !pastedText)
+              ? 'neu-pressed text-[var(--neu-gray-500)] cursor-not-allowed'
+              : 'neu-btn-secondary text-white shadow-[var(--neu-shadow-soft)] active:shadow-[var(--neu-shadow-inset)]'
+            }
+          `}
+        >
+          {isGenerating ? (
+            <>
+              <div className="w-5 h-5 rounded-full border-2 border-white/30 border-t-white animate-spin" />
+              Generating... {progress.toFixed(0)}%
+            </>
+          ) : (
+            <>
+              <Sparkles className="w-5 h-5" />
+              Create Audiobook
+            </>
+          )}
+        </button>
+
+        {/* Progress indicator when generating */}
+        {isGenerating && (
+          <div className="neu-card p-4">
+            <div className="flex items-center justify-between text-sm mb-2">
+              <span className="text-[var(--neu-gray-700)]">Progress</span>
+              <span className="text-[var(--neu-secondary)] font-semibold">{progress.toFixed(0)}%</span>
             </div>
-            <h3 className="text-xl font-bold text-[var(--neu-dark)] mb-2">
-              Audiobook Ready!
-            </h3>
-            <p className="text-[var(--neu-gray-700)] text-sm mb-8">
-              Your audiobook has been added to the library
+            <div className="neu-progress">
+              <div 
+                className="neu-progress-bar transition-all duration-300"
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+            <p className="text-xs text-[var(--neu-gray-600)] mt-2 text-center">
+              Playback started in MiniPlayer below
             </p>
-            <div className="flex flex-col gap-3 max-w-xs mx-auto">
-              <Button 
-                variant="secondary" 
-                size="lg" 
-                leftIcon={<Play className="w-5 h-5" />}
-                onClick={async () => {
-                  if (!generatedBookTitle) return;
-                  try {
-                    const metadata = await getAudiobook(generatedBookTitle);
-                    const book = convertToBook(metadata);
-                    setCurrentBook(book);
-                    if (book.chapters.length > 0) {
-                      setCurrentChapter(book.chapters[0]);
-                    }
-                    play();
-                    navigate('/');
-                  } catch (err) {
-                    console.error('Failed to play audiobook:', err);
-                  }
-                }}
-              >
-                Play Now
-              </Button>
-              <Button 
-                variant="primary" 
-                size="lg"
-                onClick={() => {
-                  setStep('upload');
-                  setSelectedFile(null);
-                }}
-              >
-                Create Another
-              </Button>
-            </div>
           </div>
         )}
       </div>

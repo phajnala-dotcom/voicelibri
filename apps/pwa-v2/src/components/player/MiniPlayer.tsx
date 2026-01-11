@@ -54,17 +54,11 @@ export function MiniPlayer({ onExpand }: MiniPlayerProps) {
       >
         {/* Artwork - inset frame */}
         <div className="w-12 h-12 neu-pressed rounded-[var(--neu-radius)] overflow-hidden flex-shrink-0">
-          {currentBook.coverUrl ? (
-            <img
-              src={currentBook.coverUrl}
-              alt={currentBook.title}
-              className="w-full h-full object-cover"
-            />
-          ) : (
-            <div className="w-full h-full bg-gradient-to-br from-[var(--neu-secondary)]/20 to-[var(--neu-info)]/20 flex items-center justify-center">
-              <span className="text-lg">📚</span>
-            </div>
-          )}
+          <img
+            src={currentBook.coverUrl || '/vl-logo.png'}
+            alt={currentBook.title}
+            className="w-full h-full object-cover"
+          />
         </div>
         
         {/* Title & Time */}

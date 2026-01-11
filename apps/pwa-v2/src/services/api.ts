@@ -35,6 +35,22 @@ export interface ChapterMetadata {
   isConsolidated?: boolean;
 }
 
+export interface BookSelectResult {
+  title: string;
+  author: string;
+  audiobookTitle?: string;
+  chapters?: Array<{
+    index: number;
+    title: string;
+    subChunkStart: number;
+    subChunkCount: number;
+  }>;
+  _internal?: {
+    totalChunks: number;
+    durationSeconds: number;
+  };
+}
+
 /**
  * Get list of all audiobooks in library
  */
@@ -55,9 +71,48 @@ export async function getAudiobook(bookTitle: string): Promise<AudiobookMetadata
 }
 
 /**
- * Generate audiobook from file
- * Note: Backend expects file to be in assets folder.
- * Pass the filename (e.g., 'sample_ebook.txt') or full path from assets
+ * Select a book and start the correct pipeline
+ * This is the working API that triggers: translation → character extraction → dramatization → audio
+ */
+export async function selectBook(options: {
+  filename: string;
+  narratorVoice?: string;
+  targetLanguage?: string;
+  dramatize?: boolean;
+}): Promise<BookSelectResult> {
+  const response = await fetch(`${API_BASE_URL}/book/select?dramatize=${options.dramatize ?? true}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      filename: options.filename,
+      narratorVoice: options.narratorVoice,
+      targetLanguage: options.targetLanguage,
+    }),
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ message: 'Failed to select book' }));
+    throw new Error(errorData.message || 'Failed to select book');
+  }
+  return response.json();
+}
+
+/**
+ * Get dramatization/generation status
+ */
+export async function getGenerationStatus(): Promise<{
+  phase: string;
+  currentChapter: number;
+  totalChapters: number;
+  currentOperation: string;
+  error: string | null;
+}> {
+  const response = await fetch(`${API_BASE_URL}/dramatization/status`);
+  if (!response.ok) throw new Error('Failed to fetch status');
+  return response.json();
+}
+
+/**
+ * Legacy: Generate audiobook from file (uses worker queue - not recommended)
  */
 export async function generateAudiobook(options: {
   bookFile: string;

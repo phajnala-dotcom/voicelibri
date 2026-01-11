@@ -20,6 +20,7 @@ export interface TranslationResult {
 
 /**
  * Language display names for logging
+ * Added new languages: Chinese, Dutch, French, Hindi, Italian, Japanese, Korean, Portuguese, Spanish, Ukrainian
  */
 const LANGUAGE_NAMES: Record<string, string> = {
   'en-US': 'English (US)',
@@ -30,6 +31,16 @@ const LANGUAGE_NAMES: Record<string, string> = {
   'de-DE': 'German',
   'pl-PL': 'Polish',
   'hr-HR': 'Croatian',
+  'zh-CN': 'Chinese (Simplified)',
+  'nl-NL': 'Dutch',
+  'fr-FR': 'French',
+  'hi-IN': 'Hindi',
+  'it-IT': 'Italian',
+  'ja-JP': 'Japanese',
+  'ko-KR': 'Korean',
+  'pt-BR': 'Portuguese (Brazil)',
+  'es-ES': 'Spanish',
+  'uk-UA': 'Ukrainian',
 };
 
 /**

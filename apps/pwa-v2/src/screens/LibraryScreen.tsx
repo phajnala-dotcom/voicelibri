@@ -2,15 +2,20 @@
  * VoiceLibri - Neumorphism Library Screen
  * COMPLETELY based on themesberg/neumorphism-ui-bootstrap
  * Main library view for audiobooks
+ * 
+ * BookPlayer-style display logic:
+ * - Click on book cover = open FullPlayer
+ * - Click elsewhere on book row = expand chapters
+ * - Click chapter = open FullPlayer at that chapter
  */
 
 import { useState, useEffect } from 'react';
-import { Search, Grid3X3, List, Plus } from 'lucide-react';
+import { Search, List } from 'lucide-react';
 import { useLibraryStore } from '../stores/libraryStore';
 import { usePlayerStore } from '../stores/playerStore';
 import { BookGrid } from '../components/library';
 import { getAudiobooks, convertToBook } from '../services/api';
-import type { Book } from '../types';
+import type { Book, Chapter } from '../types';
 
 // Demo book for testing
 const demoBook: Book = {
@@ -36,8 +41,7 @@ const demoBook: Book = {
  */
 export function LibraryScreen() {
   const { addBook, sortBy, setSortBy, searchQuery, setSearchQuery, getFilteredBooks } = useLibraryStore();
-  const { setCurrentBook, setCurrentChapter } = usePlayerStore();
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const { setCurrentBook, setCurrentChapter, openFullPlayer, showMiniPlayer } = usePlayerStore();
   const [showSearch, setShowSearch] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -92,20 +96,31 @@ export function LibraryScreen() {
 
   const filteredBooks = getFilteredBooks();
 
-  const handleBookPress = (book: Book) => {
-    // Just select the book, don't auto-play - let user use MiniPlayer controls
+  // Cover click = open FullPlayer with the book
+  const handleCoverPress = (book: Book) => {
     setCurrentBook(book);
     if (book.chapters.length > 0) {
       // Restore to saved position or start from beginning
       const chapterIndex = book.progress?.chapterIndex ?? 0;
       setCurrentChapter(book.chapters[chapterIndex]);
     }
+    showMiniPlayer();
+    openFullPlayer();
+  };
+
+  // Chapter click = select chapter in MiniPlayer (do NOT open FullPlayer)
+  const handleChapterPress = (book: Book, chapter: Chapter) => {
+    setCurrentBook(book);
+    setCurrentChapter(chapter);
+    showMiniPlayer();
+    // Note: Do NOT call openFullPlayer() - same behavior as row click
   };
 
   const loadDemoBook = () => {
     addBook(demoBook);
     setCurrentBook(demoBook);
     setCurrentChapter(demoBook.chapters[0]);
+    showMiniPlayer();
   };
 
   const sortOptions = [
@@ -139,26 +154,6 @@ export function LibraryScreen() {
               aria-label="Search"
             >
               <Search className="w-4 h-4" />
-            </button>
-            
-            {/* View mode toggle */}
-            <button
-              onClick={() => setViewMode(viewMode === 'grid' ? 'list' : 'grid')}
-              className="
-                neu-btn-icon-sm neu-raised
-                flex items-center justify-center
-                text-[var(--neu-gray-700)]
-                hover:text-[var(--neu-secondary)]
-                active:shadow-[var(--neu-shadow-inset)]
-                transition-all duration-200
-              "
-              aria-label={viewMode === 'grid' ? 'Switch to list view' : 'Switch to grid view'}
-            >
-              {viewMode === 'grid' ? (
-                <List className="w-4 h-4" />
-              ) : (
-                <Grid3X3 className="w-4 h-4" />
-              )}
             </button>
           </div>
 
@@ -210,30 +205,13 @@ export function LibraryScreen() {
         ) : (
           <BookGrid
             books={filteredBooks}
-            onBookPress={handleBookPress}
+            onCoverPress={handleCoverPress}
+            onChapterPress={handleChapterPress}
             onLoadDemo={loadDemoBook}
             isLoading={isLoading}
           />
         )}
       </div>
-
-      {/* FAB - neumorphism floating action button */}
-      <button
-        className="
-          fixed right-4 z-30
-          w-14 h-14 
-          neu-btn-secondary
-          rounded-full 
-          shadow-[var(--neu-shadow-soft)]
-          flex items-center justify-center
-          active:shadow-[var(--neu-shadow-inset)]
-          transition-all duration-200
-        "
-        style={{ bottom: 'calc(var(--nav-height) + var(--safe-area-bottom) + 1rem)' }}
-        aria-label="Add book"
-      >
-        <Plus className="w-6 h-6 text-white" />
-      </button>
     </div>
   );
 }
