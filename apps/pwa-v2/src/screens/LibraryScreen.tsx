@@ -36,7 +36,7 @@ const demoBook: Book = {
  */
 export function LibraryScreen() {
   const { addBook, sortBy, setSortBy, searchQuery, setSearchQuery, getFilteredBooks } = useLibraryStore();
-  const { setCurrentBook, setCurrentChapter, playPause } = usePlayerStore();
+  const { setCurrentBook, setCurrentChapter } = usePlayerStore();
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [showSearch, setShowSearch] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -93,11 +93,13 @@ export function LibraryScreen() {
   const filteredBooks = getFilteredBooks();
 
   const handleBookPress = (book: Book) => {
+    // Just select the book, don't auto-play - let user use MiniPlayer controls
     setCurrentBook(book);
     if (book.chapters.length > 0) {
-      setCurrentChapter(book.chapters[0]);
+      // Restore to saved position or start from beginning
+      const chapterIndex = book.progress?.chapterIndex ?? 0;
+      setCurrentChapter(book.chapters[chapterIndex]);
     }
-    playPause();
   };
 
   const loadDemoBook = () => {
@@ -118,11 +120,11 @@ export function LibraryScreen() {
       {/* Header - neumorphism card */}
       <header className="sticky top-0 z-30 bg-[var(--neu-body-bg)] shadow-[var(--neu-shadow-light)]">
         <div className="px-4 py-4">
-          <h1 className="text-2xl font-bold text-[var(--neu-dark)] text-center">Library</h1>
+          <h1 className="text-2xl font-bold text-[var(--neu-dark)]">Library</h1>
         </div>
         
         <div className="px-4 pb-4">
-          <div className="flex items-center justify-center gap-2 mb-4">
+          <div className="flex items-center gap-2 mb-4">
             {/* Search toggle */}
             <button
               onClick={() => setShowSearch(!showSearch)}
@@ -177,7 +179,7 @@ export function LibraryScreen() {
           )}
 
           {/* Sort pills - neumorphism badges */}
-          <div className="flex items-center justify-center gap-2 overflow-x-auto pb-2 scrollbar-hide">
+          <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-hide">
             {sortOptions.map((option) => (
               <button
                 key={option.value}

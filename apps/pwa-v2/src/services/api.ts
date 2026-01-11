@@ -55,18 +55,31 @@ export async function getAudiobook(bookTitle: string): Promise<AudiobookMetadata
 }
 
 /**
- * Generate audiobook from uploaded file
+ * Generate audiobook from file
+ * Note: Backend expects file to be in assets folder.
+ * Pass the filename (e.g., 'sample_ebook.txt') or full path from assets
  */
-export async function generateAudiobook(formData: FormData): Promise<{
-  message: string;
+export async function generateAudiobook(options: {
+  bookFile: string;
+  targetLanguage?: string;
+  voiceMap?: Record<string, string>;
+  defaultVoice?: string;
+}): Promise<{
+  success: boolean;
   bookTitle: string;
-  status: string;
+  metadata: AudiobookMetadata;
+  totalChunks: number;
+  message: string;
 }> {
   const response = await fetch(`${API_BASE_URL}/audiobooks/generate`, {
     method: 'POST',
-    body: formData,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options),
   });
-  if (!response.ok) throw new Error('Failed to generate audiobook');
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ message: 'Failed to generate audiobook' }));
+    throw new Error(errorData.message || 'Failed to generate audiobook');
+  }
   return response.json();
 }
 

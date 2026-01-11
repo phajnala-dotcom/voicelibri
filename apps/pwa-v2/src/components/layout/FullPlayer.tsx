@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { usePlayerStore } from '../../stores/playerStore';
 import { formatDuration, formatDurationLong } from '../../utils/formatters';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 interface FullPlayerProps {
   onCollapse: () => void;
@@ -46,6 +46,22 @@ export function FullPlayer({ onCollapse }: FullPlayerProps) {
 
   const [showChapters, setShowChapters] = useState(false);
   const [showSpeedPicker, setShowSpeedPicker] = useState(false);
+  const [isVisible, setIsVisible] = useState(false);
+
+  // Slide-up animation on mount
+  useEffect(() => {
+    // Trigger animation after mount
+    requestAnimationFrame(() => {
+      setIsVisible(true);
+    });
+  }, []);
+
+  // Handle collapse with slide-down animation
+  const handleCollapse = () => {
+    setIsVisible(false);
+    // Wait for animation to complete before calling onCollapse
+    setTimeout(onCollapse, 300);
+  };
 
   const isPlaying = playbackState === 'playing';
   const progress = currentBook ? currentTime / currentBook.totalDuration : 0;
@@ -61,11 +77,17 @@ export function FullPlayer({ onCollapse }: FullPlayerProps) {
   const speeds = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
 
   return (
-    <div className="fixed inset-0 z-50 bg-[var(--neu-body-bg)] overflow-y-auto">
+    <div 
+      className={`
+        fixed inset-0 z-50 bg-[var(--neu-body-bg)] overflow-y-auto
+        transition-transform duration-300 ease-out
+        ${isVisible ? 'translate-y-0' : 'translate-y-full'}
+      `}
+    >
       {/* Header */}
       <div className="flex items-center justify-between px-4 py-4">
         <button
-          onClick={onCollapse}
+          onClick={handleCollapse}
           className="
             neu-btn-icon-sm neu-raised
             flex items-center justify-center

@@ -53,12 +53,16 @@ export function GenerateScreen() {
     setProgress(0);
     
     try {
-      // Create form data with file
-      const formData = new FormData();
-      formData.append('file', selectedFile);
+      // Backend expects files to be in assets/ folder
+      // For now, use the filename directly - user should place files in assets folder
+      // TODO: Add file upload endpoint to backend for proper file uploads
+      const bookFile = selectedFile.name;
       
-      // Start generation
-      const result = await generateAudiobook(formData);
+      // Start generation with proper JSON payload
+      const result = await generateAudiobook({
+        bookFile,
+        targetLanguage: targetLanguage !== 'English' ? targetLanguage : undefined,
+      });
       setGeneratedBookTitle(result.bookTitle);
       
       // Poll for progress
@@ -219,7 +223,8 @@ export function GenerateScreen() {
                       id="target-language"
                       value={targetLanguage}
                       onChange={(e) => setTargetLanguage(e.target.value)}
-                      className="neu-input w-1/3"
+                      className="neu-input text-sm font-medium"
+                      style={{ width: '25%', minWidth: '80px' }}
                       aria-label="Select target language"
                     >
                       <option value="Chinese">Chinese</option>
