@@ -217,6 +217,7 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
     
     // Parse metadata from EPUB
     BOOK_METADATA = parseBookMetadata(epubBuffer, 'epub', bookPath);
+    (global as any).BOOK_METADATA = BOOK_METADATA; // Expose for TTS single-word language override
     
     // Extract text from EPUB
     BOOK_TEXT = extractTextFromEpub(epubBuffer);
@@ -241,6 +242,7 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
     
     // Parse metadata from TXT (pass filePath for better title extraction)
     BOOK_METADATA = parseBookMetadata(BOOK_TEXT, 'txt', bookPath);
+    (global as any).BOOK_METADATA = BOOK_METADATA; // Expose for TTS single-word language override
     
     // Detect chapters in TXT (returns 0-indexed array)
     const chaptersArray = detectTextChapters(BOOK_TEXT);
@@ -713,18 +715,27 @@ async function startBackgroundDramatization(
           }
           
           // ★ STEP 1: EXTRACT CHARACTERS from this chapter (after translation) ★
+          // Only extract from content chapters, skip front matter sections
           // This is the key change: per-chapter extraction with alias detection
-          await characterRegistry.extractFromChapter(textToDramatize, chapterNum);
+          await characterRegistry.extractFromChapter(textToDramatize, chapterNum, chapter.isFrontMatter);
           
           // Update global VOICE_MAP with current registry state
           VOICE_MAP = characterRegistry.getVoiceMap();
+          
+          // Save character registry JSON for review (after each chapter)
+          try {
+            const registryFolder = path.join(getAudiobooksDir(), bookTitle);
+            await characterRegistry.saveToFile(registryFolder);
+          } catch (saveErr) {
+            console.error(`   ⚠️ Failed to save character registry:`, saveErr);
+          }
           
           // Convert registry characters to CharacterProfile[] for hybrid tagger
           const registeredChars = characterRegistry.getAllCharacters();
           const characters: CharacterProfile[] = registeredChars.map(rc => ({
             name: rc.primaryName,
             gender: rc.gender,
-            traits: rc.traits,
+            traits: [rc.speechStyle], // Use speechStyle as single trait for compatibility
             role: 'unknown' as const,
             aliases: rc.aliases.filter(a => a !== rc.primaryName), // Exclude primary name from aliases
           }));
@@ -755,19 +766,69 @@ async function startBackgroundDramatization(
           
           console.log(`   ✅ Chapter ${chapterNum}: ${newSubChunks.length} sub-chunks (${result.method})`);
           
-          // DEBUG: Save dramatized text for analysis
-          const bookTitle = sanitizeBookTitle(BOOK_METADATA?.title || CURRENT_BOOK_FILE || 'Unknown');
+          // DEBUG: Save EXACT text as it will be sent to TTS (with speech style instructions)
+          // Format per official Gemini TTS multi-speaker docs:
+          // https://ai.google.dev/gemini-api/docs/speech-generation#multi-speaker
           const bookFolder = path.join(getAudiobooksDir(), bookTitle);
           await fs.promises.mkdir(bookFolder, { recursive: true });
           const debugPath = path.join(bookFolder, `chapter_${chapterNum}_dramatized.txt`);
           try {
-            // Apply same formatting as TTS (merge same-speaker segments + blank lines)
+            // Build EXACT TTS input per Gemini multi-speaker format
             const { extractVoiceSegments } = await import('./dramatizedChunkerSimple.js');
-            const { formatForMultiSpeakerTTS } = await import('./twoSpeakerChunker.js');
             const segments = extractVoiceSegments(result.taggedText);
-            const formattedText = formatForMultiSpeakerTTS(segments);
-            await fs.promises.writeFile(debugPath, formattedText, 'utf8');
-            console.log(`   📝 Debug: Saved dramatized text to ${debugPath}`);
+            
+            // Get CharacterRegistry for speech styles
+            const registry = (global as any).CHARACTER_REGISTRY;
+            
+            // Helper: get speech style for a speaker
+            const getSpeechStyle = (speaker: string): string | undefined => {
+              if (!registry) return undefined;
+              if (speaker === 'NARRATOR') {
+                return registry.getNarratorInstruction?.();
+              }
+              // Try exact match
+              let style = registry.getSpeechStyleForName?.(speaker);
+              if (style) return style;
+              // Try normalized name
+              const normalized = speaker.replace(/_/g, ' ').split(' ')
+                .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ');
+              style = registry.getSpeechStyleForName?.(normalized);
+              if (style) return style;
+              // Try surname
+              const lastName = normalized.split(' ').pop();
+              if (lastName && lastName.length >= 3) {
+                return registry.getSpeechStyleForName?.(lastName);
+              }
+              return undefined;
+            };
+            
+            // Helper: count words (excluding punctuation)
+            const countWords = (text: string): number => {
+              const clean = text.replace(/["„"'«»‹›,\.!?;:—–-]/g, '').trim();
+              return clean.split(/\s+/).filter(w => w.length > 0).length;
+            };
+            
+            // Format EXACTLY as TTS will receive it per Gemini multi-speaker docs:
+            // [Optional speech directive without period, with colon]
+            // SPEAKER: Text to speak
+            const ttsLines: string[] = [];
+            for (const seg of segments) {
+              const speechStyle = getSpeechStyle(seg.speaker);
+              const wordCount = countWords(seg.text);
+              
+              // Build the EXACT text TTS will receive
+              if (speechStyle && wordCount > 3) {
+                // Speech style directive (remove trailing period)
+                const directive = speechStyle.replace(/\.$/, '').trim();
+                ttsLines.push(`${directive}:`);
+              }
+              // SPEAKER: text format (Gemini multi-speaker format)
+              ttsLines.push(`${seg.speaker}: ${seg.text}`);
+              ttsLines.push(''); // blank line separator
+            }
+            
+            await fs.promises.writeFile(debugPath, ttsLines.join('\n'), 'utf8');
+            console.log(`   📝 Debug: Saved EXACT TTS input to ${debugPath}`);
           } catch (e) {
             console.error(`   ⚠️ Failed to save dramatized text:`, e);
           }
@@ -1072,9 +1133,11 @@ app.post('/api/book/select', async (req: Request, res: Response) => {
     // Note: undefined/'original' = no translation, anything else = translate to that language
     if (targetLanguage && typeof targetLanguage === 'string' && targetLanguage !== 'original') {
       TARGET_LANGUAGE = targetLanguage;
+      (global as any).TARGET_LANGUAGE = targetLanguage; // Expose for TTS single-word language override
       console.log(`🌍 Target language set: ${getLanguageDisplayName(targetLanguage)}`);
     } else {
       TARGET_LANGUAGE = null;
+      (global as any).TARGET_LANGUAGE = null;
       console.log(`🌍 No translation (using original language) - received: "${targetLanguage}"`);
     }
     
@@ -1450,6 +1513,7 @@ app.post('/api/tts/chunk', async (req: Request, res: Response) => {
       
       // Update target language
       TARGET_LANGUAGE = newTargetLang;
+      (global as any).TARGET_LANGUAGE = newTargetLang; // Expose for TTS single-word language override
       
       if (newTargetLang) {
         console.log(`🌍 Target language updated: ${getLanguageDisplayName(newTargetLang)}`);
@@ -2177,6 +2241,79 @@ app.get('/api/audiobooks/:bookTitle/chapters/:chapterIndex', (req: Request, res:
     console.error('✗ Error serving chapter:', error);
     res.status(500).json({
       error: 'Failed to serve chapter',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * Stream subchunk audio in real-time during generation
+ * 
+ * GET /api/audiobooks/:bookTitle/subchunks/:chapterIndex/:subChunkIndex
+ * Returns audio for specific subchunk, waiting if necessary during generation
+ */
+app.get('/api/audiobooks/:bookTitle/subchunks/:chapterIndex/:subChunkIndex', async (req: Request, res: Response) => {
+  try {
+    const { bookTitle, chapterIndex, subChunkIndex } = req.params;
+    const chapterNum = parseInt(chapterIndex);
+    const subChunkNum = parseInt(subChunkIndex);
+    
+    if (isNaN(chapterNum) || isNaN(subChunkNum)) {
+      return res.status(400).json({
+        error: 'Invalid parameters',
+        message: 'chapterIndex and subChunkIndex must be numbers',
+      });
+    }
+    
+    console.log(`🎧 Streaming subchunk: ${bookTitle} chapter ${chapterNum}, subchunk ${subChunkNum}`);
+    
+    // Check if subchunk exists
+    if (subChunkExists(bookTitle, chapterNum, subChunkNum)) {
+      const audio = loadSubChunk(bookTitle, chapterNum, subChunkNum);
+      if (audio) {
+        console.log(`✅ Serving existing subchunk: ${chapterNum}:${subChunkNum}`);
+        res.setHeader('Content-Type', 'audio/wav');
+        res.setHeader('Content-Length', audio.length.toString());
+        res.setHeader('X-SubChunk-Status', 'ready');
+        return res.send(audio);
+      }
+    }
+    
+    // If not found, wait for generation (polling with timeout)
+    const maxWaitMs = 30000; // 30 seconds max wait
+    const pollIntervalMs = 500; // Check every 500ms
+    const startTime = Date.now();
+    
+    while (Date.now() - startTime < maxWaitMs) {
+      if (subChunkExists(bookTitle, chapterNum, subChunkNum)) {
+        const audio = loadSubChunk(bookTitle, chapterNum, subChunkNum);
+        if (audio) {
+          const waitTime = Date.now() - startTime;
+          console.log(`✅ Serving generated subchunk: ${chapterNum}:${subChunkNum} (waited ${waitTime}ms)`);
+          res.setHeader('Content-Type', 'audio/wav');
+          res.setHeader('Content-Length', audio.length.toString());
+          res.setHeader('X-SubChunk-Status', 'generated');
+          res.setHeader('X-Wait-Time', waitTime.toString());
+          return res.send(audio);
+        }
+      }
+      
+      // Wait before next poll
+      await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+    }
+    
+    // Timeout - subchunk not ready
+    console.log(`❌ Timeout waiting for subchunk: ${chapterNum}:${subChunkNum}`);
+    return res.status(404).json({
+      error: 'SubChunk not ready',
+      message: `SubChunk ${chapterNum}:${subChunkNum} is not yet available`,
+      waitedMs: Date.now() - startTime
+    });
+    
+  } catch (error) {
+    console.error('✗ Error streaming subchunk:', error);
+    res.status(500).json({
+      error: 'Failed to stream subchunk',
       message: error instanceof Error ? error.message : 'Unknown error',
     });
   }

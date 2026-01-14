@@ -29,7 +29,7 @@ interface BookCardProps {
 export function BookCard({ book, onCoverPress, onChapterPress }: BookCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   
-  const progressPercent = book.progress 
+  const progressPercent = book.progress
     ? Math.round((book.progress.position / book.totalDuration) * 100)
     : 0;
 

@@ -139,9 +139,11 @@ export function FullPlayer({ onCollapse }: FullPlayerProps) {
               className="w-full h-full object-cover"
             />
           ) : (
-            <div className="w-full h-full bg-gradient-to-br from-[var(--neu-secondary)]/30 to-[var(--neu-info)]/30 flex items-center justify-center">
-              <span className="text-6xl">📚</span>
-            </div>
+            <img
+              src="/default-audiobook-cover.png"
+              alt={currentBook?.title ?? 'Audiobook'}
+              className="w-full h-full object-contain bg-gradient-to-br from-[var(--neu-secondary)]/10 to-[var(--neu-info)]/10"
+            />
           )}
         </div>
 

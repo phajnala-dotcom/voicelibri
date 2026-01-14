@@ -102,7 +102,7 @@ export interface CharacterProfile {
 export interface GeminiConfig {
   projectId: string;
   location: string; // e.g., 'us-central1'
-  model?: string; // Default: 'gemini-2.5-flash-002'
+  model?: string; // Default: LLM_MODEL env var or 'gemini-2.5-flash'
 }
 
 /**
@@ -201,14 +201,14 @@ export interface LlmCharacterAnalyzer {
 export class GeminiCharacterAnalyzer implements LlmCharacterAnalyzer {
   private projectId: string;
   private location: string;
-  private model: string = 'gemini-2.5-flash'; // Latest flash model
+  private model: string = process.env.LLM_MODEL_CHARACTER || 'gemini-2.5-flash'; // Latest flash model
   private auth: GoogleAuth;
   private endpoint: string;
   
   constructor(config: GeminiConfig) {
     this.projectId = config.projectId;
     this.location = config.location || 'us-central1';
-    this.model = config.model || 'gemini-2.5-flash';
+    this.model = config.model || process.env.LLM_MODEL_CHARACTER || 'gemini-2.5-flash';
     this.auth = new GoogleAuth({
       scopes: ['https://www.googleapis.com/auth/cloud-platform'],
     });
@@ -409,7 +409,7 @@ ${cleanedText.substring(0, 250000)}`;
      - Parenthetical or descriptive text before/after a quote
   3. ALWAYS SPLIT when a sentence has dialogue AND attribution - NEVER combine them!
   4. NEVER repeat quoted text in NARRATOR lines. The quote must appear only once, as the character.
-  5. Consecutive narration sentences should be grouped into a single NARRATOR line unless interrupted by dialogue.
+  5. Consecutive narration sentences must be grouped into a single NARRATOR line unless interrupted by dialogue.
 
   SPEAKER ALIAS FORMAT:
   - ALL CAPS, alphanumeric only (A-Z, 0-9)
@@ -447,11 +447,10 @@ ${cleanedText.substring(0, 250000)}`;
   NARRATOR: the presenter smiled.
 
   EXAMPLE 5 - Grouping consecutive narration:
-  INPUT: Mr. Dursley sat frozen in his armchair. Shooting stars all over Britain? Owls flying by day? Mysterious people in cloaks all over town? And they were whispering, whispering about the Potters...
-  Mrs. Dursley came into the living room with two cups of tea. There was nothing for it. He would have to tell her.
-  He cleared his throat nervously.
+  INPUT: Mr. Dursley sat frozen in his armchair. Shooting stars? Owls flying by day? Mysterious people in cloaks? And they were whispering about the Potters...
+  Mrs. Dursley came into the living room with two cups of tea. There was nothing for it. 
   CORRECT OUTPUT:
-  NARRATOR: Mr. Dursley sat frozen in his armchair. Shooting stars all over Britain? Owls flying by day? Mysterious people in cloaks all over town? And they were whispering, whispering about the Potters... Mrs. Dursley came into the living room with two cups of tea. There was nothing for it. He would have to tell her. He cleared his throat nervously.
+  NARRATOR: Mr. Dursley sat frozen in his armchair. Shooting stars all? Owls flying by day? Mysterious people in cloaks? And they were whispering about the Potters... Mrs. Dursley came into the living room with two cups of tea. There was nothing for it.
 
   EXAMPLES - Czech:
 
@@ -468,7 +467,7 @@ ${cleanedText.substring(0, 250000)}`;
   NARRATOR: řekl John.
   JOHN: „Druhá věta!"
 
-  Now tag this chapter. Output ONLY SPEAKER: text lines. CRITICAL: Split dialogue from attribution - character voice gets ONLY quoted text, NARRATOR gets attribution. Never repeat quoted text in NARRATOR lines. Group consecutive narration sentences into a single NARRATOR line unless interrupted by dialogue.
+  Now tag this chapter. Output ONLY SPEAKER: text lines. CRITICAL: Split dialogue from attribution - character voice gets ONLY quoted text, NARRATOR gets attribution.
 
   ${chapterText}`;
     

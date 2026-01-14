@@ -406,6 +406,132 @@ function lookupVoice(speaker: string, voiceMap: Record<string, string>, defaultV
   return defaultVoice;
 }
 
+/**
+ * Map short language codes to BCP-47 format for TTS API
+ */
+const LANG_CODE_TO_BCP47: Record<string, string> = {
+  'sk': 'sk-SK',
+  'cs': 'cs-CZ',
+  'en': 'en-US',
+  'de': 'de-DE',
+  'ru': 'ru-RU',
+  'pl': 'pl-PL',
+  'hr': 'hr-HR',
+  'zh': 'cmn-CN',
+  'nl': 'nl-NL',
+  'fr': 'fr-FR',
+  'hi': 'hi-IN',
+  'it': 'it-IT',
+  'ja': 'ja-JP',
+  'ko': 'ko-KR',
+  'pt': 'pt-BR',
+  'es': 'es-ES',
+  'uk': 'uk-UA',
+};
+
+/**
+ * Convert language code to BCP-47 format for TTS API
+ * Handles both short codes ('sk') and full BCP-47 codes ('sk-SK')
+ */
+function toBCP47(langCode: string): string {
+  // If already BCP-47 format (contains hyphen), return as-is
+  if (langCode.includes('-')) {
+    return langCode;
+  }
+  // Map short code to BCP-47
+  return LANG_CODE_TO_BCP47[langCode.toLowerCase()] || `${langCode}-${langCode.toUpperCase()}`;
+}
+
+/**
+ * DISABLED: Get language code for single-word texts to prevent TTS misdetection
+ * 
+ * Reason: Speech style instructions were interfering with TTS language detection.
+ * Now we rely on TTS auto-detection by NOT adding speech styles to short texts (≤3 words).
+ * 
+ * To re-enable: Uncomment this function and restore all getLanguageForSingleWord() calls below.
+ * 
+ * Logic (when enabled):
+ * 1. IF single word THEN force language
+ *    - IF TARGET_LANGUAGE set (translation) → use TARGET_LANGUAGE
+ *    - ELSE → use BOOK_METADATA.language (original book language)
+ * 2. ELSE (multiple words) → let TTS auto-detect
+ * 
+ * @param text - The text to check
+ * @returns BCP-47 language code (e.g., 'sk-SK') if single word, undefined otherwise
+ */
+/*
+function getLanguageForSingleWord(text: string): string | undefined {
+  // Strip punctuation and count words
+  const cleanText = text.replace(/["„"'«»‹›,\.!?;:—–-]/g, '').trim();
+  const words = cleanText.split(/\s+/).filter(w => w.length > 0);
+  
+  if (words.length === 1) {
+    // Single word - force book's language to prevent misdetection
+    // Priority: TARGET_LANGUAGE (if translating) > BOOK_METADATA.language (original)
+    const targetLang = (global as any).TARGET_LANGUAGE;
+    const bookLang = (global as any).BOOK_METADATA?.language;
+    const langToUse = targetLang || bookLang;
+    
+    if (langToUse) {
+      const bcp47Lang = toBCP47(langToUse);
+      console.log(`  🌍 Single word "${words[0]}" (from "${text}") → forcing language: ${bcp47Lang} (from ${targetLang ? 'TARGET' : 'BOOK'}=${langToUse})`);
+      return bcp47Lang;
+    } else {
+      console.log(`  ⚠️ Single word "${words[0]}" - no language info available`);
+    }
+  }
+  
+  // Multiple words - let TTS auto-detect
+  return undefined;
+}
+*/
+
+/**
+ * Look up speech style for a speaker from the global CharacterRegistry
+ * Returns TTS instruction as natural sentence (same format for narrator and characters)
+ * 
+ * @param speaker - Speaker name from voice tag (e.g., "JOSEPH_RAGOWSKI" or "NARRATOR")
+ * @returns Speech style instruction as natural sentence with action verb, or undefined
+ */
+function lookupSpeechStyle(speaker: string): string | undefined {
+  const registry = (global as any).CHARACTER_REGISTRY;
+  
+  // NARRATOR uses special narrator instruction
+  if (speaker === 'NARRATOR') {
+    if (registry?.getNarratorInstruction) {
+      return registry.getNarratorInstruction();
+    }
+    return undefined; // No narrator instruction yet
+  }
+  
+  if (!registry?.getSpeechStyleForName) {
+    return undefined;
+  }
+  
+  // Try exact match first
+  const directStyle = registry.getSpeechStyleForName(speaker);
+  if (directStyle) return directStyle;
+  
+  // Try normalized name (UPPERCASE_WITH_UNDERSCORES → Title Case)
+  const normalizedName = speaker
+    .replace(/_/g, ' ')
+    .split(' ')
+    .map((word: string) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
+  
+  const normalizedStyle = registry.getSpeechStyleForName(normalizedName);
+  if (normalizedStyle) return normalizedStyle;
+  
+  // Try just the last word (surname)
+  const lastName = normalizedName.split(' ').pop();
+  if (lastName && lastName.length >= 3) {
+    const surnameStyle = registry.getSpeechStyleForName(lastName);
+    if (surnameStyle) return surnameStyle;
+  }
+  
+  return undefined;
+}
+
 // ========================================
 // Temp Chunk Generation
 // ========================================
@@ -483,7 +609,9 @@ export async function generateAndSaveTempChunk(
       
       // Concatenate all segment texts (they're all from the same speaker)
       const combinedText = voiceSegments.map(s => s.text).join(' ');
-      audioBuffer = await synthesizeText(combinedText, voice);
+      const speechStyle = lookupSpeechStyle(speaker);
+      // Language forcing disabled - TTS auto-detects (no speech style for short texts)
+      audioBuffer = await synthesizeText(combinedText, voice, 'normal', speechStyle, undefined);
       
     } else {
       // BYPASS TEST: Force single-speaker TTS for all segments (PART 1: pre-tagged chunks)
@@ -492,7 +620,9 @@ export async function generateAndSaveTempChunk(
       
       for (const seg of voiceSegments) {
         const voice = lookupVoice(seg.speaker, voiceMap, defaultVoice);
-        const segAudio = await synthesizeText(seg.text, voice);
+        const speechStyle = lookupSpeechStyle(seg.speaker);
+        // Language forcing disabled - TTS auto-detects (no speech style for short texts)
+        const segAudio = await synthesizeText(seg.text, voice, 'normal', speechStyle, undefined);
         audioBuffers.push(segAudio);
       }
       
@@ -520,7 +650,8 @@ export async function generateAndSaveTempChunk(
           // Single speaker
           const voice = lookupVoice(subChunk.speakers[0], voiceMap, defaultVoice);
           const text = subChunk.segments.map(s => s.text).join(' ');
-          subBuffer = await synthesizeText(text, voice);
+          const langOverride = getLanguageForSingleWord(text);
+          subBuffer = await synthesizeText(text, voice, 'normal', undefined, langOverride);
         } else {
           // 2 speakers - true multi-speaker
           const speakerConfigs: SpeakerConfig[] = subChunk.speakers.map(speaker => ({
@@ -591,7 +722,9 @@ export async function generateAndSaveTempChunk(
         
         for (const seg of dramatizedSegments) {
           const voice = lookupVoice(seg.speaker, voiceMap, defaultVoice);
-          const segAudio = await synthesizeText(seg.text, voice);
+          const speechStyle = lookupSpeechStyle(seg.speaker);
+          // Language forcing disabled - TTS auto-detects (no speech style for short texts)
+          const segAudio = await synthesizeText(seg.text, voice, 'normal', speechStyle, undefined);
           audioBuffers.push(segAudio);
         }
         
@@ -657,7 +790,9 @@ export async function generateAndSaveTempChunk(
         // Dramatization didn't produce voice tags - use single voice
         console.log(`    📝 No dialogue found, using narrator voice`);
         const cleanText = removeVoiceTags(chunkText);
-        audioBuffer = await synthesizeText(cleanText, defaultVoice);
+        const narratorSpeechStyle = lookupSpeechStyle('NARRATOR');
+        // Language forcing disabled - TTS auto-detects (no speech style for short texts)
+        audioBuffer = await synthesizeText(cleanText, defaultVoice, 'normal', narratorSpeechStyle, undefined);
       }
       
     } else {
@@ -675,7 +810,9 @@ export async function generateAndSaveTempChunk(
         );
       }
       
-      audioBuffer = await synthesizeText(cleanText, defaultVoice);
+      const narratorSpeechStyle = lookupSpeechStyle('NARRATOR');
+      // Language forcing disabled - TTS auto-detects (no speech style for short texts)
+      audioBuffer = await synthesizeText(cleanText, defaultVoice, 'normal', narratorSpeechStyle, undefined);
     }
   }
   
@@ -760,9 +897,11 @@ async function generateMultiVoiceSimulated(
       const speaker = batchSpeakers[0];
       const voice = lookupVoice(speaker, voiceMap, defaultVoice);
       const combinedText = batch.map(s => s.text).join(' ');
+      const speechStyle = lookupSpeechStyle(speaker);
+      // Language forcing disabled - TTS auto-detects (no speech style for short texts)
       
       console.log(`     Batch ${i + 1}/${batches.length}: Single-voice (${speaker} → ${voice})`);
-      batchAudio = await synthesizeText(combinedText, voice);
+      batchAudio = await synthesizeText(combinedText, voice, 'normal', speechStyle, undefined);
       
     } else {
       // 2 speakers - use true multi-speaker TTS
@@ -1334,18 +1473,37 @@ export async function generateSubChunk(
       let audioBuffer: Buffer;
       
       // BYPASS TEST: Force single-speaker TTS for all segments (PART 3: sub-chunk generation)
+      // Group consecutive same-speaker segments to avoid redundant speech instructions
       console.log(`  🧪 BYPASS: ${subChunk.speakers.length} speakers - generating ${subChunk.segments.length} single-speaker segments`);
       const audioBuffers: Buffer[] = [];
       
+      // Group consecutive same-speaker segments
+      const groupedSegments: { speaker: string; text: string }[] = [];
       for (const seg of subChunk.segments) {
-        const voice = lookupVoice(seg.speaker, voiceMap, defaultVoice);
-        const segAudio = await synthesizeText(seg.text, voice);
+        const lastGroup = groupedSegments[groupedSegments.length - 1];
+        if (lastGroup && lastGroup.speaker === seg.speaker) {
+          // Same speaker - combine text with space separator
+          lastGroup.text += ' ' + seg.text;
+        } else {
+          // New speaker - create new group
+          groupedSegments.push({ speaker: seg.speaker, text: seg.text });
+        }
+      }
+      
+      console.log(`  📦 Grouped into ${groupedSegments.length} speaker groups (from ${subChunk.segments.length} segments)`);
+      
+      // Generate TTS for each grouped segment
+      for (const group of groupedSegments) {
+        const voice = lookupVoice(group.speaker, voiceMap, defaultVoice);
+        const speechStyle = lookupSpeechStyle(group.speaker);
+        // Language forcing disabled - TTS auto-detects (no speech style for short texts)
+        const segAudio = await synthesizeText(group.text, voice, 'normal', speechStyle, undefined);
         audioBuffers.push(segAudio);
       }
       
       // Concatenate all audio buffers
       audioBuffer = concatenateWavBuffers(audioBuffers);
-      console.log(`  ✅ Concatenated ${audioBuffers.length} single-speaker segments`);
+      console.log(`  ✅ Concatenated ${audioBuffers.length} grouped segments`);
       
       /* ORIGINAL SUB-CHUNK MULTI-SPEAKER CODE (bypassed for testing):
       if (subChunk.speakers.length === 1) {

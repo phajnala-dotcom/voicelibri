@@ -19,9 +19,9 @@ export interface SpeakerConfig {
 
 /**
  * Gemini TTS model to use
- * Using 'gemini-2.5-flash-tts' (stable) - switch to 'gemini-2.5-flash-preview-tts' when rate limits allow
+ * TTS model configured via environment variable
  */
-const TTS_MODEL = 'gemini-2.5-flash-tts';
+const TTS_MODEL = process.env.TTS_MODEL || 'gemini-2.5-flash-tts';
 
 /**
  * Creates a WAV file header and combines it with PCM audio data
@@ -82,12 +82,16 @@ export class TTSClient {
    * @param text - The text to synthesize
    * @param voiceName - The Gemini voice name to use (e.g., 'Algieba', 'Puck', 'Zephyr')
    * @param style - Voice style modifier: 'normal', 'whisper', 'thought', 'letter'
+   * @param speechStyle - Optional custom speech style instruction (natural sentence like "Speak slowly with gravelly voice.")
+   * @param languageCode - Optional language code to force (e.g., 'cs-CZ') - used for single-word texts to prevent misdetection
    * @returns Buffer containing audio data (WAV format)
    */
   async synthesizeText(
     text: string, 
     voiceName: string = 'Algieba',
-    style: 'normal' | 'whisper' | 'thought' | 'letter' = 'normal'
+    style: 'normal' | 'whisper' | 'thought' | 'letter' = 'normal',
+    speechStyle?: string,
+    languageCode?: string
   ): Promise<Buffer> {
     const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/${this.projectId}/locations/${this.location}/publishers/google/models/${TTS_MODEL}:generateContent`;
 
@@ -99,22 +103,65 @@ export class TTSClient {
       throw new Error('Failed to get access token');
     }
 
-    // Apply verbal style instructions for Gemini TTS
+    // Format speech instructions according to official Gemini TTS multi-speaker documentation
+    // https://ai.google.dev/gemini-api/docs/speech-generation#multi-speaker
+    // 
+    // Correct format:
+    // [Speech style directive without period, ending with colon]
+    // SPEAKER: Text to speak
+    //
+    // Example:
+    // Read clearly and professionally:
+    // NARRATOR: "The story begins..."
     let styledText = text;
-    switch (style) {
-      case 'whisper':
-        styledText = `[Speak in a hushed whisper] ${text}`;
-        break;
-      case 'thought':
-        styledText = `[Internal thought, speaking to oneself] ${text}`;
-        break;
-      case 'letter':
-        styledText = `[Reading aloud from a letter] ${text}`;
-        break;
-      case 'normal':
-      default:
-        styledText = text;
-        break;
+    
+    // Check word count (after removing punctuation)
+    // NO speech style for 3 or fewer words - let TTS auto-detect language
+    const cleanText = text.replace(/["„"'«»‹›,\.!?;:—–-]/g, '').trim();
+    const wordCount = cleanText.split(/\s+/).filter(w => w.length > 0).length;
+    const isShortText = wordCount <= 3;
+    
+    if (speechStyle && !isShortText) {
+      // Use speech style directive directly (already has action verb like "Read", "Narrate", "Speak")
+      // Remove trailing period, ensure ends with colon
+      const directive = speechStyle.replace(/\.$/, '').trim();
+      styledText = `${directive}:\n${text}`;
+    } else if (!speechStyle && !isShortText) {
+      // Apply basic style presets (only for >3 words)
+      switch (style) {
+        case 'whisper':
+          styledText = `Speak in a hushed whisper:\n${text}`;
+          break;
+        case 'thought':
+          styledText = `Speak as an internal thought:\n${text}`;
+          break;
+        case 'letter':
+          styledText = `Read aloud:\n${text}`;
+          break;
+        case 'normal':
+        default:
+          // No directive for normal style
+          styledText = text;
+          break;
+      }
+    } else {
+      // Short text (≤3 words): use raw text to allow TTS auto language detection
+      styledText = text;
+    }
+
+    // Build speech config with optional language override
+    const speechConfig: any = {
+      voice_config: {
+        prebuilt_voice_config: {
+          voice_name: voiceName
+        }
+      }
+    };
+    
+    // Add language code if provided (for single-word texts to prevent misdetection)
+    if (languageCode) {
+      speechConfig.language_code = languageCode;
+      console.log(`  🔤 TTS language_code set to: ${languageCode}`);
     }
 
     const requestBody = {
@@ -126,13 +173,7 @@ export class TTSClient {
       },
       generation_config: {
         response_modalities: ['AUDIO'],
-        speech_config: {
-          voice_config: {
-            prebuilt_voice_config: {
-              voice_name: voiceName
-            }
-          }
-        }
+        speech_config: speechConfig
       }
     };
 
@@ -148,7 +189,9 @@ export class TTSClient {
           await new Promise(resolve => setTimeout(resolve, delay));
         }
         
-        const styleDesc = style !== 'normal' ? ` [${style.toUpperCase()}]` : '';
+        const styleDesc = speechStyle 
+          ? ` ${speechStyle.substring(0, 50)}...` 
+          : (style !== 'normal' ? ` [${style.toUpperCase()}]` : '');
         console.log(`🎤 TTS API call - Text: ${text.length} chars, Voice: ${voiceName}${styleDesc}`);
         const startTime = Date.now();
         
@@ -402,7 +445,13 @@ STYLE: Read as a world-class voice artist with immersive, expressive, yet natura
 // Convenience functions (stateless)
 // ========================================
 
-export async function synthesizeText(text: string, voiceName: string = 'Algieba'): Promise<Buffer> {
+export async function synthesizeText(
+  text: string, 
+  voiceName: string = 'Algieba',
+  style: 'normal' | 'whisper' | 'thought' | 'letter' = 'normal',
+  speechStyle?: string,
+  languageCode?: string
+): Promise<Buffer> {
   const projectId = process.env.GOOGLE_CLOUD_PROJECT;
   const location = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1';
 
@@ -415,7 +464,7 @@ export async function synthesizeText(text: string, voiceName: string = 'Algieba'
   }
 
   const ttsClient = new TTSClient({ projectId, location });
-  return ttsClient.synthesizeText(text, voiceName);
+  return ttsClient.synthesizeText(text, voiceName, style, speechStyle, languageCode);
 }
 
 /**

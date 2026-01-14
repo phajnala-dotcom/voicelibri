@@ -17,9 +17,10 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { Card, CardBody, Toggle } from '../components/ui';
-import { selectBook, convertToBook, getGenerationStatus, getAudiobooks } from '../services/api';
+import { selectBook, convertToBook, getGenerationProgress, getAudiobook } from '../services/api';
 import { useLibraryStore } from '../stores/libraryStore';
 import { usePlayerStore } from '../stores/playerStore';
+import { useProgressiveAudioPlayback } from '../hooks/useProgressiveAudioPlayback';
 
 // Voice options - separated by gender
 const MALE_VOICES = [
@@ -63,7 +64,8 @@ const FEMALE_VOICES = [
  */
 export function GenerateScreen() {
   const { addBook, books } = useLibraryStore();
-  const { setCurrentBook, setCurrentChapter, play, showMiniPlayer } = usePlayerStore();
+  const { showMiniPlayer, startProgressivePlayback: startProgressivePlaybackStore } = usePlayerStore();
+  const { startProgressivePlayback } = useProgressiveAudioPlayback();
   
   // Upload state
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -190,46 +192,38 @@ export function GenerateScreen() {
           addBook(book);
         }
         
-        // Start MiniPlayer playback IMMEDIATELY
-        setCurrentBook(book);
-        setCurrentChapter(book.chapters[0]);
+        // Start progressive playback IMMEDIATELY
+        console.log('🚀 Starting progressive playback for new audiobook:', book.title);
         showMiniPlayer();
-        play(); // Start playback immediately
-      }
-      
-      // Poll for generation status (stay on Create tab)
-      const pollInterval = setInterval(async () => {
-        try {
-          const statusData = await getGenerationStatus();
-          
-          // Calculate progress
-          if (statusData.totalChapters > 0) {
-            const progressPercent = (statusData.currentChapter / statusData.totalChapters) * 100;
-            setProgress(progressPercent);
-          }
-          
-          // Check if completed
-          if (statusData.phase === 'complete' || statusData.phase === 'idle') {
-            clearInterval(pollInterval);
-            setIsGenerating(false);
-            setProgress(100);
-            
-            // Refresh the book in library with updated metadata
-            try {
-              const audiobooks = await getAudiobooks();
-              const metadata = audiobooks.find(a => a.title === result.title);
-              if (metadata) {
-                const updatedBook = convertToBook(metadata);
+        startProgressivePlaybackStore(book);
+        await startProgressivePlayback(book);
+        
+        // Start polling for status updates
+        const pollInterval = setInterval(async () => {
+          try {
+            const progressData = await getGenerationProgress(bookTitle);
+            if (progressData.status === 'completed') {
+              console.log('📚 Audiobook generation completed!');
+              setIsGenerating(false);
+              clearInterval(pollInterval);
+              
+              // Refresh book metadata
+              try {
+                const audioBookMetadata = await getAudiobook(bookTitle);
+                const updatedBook = convertToBook(audioBookMetadata);
                 addBook(updatedBook);
+              } catch (e) {
+                console.log('Could not refresh book metadata:', e);
               }
-            } catch (e) {
-              console.log('Could not refresh book metadata:', e);
+            } else {
+              // Update progress if available
+              setProgress(progressData.progress || 0);
             }
+          } catch (err) {
+            console.error('Status polling error:', err);
           }
-        } catch (err) {
-          console.error('Status polling error:', err);
-        }
-      }, 3000);
+        }, 3000);
+      }
       
     } catch (err) {
       console.error('Generation error:', err);
