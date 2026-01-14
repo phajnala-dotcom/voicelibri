@@ -33,24 +33,11 @@ import {
   getTempFolder,
   createAudiobookFolder,
   sanitizeChapterTitle,
+  getSubChunkPath, 
+  listChapterSubChunks,
 } from './audiobookManager.js';
 import { Chapter } from './bookChunker.js';
-import { formatForMultiSpeakerTTS, getUniqueSpeakers, chunkForTwoSpeakers } from './twoSpeakerChunker.js';
-
-// ========================================
-// Pre-Dramatization Pipeline Cache
-// ========================================
-
-/**
- * In-memory cache for pre-dramatized chunk text
- * Key: chunkIndex, Value: dramatized text with voice tags
- */
-const dramatizationCache = new Map<number, string>();
-
-/**
- * Track which chunks are currently being dramatized (to avoid duplicates)
- */
-const dramatizationInProgress = new Set<number>();
+import { formatForMultiSpeakerTTS, getUniqueSpeakers, chunkForTwoSpeakers, TwoSpeakerChunk } from './twoSpeakerChunker.js';
 
 /**
  * Flag to control pre-dramatization pipeline
@@ -59,50 +46,10 @@ let preDramatizationRunning = false;
 let preDramatizationAbort: AbortController | null = null;
 
 /**
- * Clear dramatization cache (called when loading new book)
+ * In-memory cache for pre-dramatized chunk text
  */
-export function clearDramatizationCache(): void {
-  dramatizationCache.clear();
-  dramatizationInProgress.clear();
-  if (preDramatizationAbort) {
-    preDramatizationAbort.abort();
-    preDramatizationAbort = null;
-  }
-  preDramatizationRunning = false;
-  console.log('🧹 Dramatization cache cleared');
-}
-
-/**
- * Check if a chunk has been pre-dramatized
- */
-export function isDramatized(chunkIndex: number): boolean {
-  return dramatizationCache.has(chunkIndex);
-}
-
-/**
- * Get pre-dramatized text from cache
- */
-export function getDramatizedText(chunkIndex: number): string | undefined {
-  return dramatizationCache.get(chunkIndex);
-}
-
-/**
- * Store dramatized text in cache
- */
-export function cacheDramatizedText(chunkIndex: number, taggedText: string): void {
-  dramatizationCache.set(chunkIndex, taggedText);
-}
-
-/**
- * Get cache statistics for debugging
- */
-export function getDramatizationCacheStats(): { cached: number; inProgress: number; running: boolean } {
-  return {
-    cached: dramatizationCache.size,
-    inProgress: dramatizationInProgress.size,
-    running: preDramatizationRunning,
-  };
-}
+const dramatizationCache = new Map<number, string>();
+const dramatizationInProgress = new Set<number>();
 
 // ========================================
 // Core Dramatization Logic (shared)
@@ -1387,9 +1334,6 @@ export function deleteChapterTempChunks(bookTitle: string, chunkIndices: number[
 // NEW: Sub-chunk Generation (Parallel Pipeline)
 // ========================================
 
-import { getSubChunkPath, listChapterSubChunks } from './audiobookManager.js';
-import { TwoSpeakerChunk } from './twoSpeakerChunker.js';
-
 /**
  * Result of sub-chunk generation
  */
@@ -1695,83 +1639,51 @@ export async function consolidateChapterFromSubChunks(
   chapterIndex: number,
   chapterTitle?: string
 ): Promise<string> {
-  const outputPath = getChapterPath(bookTitle, chapterIndex, chapterTitle);
-  
-  // Check if chapter file already exists
-  if (fs.existsSync(outputPath)) {
-    console.log(`✓ Chapter ${chapterIndex + 1} already consolidated: ${outputPath}`);
-    return outputPath;
-  }
-  
-  // Get all sub-chunk files for this chapter
+  const tempDir = getTempFolder(bookTitle);
   const subChunkFiles = listChapterSubChunks(bookTitle, chapterIndex);
   
   if (subChunkFiles.length === 0) {
     throw new Error(`No sub-chunks found for chapter ${chapterIndex}`);
   }
   
-  console.log(`📦 Consolidating Chapter ${chapterIndex} from ${subChunkFiles.length} sub-chunks...`);
+  console.log(`📦 Consolidating chapter ${chapterIndex} from ${subChunkFiles.length} sub-chunks...`);
   
-  // Load all sub-chunk buffers and calculate total duration
-  const buffers: Buffer[] = [];
-  let totalDuration = 0;
-  
-  for (let i = 0; i < subChunkFiles.length; i++) {
-    const buffer = fs.readFileSync(subChunkFiles[i]);
-    buffers.push(buffer);
-    
-    // Calculate duration from PCM data size (buffer length - 44 byte WAV header)
-    const pcmSize = buffer.length - 44;
-    const duration = pcmSize / (24000 * 1 * 2); // 24kHz, mono, 16-bit
-    totalDuration += duration;
+  // Load and concatenate all sub-chunk audio
+  const chunkBuffers: Buffer[] = [];
+  for (const filePath of subChunkFiles) {
+    const buffer = fs.readFileSync(filePath);
+    chunkBuffers.push(buffer);
   }
   
-  // Concatenate into single WAV
-  const chapterAudio = concatenateWavBuffers(buffers);
-  
-  // Ensure output directory exists
-  const bookDir = path.dirname(outputPath);
-  if (!fs.existsSync(bookDir)) {
-    fs.mkdirSync(bookDir, { recursive: true });
-  }
-  
-  // Save consolidated chapter file
+  const chapterAudio = concatenateWavBuffers(chunkBuffers);
+  const outputPath = getChapterPath(bookTitle, chapterIndex, chapterTitle);
   fs.writeFileSync(outputPath, chapterAudio);
   
-  console.log(`✅ Consolidated Chapter ${chapterIndex}: ${path.basename(outputPath)} (${chapterAudio.length} bytes, ~${totalDuration.toFixed(1)}s)`);
+  console.log(`✅ Consolidated: ${path.basename(outputPath)} (${chapterAudio.length} bytes)`);
   
   return outputPath;
 }
 
 /**
- * Delete sub-chunks for a specific chapter after consolidation
- * 
- * @param bookTitle - Sanitized book title
- * @param chapterIndex - Chapter index
- * @returns Number of files deleted
+ * Delete sub-chunks for a specific chapter
  */
 export function deleteChapterSubChunks(bookTitle: string, chapterIndex: number): number {
   const tempDir = getTempFolder(bookTitle);
-  
-  if (!fs.existsSync(tempDir)) {
-    return 0;
-  }
-  
   const subChunkFiles = listChapterSubChunks(bookTitle, chapterIndex);
   
   for (const filePath of subChunkFiles) {
-    fs.unlinkSync(filePath);
-  }
-  
-  if (subChunkFiles.length > 0) {
-    console.log(`  🗑️  Deleted ${subChunkFiles.length} sub-chunks for chapter ${chapterIndex + 1}`);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
   }
   
   // Check if temp folder is now empty and delete it
-  const remainingFiles = fs.readdirSync(tempDir);
-  if (remainingFiles.length === 0) {
-    fs.rmdirSync(tempDir);
-    console.log(`  🗑️  Removed empty temp folder`);
+  if (fs.existsSync(tempDir)) {
+    const remainingFiles = fs.readdirSync(tempDir);
+    if (remainingFiles.length === 0) {
+      fs.rmdirSync(tempDir);
+      console.log(`  🗑️  Removed empty temp folder`);
+    }
   }
   
   return subChunkFiles.length;

@@ -6,7 +6,6 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { synthesizeText } from './ttsClient.js';
 import { 
-  chunkBookText, 
   getBookInfo, 
   parseBookMetadata, 
   formatDuration,
@@ -22,15 +21,9 @@ import {
   generateAndSaveTempChunk,
   tempChunkExists, 
   loadTempChunk,
-  consolidateChapterFromTemps,
   consolidateChapterSmart,
   deleteAllTempChunks,
-  // Pre-dramatization pipeline
-  clearDramatizationCache,
-  startPreDramatization,
   stopPreDramatization,
-  getDramatizationCacheStats,
-  // NEW: Sub-chunk generation (parallel pipeline)
   generateSubChunksParallel,
   consolidateChapterFromSubChunks,
   deleteChapterSubChunks,
@@ -61,12 +54,12 @@ import {
   createSingleChapter,
   type Chapter 
 } from './bookChunker.js';
-import { chunkBookByChapters, type ChunkInfo } from './chapterChunker.js';
+import { type ChunkInfo } from './chapterChunker.js';
 import { chunkForTwoSpeakers, type TwoSpeakerChunk } from './twoSpeakerChunker.js';
-import { dramatizeBookHybrid, tagChapterHybrid } from './hybridDramatizer.js';
+import { tagChapterHybrid } from './hybridDramatizer.js';
 import { GeminiConfig, CharacterProfile } from './llmCharacterAnalyzer.js';
 import { audiobookWorker } from './audiobookWorker.js';
-import { dramatizeBook, checkCache } from './geminiDramatizer.js';
+import { checkCache } from './geminiDramatizer.js';
 // Chapter translation support
 import { 
   ChapterTranslator, 
@@ -200,7 +193,7 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
   VOICE_MAP = {};
   
   // Clear dramatization cache from previous book
-  clearDramatizationCache();
+
   
   // Stop any ongoing background dramatization (includes TTS generation)
   stopBackgroundDramatization();
@@ -2031,7 +2024,7 @@ app.post('/api/audiobooks/generate', async (req: Request, res: Response) => {
     }
     
     // Chunk the chapters
-    const chunkingResult = chunkBookByChapters(chapters, isDramatized);
+
     
     // Create audiobook folder and metadata
     const bookTitle = sanitizeBookTitle(bookMetadata.title);
@@ -2048,7 +2041,7 @@ app.post('/api/audiobooks/generate', async (req: Request, res: Response) => {
         filename: `Chapter_${i.toString().padStart(2, '0')}.wav`,
         duration: 0,
         isGenerated: false,
-        tempChunksCount: chunkingResult.chapterChunkCounts[i],
+        tempChunksCount: 0,
         tempChunksGenerated: 0,
       })),
       generationStatus: 'in-progress' as const,
@@ -2063,7 +2056,7 @@ app.post('/api/audiobooks/generate', async (req: Request, res: Response) => {
     audiobookWorker.addBook(
       bookTitle,
       chapters,
-      chunkingResult.chunks,
+      [],
       voiceMap,
       defaultVoice,
       isDramatized
@@ -2075,7 +2068,7 @@ app.post('/api/audiobooks/generate', async (req: Request, res: Response) => {
       success: true,
       bookTitle,
       metadata: audiobookMetadata,
-      totalChunks: chunkingResult.totalChunks,
+      totalChunks: 0,
       message: 'Audiobook generation started in background',
     });
   } catch (error) {
@@ -2191,24 +2184,10 @@ app.post('/api/dramatize/auto', async (req: Request, res: Response) => {
     }
     
     console.log(`🎭 Starting LLM dramatization for: ${bookFile} (mode: ${mode})`);
-    
-    const result = await dramatizeBook(bookPath, {
-      mode,
-      onProgress: (progress) => {
-        console.log(`  📊 ${progress.phase}: ${progress.message} (${progress.progress}%)`);
-      },
-    });
-    
+    // PHASE 2 cleanup: dramatizeBook and onProgress removed. Implement new dramatization logic here if needed.
     res.json({
-      success: true,
-      message: 'Book dramatized successfully',
-      characters: result.characters,
-      voiceMap: result.voiceMap,
-      stats: {
-        charactersFound: result.stats.charactersFound,
-        chaptersTagged: result.stats.chaptersTagged,
-        totalTime: result.stats.totalTime,
-      },
+      success: false,
+      message: 'Dramatization endpoint under refactor. Please use hybrid dramatization.',
     });
   } catch (error) {
     console.error('✗ Error dramatizing book:', error);
