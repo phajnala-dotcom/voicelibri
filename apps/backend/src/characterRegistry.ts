@@ -1,19 +1,39 @@
 /**
- * Character Registry - Per-Chapter Character Extraction with Alias Support
+ * Character Registry - Per-Chapter Character Extraction with Speech Style
  * 
  * Universal approach for both translated and non-translated books:
- * - Extracts characters per-chapter (after translation if applicable)
+ * - Extracts characters per-chapter with LLM-selected voices and speech styles
  * - Detects aliases (same character, different names)
- * - Maintains cumulative registry with locked voice assignments
- * - Provides flat character→voice mapping for dramatization
+ * - Maintains cumulative registry with locked voice/speechStyle assignments
+ * - Provides flat character→voice→speechStyle mapping for TTS
+ * - Extracts book info for narrator TTS instruction (chapters 1-2, then locked)
  */
 
 import { GoogleAuth } from 'google-auth-library';
 import { GeminiConfig, toTTSSpeakerAlias } from './llmCharacterAnalyzer.js';
-import { selectVoiceForCharacter, GeminiVoice } from './geminiVoices.js';
+import { GEMINI_VOICES, getVoiceByName, getVoicesByGender } from './geminiVoices.js';
 
 /**
- * Character with alias support
+ * Book/document information for narrator TTS instruction
+ * Extracted from chapter 1, refined in chapter 2, then LOCKED
+ * Each field STRICTLY MAX 10 WORDS
+ */
+export interface BookInfo {
+  /** Genre(s) with adjectives: dark fantasy, gothic horror, etc. (MAX 10 WORDS) */
+  genre: string;
+  
+  /** Tone: atmospheric, suspenseful, humorous, dramatic, etc. (MAX 10 WORDS) */
+  tone: string;
+  
+  /** Setting/era: Victorian England, 19th century, etc. (MAX 10 WORDS) */
+  setting: string;
+  
+  /** Whether bookInfo is locked (after chapter 2) */
+  locked?: boolean;
+}
+
+/**
+ * Character with alias support and speech style
  */
 export interface RegisteredCharacter {
   /** Unique ID for this character */
@@ -28,17 +48,23 @@ export interface RegisteredCharacter {
   /** All names/aliases for this character */
   aliases: string[];
   
-  /** Assigned voice (LOCKED after first assignment) */
+  /** Assigned Gemini voice name (LOCKED after first assignment) */
   voice: string;
   
-  /** Gender for voice selection */
-  gender: 'male' | 'female' | 'neutral' | 'unknown';
+  /** Current speech style instruction for TTS (max 10 words, can evolve gradually) */
+  speechStyle: string;
   
-  /** Cumulative personality traits */
-  traits: string[];
+  /** History of speech style changes: [chapterNum, speechStyle][] */
+  speechStyleHistory: Array<[number, string]>;
+  
+  /** Gender */
+  gender: 'male' | 'female' | 'neutral' | 'unknown';
   
   /** Chapter where first encountered */
   firstSeenChapter: number;
+  
+  /** Last chapter where this character appeared */
+  lastSeenChapter: number;
 }
 
 /**
@@ -54,14 +80,21 @@ export interface ChapterCharacterInfo {
   /** Gender */
   gender: 'male' | 'female' | 'neutral' | 'unknown';
   
-  /** Traits observed in this chapter */
-  traits: string[];
+  /** LLM-selected Gemini voice name */
+  voiceName: string;
+  
+  /** Speech style instruction for TTS (max 10 words) */
+  speechStyle: string;
 }
 
 /**
  * LLM extraction response structure
  */
 export interface ExtractionResult {
+  /** Book/document info (only on chapters 1-2) */
+  bookInfo?: BookInfo;
+  
+  /** Characters found in this chapter */
   characters: ChapterCharacterInfo[];
 }
 
@@ -76,7 +109,7 @@ export class CharacterRegistry {
   
   private projectId: string;
   private location: string;
-  private model: string = 'gemini-2.5-flash';
+  private model: string = process.env.LLM_MODEL_CHARACTER || 'gemini-2.5-flash';
   private auth: GoogleAuth;
   private endpoint: string;
   
@@ -84,10 +117,16 @@ export class CharacterRegistry {
   private narratorVoice: string = 'Enceladus';
   private usedVoices: Set<string> = new Set();
   
+  // Book info for narrator TTS instruction (locked after chapter 2)
+  private bookInfo: BookInfo | null = null;
+  
+  // Pre-built narrator TTS instruction (built from bookInfo)
+  private narratorInstruction: string | null = null;
+  
   constructor(config: GeminiConfig) {
     this.projectId = config.projectId;
     this.location = config.location || 'us-central1';
-    this.model = config.model || 'gemini-2.5-flash';
+    this.model = config.model || process.env.LLM_MODEL_CHARACTER || 'gemini-2.5-flash';
     this.auth = new GoogleAuth({
       scopes: ['https://www.googleapis.com/auth/cloud-platform'],
     });
@@ -113,7 +152,7 @@ export class CharacterRegistry {
     const requestBody = {
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       generationConfig: {
-        temperature: 0.1,
+        temperature: 0.2, // Slightly higher for creative speech styles
         maxOutputTokens: 8192,
         topP: 0.95,
       },
@@ -146,33 +185,117 @@ export class CharacterRegistry {
   }
   
   /**
-   * Extract characters from a chapter
-   * Updates registry with new characters and aliases
+   * Build Gemini voice list for LLM prompt
+   */
+  private getVoiceListForPrompt(): string {
+    const maleVoices = GEMINI_VOICES.filter(v => v.gender === 'male')
+      .map(v => `${v.name} (${v.pitch} pitch, ${v.characteristic})`)
+      .join(', ');
+    const femaleVoices = GEMINI_VOICES.filter(v => v.gender === 'female')
+      .map(v => `${v.name} (${v.pitch} pitch, ${v.characteristic})`)
+      .join(', ');
+    
+    return `MALE VOICES: ${maleVoices}
+FEMALE VOICES: ${femaleVoices}`;
+  }
+  
+  /**
+   * Build already-assigned voices list for LLM prompt
+   */
+  private getAssignedVoicesForPrompt(): string {
+    if (this.usedVoices.size === 0) {
+      return '';
+    }
+    
+    const assignments: string[] = [];
+    if (this.narratorVoice) {
+      assignments.push(`${this.narratorVoice} (NARRATOR)`);
+    }
+    for (const char of this.characters.values()) {
+      assignments.push(`${char.voice} (${char.primaryName})`);
+    }
+    
+    return `ALREADY ASSIGNED (do NOT reuse): ${assignments.join(', ')}`;
+  }
+  
+  /**
+   * Extract characters from a chapter (content only, not sections)
+   * Updates registry with new characters, aliases, and book info
+   * 
+   * IMPORTANT: Only call this for actual chapters (isFrontMatter === false)
+   * Front matter sections (TOC, dedication, etc.) should be skipped
    * 
    * @param chapterText - Chapter text (translated if applicable)
-   * @param chapterNum - Chapter number (1-based)
+   * @param chapterNum - Chapter number (1-based, content chapters only)
+   * @param isFrontMatter - If true, skip character extraction (return current state)
    * @returns Updated character list for this chapter
    */
-  async extractFromChapter(chapterText: string, chapterNum: number): Promise<RegisteredCharacter[]> {
+  async extractFromChapter(
+    chapterText: string, 
+    chapterNum: number,
+    isFrontMatter: boolean = false
+  ): Promise<RegisteredCharacter[]> {
+    // Skip front matter sections - they don't contain character dialogue
+    if (isFrontMatter) {
+      console.log(`   ⏭️ Skipping section ${chapterNum} (front matter - no character extraction)`);
+      return this.getAllCharacters();
+    }
+    
     // Build known characters list for the prompt
     const knownCharsList = this.getKnownCharactersForPrompt();
+    const voiceList = this.getVoiceListForPrompt();
+    const assignedVoices = this.getAssignedVoicesForPrompt();
     
-    const prompt = `You are analyzing a book chapter for character identification.
+    // Include bookInfo request for chapters 1-2 only (unless already locked)
+    const needsBookInfo = chapterNum <= 2 && (!this.bookInfo || !this.bookInfo.locked);
+    
+    const prompt = `You are an expert literary analyst and voice casting director for audiobook production.
 
-${knownCharsList ? `KNOWN CHARACTERS (already have voices assigned - check if any names refer to these):
+AVAILABLE GEMINI TTS VOICES:
+${voiceList}
+
+${assignedVoices ? `${assignedVoices}
+
+` : ''}${knownCharsList ? `KNOWN CHARACTERS (already cast - check if any names refer to these):
 ${knownCharsList}
 
 ` : ''}CHAPTER TEXT:
 ${chapterText.substring(0, 30000)}
 
-Extract ALL characters who speak dialogue in this chapter. Return JSON only:
-{
+TASK: Extract ALL characters who speak dialogue and cast them with the perfect voice.
+
+For EACH character, analyze their:
+- Age, personality, social class, nationality/accent, occupation, health/habits
+- Craft a complete TTS voice direction as a natural sentence (MAX 12 WORDS)
+- Select the BEST matching Gemini voice from the available list
+
+${needsBookInfo ? `ALSO EXTRACT BOOK/DOCUMENT INFO - CRITICAL RULES:
+- Total combined output MAX 10 WORDS across all three fields
+- Be EXTREMELY concise - each word must add unique semantic value
+- MUST AVOID OXYMORONS AND SYNONYMY, INCLUDING SEMANTICALLY EQUIVALENT FORMS ACROSS WORD CLASSES
+- BAD example: genre "mystery" + tone "mysterious" = wasted word (mystery already implies mysterious)
+- BAD example: tone "mundane, mysterious" = oxymoron (contradictory)
+- GOOD example: genre "young adult fantasy" + tone "ominous, wondrous" + setting "1990s suburban britain"
+
+Fields:
+- genre: Primary genre (e.g., "gothic horror", "young adult fantasy")
+- tone: Mood/atmosphere - NO words derivable from genre (e.g., "tense, melancholic")
+- setting: Era and place only (e.g., "victorian london", "1990s suburban britain")
+
+` : ''}Return JSON only:
+{${needsBookInfo ? `
+  "bookInfo": {
+    "genre": "concise genre (few words)",
+    "tone": "unique mood descriptors (few words)",
+    "setting": "era and place (few words)"
+  },` : ''}
   "characters": [
     {
       "name": "exact name as written",
-      "sameAs": "known character name if this is same person (optional)",
+      "sameAs": "known character name if same person (optional)",
       "gender": "male|female|neutral|unknown",
-      "traits": ["trait1", "trait2"]
+      "voiceName": "ExactGeminiVoiceName",
+      "speechStyle": "Complete TTS direction as natural sentence (max 12 words)"
     }
   ]
 }
@@ -180,12 +303,17 @@ Extract ALL characters who speak dialogue in this chapter. Return JSON only:
 RULES:
 1. Include ONLY characters who speak dialogue (have quoted speech)
 2. Use the EXACT name as it appears in the text
-3. If a character is clearly the SAME PERSON as a known character but using a different name:
+3. If a character is the SAME PERSON as a known character (different name/alias):
    - Set "sameAs" to the known character's primary name
-   - Examples: "Mrs. Westenra" might be sameAs "old woman" if context shows they're the same person
-4. For NEW characters not matching any known character: omit "sameAs" field
-5. Always include descriptive references as names if they speak (e.g., "old woman", "the driver")
+   - Do NOT assign new voice/speechStyle (they inherit from the original)
+4. For NEW characters: select voice matching gender, and craft unique speechStyle
+5. speechStyle MUST be a complete, natural TTS direction sentence ready to use directly
+   Examples: "Speak slowly with a gravelly, menacing Eastern European accent."
+            "Say nervously with quick stammering and high pitch."
+            "Read warmly with a gentle maternal tone and slight rural accent."
 6. Do NOT include NARRATOR - that is handled separately
+7. Voice selection: Match voice characteristics to character (e.g., elderly → low pitch, child → high pitch)
+8. speechStyle is a direct TTS command - phrase it as natural spoken instruction
 
 Return ONLY valid JSON, no markdown or explanation.`;
 
@@ -200,6 +328,20 @@ Return ONLY valid JSON, no markdown or explanation.`;
       }
       
       const result: ExtractionResult = JSON.parse(jsonMatch[0]);
+      
+      // Process bookInfo if present (chapters 1-2)
+      if (result.bookInfo && !this.bookInfo?.locked) {
+        if (chapterNum === 1) {
+          // First extraction
+          this.bookInfo = { ...result.bookInfo, locked: false };
+          console.log(`   📚 Book info extracted: ${this.bookInfo.genre}, ${this.bookInfo.tone}`);
+        } else if (chapterNum === 2) {
+          // Refine and lock
+          this.bookInfo = { ...result.bookInfo, locked: true };
+          this.buildNarratorInstruction();
+          console.log(`   📚 Book info refined and LOCKED: ${this.bookInfo.genre}, ${this.bookInfo.tone}`);
+        }
+      }
       
       // Process each character
       for (const charInfo of result.characters) {
@@ -222,21 +364,100 @@ Return ONLY valid JSON, no markdown or explanation.`;
   }
   
   /**
+   * Build narrator TTS instruction from bookInfo
+   * Same natural sentence format as character speechStyle - direct speech command with action verb
+   * Format: "Narrate this audiobook as a top voice artist with immersive and expressive style, perfectly capturing its genre and reality - {bookInfo lowercase, max 10 words}."
+   */
+  private buildNarratorInstruction(): void {
+    // Build variable part from bookInfo (lowercase, MAX 10 WORDS total)
+    let variablePart = 'atmospheric fiction in an evocative setting';
+    
+    if (this.bookInfo) {
+      const { genre, tone, setting } = this.bookInfo;
+      const parts = [genre, tone, setting].filter(Boolean);
+      if (parts.length > 0) {
+        // Combine, lowercase, and limit to 10 words
+        variablePart = parts.join(', ').toLowerCase().split(/\s+/).slice(0, 10).join(' ');
+      }
+    }
+    
+    // Natural sentence format - bookInfo at the end for cleaner structure
+    this.narratorInstruction = `Narrate this audiobook as a top voice artist with immersive and expressive style, perfectly capturing its genre and reality - ${variablePart}.\n`;
+    
+    console.log(`   🎭 Narrator instruction: ${this.narratorInstruction.trim()}`);
+  }
+  
+  /**
+   * Get narrator TTS instruction (speechStyle format - natural sentence with action verb)
+   */
+  getNarratorInstruction(): string {
+    if (!this.narratorInstruction) {
+      this.buildNarratorInstruction();
+    }
+    return this.narratorInstruction!;
+  }
+  
+  /**
+   * Get book info (if extracted)
+   */
+  getBookInfo(): BookInfo | null {
+    return this.bookInfo;
+  }
+  
+  /**
+   * Validate voice name against Gemini voice list
+   * Returns valid voice name or fallback based on gender
+   */
+  private validateVoiceName(voiceName: string, gender: 'male' | 'female' | 'neutral' | 'unknown'): string {
+    // Check if voice exists
+    const voice = getVoiceByName(voiceName);
+    if (voice) {
+      return voice.name;
+    }
+    
+    // Fallback: pick random unused voice of matching gender
+    console.warn(`   ⚠️ Invalid voice "${voiceName}", using fallback`);
+    const genderFilter = gender === 'unknown' || gender === 'neutral' ? 'male' : gender;
+    const genderVoices = getVoicesByGender(genderFilter);
+    const available = genderVoices.filter(v => !this.usedVoices.has(v.name));
+    
+    if (available.length > 0) {
+      return available[Math.floor(Math.random() * available.length)].name;
+    }
+    
+    // All voices used, reuse any of matching gender
+    return genderVoices[Math.floor(Math.random() * genderVoices.length)].name;
+  }
+  
+  /**
    * Process a single character from extraction
+   * Voice is LOCKED, but speechStyle can evolve gradually
    */
   private processCharacter(charInfo: ChapterCharacterInfo, chapterNum: number): void {
     const normalizedName = charInfo.name.trim();
     
     // Check if this name is already known
     if (this.nameToId.has(normalizedName)) {
-      // Already registered (either as primary or alias)
+      // Already registered - update speechStyle if significantly different (evolution)
       const existingId = this.nameToId.get(normalizedName)!;
       const existing = this.characters.get(existingId)!;
+      existing.lastSeenChapter = chapterNum;
       
-      // Merge traits
-      for (const trait of charInfo.traits) {
-        if (!existing.traits.includes(trait)) {
-          existing.traits.push(trait);
+      // Allow speechStyle evolution for character development (e.g., child → elderly)
+      // Only update if LLM provided a new style AND it's meaningfully different
+      if (charInfo.speechStyle && charInfo.speechStyle !== existing.speechStyle) {
+        const newStyle = charInfo.speechStyle.split(/\s+/).slice(0, 12).join(' '); // MAX 12 WORDS (complete sentence)
+        // Check if at least 30% different (gradual change, not sudden)
+        const oldWords = new Set(existing.speechStyle.toLowerCase().split(/\s+/));
+        const newWords = newStyle.toLowerCase().split(/\s+/);
+        const overlap = newWords.filter(w => oldWords.has(w)).length;
+        const overlapRatio = overlap / Math.max(oldWords.size, newWords.length);
+        
+        // Only update if moderately different (30-80% overlap = gradual evolution)
+        if (overlapRatio < 0.8 && overlapRatio > 0.2) {
+          existing.speechStyleHistory.push([chapterNum, newStyle]);
+          existing.speechStyle = newStyle;
+          console.log(`   🔄 Speech style evolved: "${existing.primaryName}" → "${newStyle}"`);
         }
       }
       return;
@@ -250,7 +471,7 @@ Return ONLY valid JSON, no markdown or explanation.`;
       if (existingId) {
         const existing = this.characters.get(existingId)!;
         
-        // Add as alias
+        // Add as alias (inherits voice/speechStyle from original)
         if (!existing.aliases.includes(normalizedName)) {
           existing.aliases.push(normalizedName);
           this.nameToId.set(normalizedName, existingId);
@@ -262,55 +483,46 @@ Return ONLY valid JSON, no markdown or explanation.`;
             this.nameToId.set(ttsAlias, existingId);
           }
           
-          console.log(`   🔗 Alias: "${normalizedName}" (${ttsAlias}) → "${existing.primaryName}"`);
-        }
-        
-        // Merge traits
-        for (const trait of charInfo.traits) {
-          if (!existing.traits.includes(trait)) {
-            existing.traits.push(trait);
-          }
+          console.log(`   🔗 Alias: "${normalizedName}" → "${existing.primaryName}" (voice: ${existing.voice})`);
         }
         return;
       }
       // sameAs target not found - treat as new character
     }
     
-    // New character - assign voice using selectVoiceForCharacter
+    // New character - use LLM-selected voice (with validation) and speechStyle
     const id = `char_${this.nextId++}`;
     
-    // Generate TTS alias (ALL CAPS, alphanumeric only) for voice lookup
+    // Generate TTS alias (ALL CAPS, alphanumeric only)
     const ttsAlias = toTTSSpeakerAlias(normalizedName);
     
-    // Map gender for voice selection
-    const voiceGender = charInfo.gender === 'unknown' ? 'neutral' : charInfo.gender;
-    
-    const selectedVoice = selectVoiceForCharacter(
-      normalizedName,
-      voiceGender as 'male' | 'female' | 'neutral',
-      charInfo.traits,
-      Array.from(this.usedVoices)
-    );
-    
-    const voice = selectedVoice.name;
+    // Validate and get voice
+    const voice = this.validateVoiceName(charInfo.voiceName, charInfo.gender);
     this.usedVoices.add(voice);
+    
+    // Ensure speechStyle is MAX 12 WORDS (complete natural sentence)
+    const speechStyle = charInfo.speechStyle
+      ? charInfo.speechStyle.split(/\s+/).slice(0, 12).join(' ')
+      : 'Speak naturally with clear, expressive delivery.';
     
     const newChar: RegisteredCharacter = {
       id,
       primaryName: normalizedName,
       ttsAlias,
-      aliases: [normalizedName, ttsAlias], // Include TTS alias for voice lookup
+      aliases: [normalizedName, ttsAlias],
       voice,
+      speechStyle,
+      speechStyleHistory: [[chapterNum, speechStyle]],
       gender: charInfo.gender,
-      traits: charInfo.traits,
       firstSeenChapter: chapterNum,
+      lastSeenChapter: chapterNum,
     };
     
     this.characters.set(id, newChar);
     this.nameToId.set(normalizedName, id);
-    this.nameToId.set(ttsAlias, id); // Also map TTS alias to character ID
+    this.nameToId.set(ttsAlias, id);
     
-    console.log(`   👤 New: "${normalizedName}" (${ttsAlias}, ${charInfo.gender}) → ${voice}`);
+    console.log(`   👤 New: "${normalizedName}" (${charInfo.gender}) → ${voice} [${speechStyle}]`);
   }
   
   /**
@@ -326,7 +538,7 @@ Return ONLY valid JSON, no markdown or explanation.`;
       const aliases = char.aliases.length > 1 
         ? ` (also: ${char.aliases.filter(a => a !== char.primaryName).join(', ')})`
         : '';
-      lines.push(`- ${char.primaryName}${aliases}: ${char.gender}, ${char.traits.join(', ')}`);
+      lines.push(`- ${char.primaryName}${aliases}: ${char.gender}, voice=${char.voice}, speechStyle="${char.speechStyle}"`);
     }
     return lines.join('\n');
   }
@@ -379,6 +591,27 @@ Return ONLY valid JSON, no markdown or explanation.`;
   }
   
   /**
+   * Look up speech style for any character name (including aliases)
+   * Returns complete TTS instruction as natural sentence (LLM-generated)
+   */
+  getSpeechStyleForName(name: string): string | undefined {
+    const id = this.nameToId.get(name.trim());
+    if (!id) return undefined;
+    const speechStyle = this.characters.get(id)?.speechStyle;
+    // Return LLM-generated TTS instruction directly (complete natural sentence)
+    return speechStyle ? `${speechStyle}\n` : undefined;
+  }
+  
+  /**
+   * Get raw speech style text for any character name (without brackets)
+   */
+  getRawSpeechStyleForName(name: string): string | undefined {
+    const id = this.nameToId.get(name.trim());
+    if (!id) return undefined;
+    return this.characters.get(id)?.speechStyle;
+  }
+  
+  /**
    * Get all known character names (primary + aliases)
    */
   getAllNames(): string[] {
@@ -392,6 +625,8 @@ Return ONLY valid JSON, no markdown or explanation.`;
     this.characters.clear();
     this.nameToId.clear();
     this.usedVoices.clear();
+    this.bookInfo = null;
+    this.narratorInstruction = null;
     if (this.narratorVoice) {
       this.usedVoices.add(this.narratorVoice);
     }
@@ -403,5 +638,53 @@ Return ONLY valid JSON, no markdown or explanation.`;
    */
   get size(): number {
     return this.characters.size;
+  }
+  
+  /**
+   * Export registry state to JSON for review and debugging
+   * Saved to audiobooks/{bookTitle}/character_registry.json
+   */
+  toJSON(): object {
+    // Ensure narrator instruction is built before export
+    if (!this.narratorInstruction) {
+      this.buildNarratorInstruction();
+    }
+    
+    return {
+      exportedAt: new Date().toISOString(),
+      bookInfo: this.bookInfo,
+      narratorVoice: this.narratorVoice,
+      narratorInstruction: this.narratorInstruction,
+      characterCount: this.characters.size,
+      characters: Array.from(this.characters.values()).map(char => ({
+        id: char.id,
+        primaryName: char.primaryName,
+        aliases: char.aliases,
+        voice: char.voice,
+        gender: char.gender,
+        speechStyle: char.speechStyle,
+        speechStyleHistory: char.speechStyleHistory,
+        firstSeenChapter: char.firstSeenChapter,
+        lastSeenChapter: char.lastSeenChapter,
+      })),
+      voiceMap: this.getVoiceMap(),
+    };
+  }
+  
+  /**
+   * Save registry to JSON file in audiobook folder
+   * @param bookFolder - Path to audiobook folder
+   */
+  async saveToFile(bookFolder: string): Promise<string> {
+    const fs = await import('fs');
+    const path = await import('path');
+    
+    const jsonPath = path.join(bookFolder, 'character_registry.json');
+    const jsonContent = JSON.stringify(this.toJSON(), null, 2);
+    
+    await fs.promises.writeFile(jsonPath, jsonContent, 'utf8');
+    console.log(`   📝 Character registry saved: ${jsonPath}`);
+    
+    return jsonPath;
   }
 }

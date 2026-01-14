@@ -56,14 +56,14 @@ export function getLanguageDisplayName(langCode: string): string {
 export class ChapterTranslator {
   private projectId: string;
   private location: string;
-  private model: string = 'gemini-2.5-flash';
+  private model: string = process.env.LLM_MODEL_TRANSLATION || 'gemini-2.5-flash';
   private auth: GoogleAuth;
   private endpoint: string;
 
   constructor(config: GeminiConfig) {
     this.projectId = config.projectId;
     this.location = config.location || 'us-central1';
-    this.model = config.model || 'gemini-2.5-flash';
+    this.model = config.model || process.env.LLM_MODEL_TRANSLATION || 'gemini-2.5-flash';
     this.auth = new GoogleAuth({
       scopes: ['https://www.googleapis.com/auth/cloud-platform'],
     });
@@ -157,14 +157,13 @@ export class ChapterTranslator {
     console.log(`   Source: auto-detected by LLM`);
     console.log(`   Text length: ${chapterText.length} chars`);
 
-    const prompt = `You are a professional literary translator specializing in fiction.
+    const prompt = `You are a professional literary translator.
 
 TASK: Translate the following text to ${targetLangName}.
 
-CRITICAL RULES:
+/*
+CRITICAL RULES (COMMENTED FOR LITE MODEL TESTING - REVERT IF NEEDED):
 1. Translate ALL text naturally, including character names and references.
-   - "Stará paní" → "old woman" (natural English)
-   - "pan Hawkins" → "Mr. Hawkins" (appropriate honorific)
 
 2. Preserve dialogue formatting:
    - Keep quotation marks style consistent
@@ -174,6 +173,7 @@ CRITICAL RULES:
 3. Preserve the original tone, style, and literary quality of the text.
 
 4. Return ONLY the translated text - no explanations, notes, or metadata.
+*/
 
 TEXT TO TRANSLATE:
 ${chapterText}`;

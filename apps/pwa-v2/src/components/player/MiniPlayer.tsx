@@ -25,10 +25,20 @@ export function MiniPlayer({ onExpand }: MiniPlayerProps) {
     playPause,
     skipBackward,
     isMiniPlayerVisible,
+    playbackMode,
+    currentSubChunk,
   } = usePlayerStore();
 
   const isPlaying = playbackState === 'playing';
   const progress = currentBook ? currentTime / currentBook.totalDuration : 0;
+  
+  // Show different info based on playback mode
+  const getPlaybackInfo = () => {
+    if (playbackMode === 'progressive' && currentSubChunk) {
+      return `Chapter ${currentSubChunk.chapterIndex + 1}, Part ${currentSubChunk.subChunkIndex + 1}`;
+    }
+    return currentBook?.author ? `${currentBook.author} • ${formatDuration(currentTime)}` : formatDuration(currentTime);
+  };
 
   if (!isMiniPlayerVisible || !currentBook) {
     return null;
@@ -39,7 +49,6 @@ export function MiniPlayer({ onExpand }: MiniPlayerProps) {
       className="
         fixed left-0 right-0 z-40
         bg-[var(--neu-body-bg)]
-        shadow-[var(--neu-shadow-light)]
         border-t border-[var(--neu-gray-400)]
       "
       style={{ bottom: 'calc(var(--nav-height) + var(--safe-area-bottom))' }}
@@ -47,15 +56,16 @@ export function MiniPlayer({ onExpand }: MiniPlayerProps) {
       {/* Progress bar at top */}
       <LinearProgress value={progress} />
       
-      {/* Mini player content */}
-      <div 
-        className="px-4 py-3 flex items-center gap-3 cursor-pointer"
-        onClick={onExpand}
-      >
+      {/* Mini player content with card styling */}
+      <div className="p-4">
+        <div 
+          className="neu-card px-4 py-3 flex items-center gap-3 cursor-pointer hover:shadow-[var(--neu-shadow-soft)] transition-all duration-200"
+          onClick={onExpand}
+        >
         {/* Artwork - inset frame */}
         <div className="w-12 h-12 neu-pressed rounded-[var(--neu-radius)] overflow-hidden flex-shrink-0">
           <img
-            src={currentBook.coverUrl || '/vl-logo.png'}
+            src={currentBook.coverUrl || '/default-audiobook-cover.png'}
             alt={currentBook.title}
             className="w-full h-full object-cover"
           />
@@ -67,7 +77,7 @@ export function MiniPlayer({ onExpand }: MiniPlayerProps) {
             {currentBook.title}
           </h4>
           <p className="text-[var(--neu-gray-700)] text-xs truncate">
-            {currentBook.author} • {formatDuration(currentTime)}
+            {getPlaybackInfo()}
           </p>
         </div>
         
@@ -111,6 +121,7 @@ export function MiniPlayer({ onExpand }: MiniPlayerProps) {
               <Play className="w-5 h-5 ml-0.5" fill="currentColor" />
             )}
           </button>
+        </div>
         </div>
       </div>
     </div>

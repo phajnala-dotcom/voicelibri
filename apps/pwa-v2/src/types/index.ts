@@ -39,7 +39,7 @@ export interface PlaybackProgress {
 // PLAYER TYPES (BookPlayer-inspired)
 // ============================================
 
-export type PlaybackState = 'playing' | 'paused' | 'stopped' | 'loading';
+export type PlaybackState = 'playing' | 'paused' | 'stopped' | 'loading' | 'error';
 
 export interface PlayerState {
   currentBook: Book | null;

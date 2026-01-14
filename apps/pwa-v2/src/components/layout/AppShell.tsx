@@ -11,7 +11,7 @@ import { MiniPlayer } from '../player';
 import { FullPlayer } from './FullPlayer';
 import { usePlayerStore } from '../../stores/playerStore';
 import { useLibraryStore } from '../../stores/libraryStore';
-import { useAudioPlayback } from '../../hooks/useAudioPlayback';
+import { useProgressiveAudioPlayback } from '../../hooks/useProgressiveAudioPlayback';
 import { getAudiobooks, convertToBook } from '../../services/api';
 
 /**
@@ -23,8 +23,8 @@ export function AppShell() {
   const { currentBook, setCurrentBook, setCurrentChapter, showMiniPlayer, isMiniPlayerVisible } = usePlayerStore();
   const { addBook, books } = useLibraryStore();
   
-  // Initialize audio playback
-  useAudioPlayback();
+  // Initialize progressive audio playback
+  useProgressiveAudioPlayback();
   
   // Load last played book on app start
   useEffect(() => {

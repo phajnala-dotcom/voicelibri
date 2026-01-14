@@ -35,6 +35,13 @@ export interface ChapterMetadata {
   isConsolidated?: boolean;
 }
 
+export interface SubChunkInfo {
+  chapterIndex: number;
+  subChunkIndex: number;
+  isReady: boolean;
+  audioUrl?: string;
+}
+
 export interface BookSelectResult {
   title: string;
   author: string;
@@ -158,6 +165,48 @@ export async function getGenerationProgress(bookTitle: string): Promise<{
  */
 export function getChapterAudioUrl(bookTitle: string, chapterIndex: number): string {
   return `${API_BASE_URL}/audiobooks/${encodeURIComponent(bookTitle)}/chapters/${chapterIndex}`;
+}
+
+/**
+ * Get subchunk audio URL for real-time streaming during generation
+ */
+export function getSubChunkAudioUrl(bookTitle: string, chapterIndex: number, subChunkIndex: number): string {
+  return `${API_BASE_URL}/audiobooks/${encodeURIComponent(bookTitle)}/subchunks/${chapterIndex}/${subChunkIndex}`;
+}
+
+/**
+ * Check if a specific chapter is consolidated (ready for normal playback)
+ */
+export async function isChapterReady(bookTitle: string, chapterIndex: number): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/audiobooks/${encodeURIComponent(bookTitle)}/chapters/${chapterIndex}`, {
+      method: 'HEAD'
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get the highest consolidated chapter number (all chapters <= this number are ready)
+ */
+export async function getHighestReadyChapter(bookTitle: string): Promise<number> {
+  try {
+    const metadata = await getAudiobook(bookTitle);
+    // Count consecutive chapters that are consolidated
+    let highestReady = 0;
+    for (const chapter of metadata.chapters) {
+      if (chapter.isConsolidated) {
+        highestReady = Math.max(highestReady, chapter.index);
+      } else {
+        break; // Stop at first non-consolidated chapter
+      }
+    }
+    return highestReady;
+  } catch {
+    return 0;
+  }
 }
 
 /**

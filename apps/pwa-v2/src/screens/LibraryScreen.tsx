@@ -10,7 +10,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import { Search, List } from 'lucide-react';
+import { Search } from 'lucide-react';
 import { useLibraryStore } from '../stores/libraryStore';
 import { usePlayerStore } from '../stores/playerStore';
 import { BookGrid } from '../components/library';

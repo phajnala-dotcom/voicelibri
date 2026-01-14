@@ -14,6 +14,11 @@ interface PlayerStore {
   speed: number;
   volume: number;
   
+  // Progressive playback mode for new audiobooks
+  playbackMode: 'chapters' | 'subchunks' | 'progressive';
+  currentSubChunk: { chapterIndex: number; subChunkIndex: number } | null;
+  highestReadyChapter: number; // Tracks which chapters are fully consolidated
+  
   // Sleep timer (BookPlayer pattern)
   sleepTimer: SleepTimerState;
   
@@ -57,6 +62,15 @@ interface PlayerStore {
   openFullPlayer: () => void;
   closeFullPlayer: () => void;
   
+  // Progressive playback controls
+  setPlaybackMode: (mode: 'chapters' | 'subchunks' | 'progressive') => void;
+  setCurrentSubChunk: (subChunk: { chapterIndex: number; subChunkIndex: number } | null) => void;
+  setHighestReadyChapter: (chapterIndex: number) => void;
+  startProgressivePlayback: (book: Book) => void;
+  switchToChapterMode: () => void;
+  nextSubChunk: () => boolean; // Returns true if there's a next subchunk
+  shouldSwitchToChapter: (chapterIndex: number) => Promise<boolean>;
+  
   // Settings
   updateSettings: (settings: Partial<UserSettings>) => void;
 }
@@ -71,6 +85,9 @@ export const usePlayerStore = create<PlayerStore>()(
       currentTime: 0,
       speed: 1.0,
       volume: 1.0,
+      playbackMode: 'chapters',
+      currentSubChunk: null,
+      highestReadyChapter: 0,
       sleepTimer: { type: 'off' },
       settings: {
         playbackSpeed: 1.0,
@@ -205,6 +222,76 @@ export const usePlayerStore = create<PlayerStore>()(
       updateSettings: (newSettings) => set((state) => ({
         settings: { ...state.settings, ...newSettings },
       })),
+      
+      // Progressive playback controls
+      setPlaybackMode: (mode) => set({ playbackMode: mode }),
+      setCurrentSubChunk: (subChunk) => set({ currentSubChunk: subChunk }),
+      setHighestReadyChapter: (chapterIndex) => set({ highestReadyChapter: chapterIndex }),
+      
+      startProgressivePlayback: (book) => {
+        set({
+          currentBook: book,
+          currentChapter: book.chapters[0] || null,
+          playbackMode: 'progressive',
+          currentSubChunk: { chapterIndex: 0, subChunkIndex: 0 },
+          highestReadyChapter: 0,
+          isMiniPlayerVisible: true,
+        });
+      },
+      
+      switchToChapterMode: () => {
+        set({ 
+          playbackMode: 'chapters',
+          currentSubChunk: null,
+        });
+      },
+      
+      nextSubChunk: () => {
+        const { currentSubChunk, currentBook } = get();
+        if (!currentSubChunk || !currentBook) return false;
+        
+        const nextSubChunk = {
+          chapterIndex: currentSubChunk.chapterIndex,
+          subChunkIndex: currentSubChunk.subChunkIndex + 1
+        };
+        
+        // Check if we're moving to next chapter's first subchunk
+        if (nextSubChunk.subChunkIndex >= 50) { // Assuming max 50 subchunks per chapter
+          if (nextSubChunk.chapterIndex + 1 < currentBook.chapters.length) {
+            nextSubChunk.chapterIndex++;
+            nextSubChunk.subChunkIndex = 0;
+          } else {
+            return false; // No more content
+          }
+        }
+        
+        set({ currentSubChunk: nextSubChunk });
+        return true;
+      },
+      
+      shouldSwitchToChapter: async (chapterIndex: number) => {
+        const { currentBook, highestReadyChapter } = get();
+        if (!currentBook) return false;
+        
+        // If this chapter is already ready, switch to chapter mode
+        if (chapterIndex <= highestReadyChapter) {
+          return true;
+        }
+        
+        // Check if chapter became ready since last check
+        try {
+          const { isChapterReady } = await import('../services/api');
+          const isReady = await isChapterReady(currentBook.title, chapterIndex);
+          if (isReady) {
+            set({ highestReadyChapter: Math.max(chapterIndex, highestReadyChapter) });
+            return true;
+          }
+        } catch (error) {
+          console.error('Error checking chapter readiness:', error);
+        }
+        
+        return false;
+      },
     }),
     {
       name: 'voicelibri-player',
@@ -216,6 +303,9 @@ export const usePlayerStore = create<PlayerStore>()(
         currentChapter: state.currentChapter,
         isMiniPlayerVisible: state.isMiniPlayerVisible,
         currentTime: state.currentTime,
+        playbackMode: state.playbackMode,
+        currentSubChunk: state.currentSubChunk,
+        highestReadyChapter: state.highestReadyChapter,
       }),
     }
   )
