@@ -240,6 +240,56 @@ export async function getPlaybackPosition(bookTitle: string): Promise<{
 }
 
 // ============================================
+// TEXT PASTE AND URL IMPORT
+// ============================================
+
+/**
+ * Create audiobook from pasted text
+ * @param text - The text content to convert to audiobook
+ * @param options - Narrator voice, language, title
+ */
+export async function createFromText(options: {
+  text: string;
+  title?: string;
+  detectChapters?: boolean;
+  narratorVoice?: string;
+  targetLanguage?: string;
+}): Promise<BookSelectResult> {
+  const response = await fetch(`${API_BASE_URL}/book/from-text`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options),
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ message: 'Failed to create from text' }));
+    throw new Error(errorData.message || 'Failed to create audiobook from text');
+  }
+  return response.json();
+}
+
+/**
+ * Create audiobook from URL (direct link to ebook file)
+ * @param url - Direct link to .txt or .epub file
+ * @param options - Narrator voice, language
+ */
+export async function createFromUrl(options: {
+  url: string;
+  narratorVoice?: string;
+  targetLanguage?: string;
+}): Promise<BookSelectResult> {
+  const response = await fetch(`${API_BASE_URL}/book/from-url`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options),
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ message: 'Failed to create from URL' }));
+    throw new Error(errorData.message || 'Failed to create audiobook from URL');
+  }
+  return response.json();
+}
+
+// ============================================
 // CONVERSION UTILITIES
 // ============================================
 

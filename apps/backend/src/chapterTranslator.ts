@@ -7,6 +7,7 @@
 
 import { GoogleAuth } from 'google-auth-library';
 import { GeminiConfig } from './llmCharacterAnalyzer.js';
+import { LLM_MODELS, LLM_TEMPERATURES, LLM_GENERATION_CONFIG, getTranslationPrompt } from './promptConfig.js';
 
 /**
  * Translation result interface
@@ -56,14 +57,14 @@ export function getLanguageDisplayName(langCode: string): string {
 export class ChapterTranslator {
   private projectId: string;
   private location: string;
-  private model: string = process.env.LLM_MODEL_TRANSLATION || 'gemini-2.5-flash';
+  private model: string = LLM_MODELS.TRANSLATION;
   private auth: GoogleAuth;
   private endpoint: string;
 
   constructor(config: GeminiConfig) {
     this.projectId = config.projectId;
     this.location = config.location || 'us-central1';
-    this.model = config.model || process.env.LLM_MODEL_TRANSLATION || 'gemini-2.5-flash';
+    this.model = config.model || LLM_MODELS.TRANSLATION;
     this.auth = new GoogleAuth({
       scopes: ['https://www.googleapis.com/auth/cloud-platform'],
     });
@@ -85,9 +86,9 @@ export class ChapterTranslator {
         },
       ],
       generationConfig: {
-        temperature: 0.3, // Lower temp for more consistent translations
-        maxOutputTokens: 65536, // Large enough for chapter translations
-        topP: 0.95,
+        temperature: LLM_TEMPERATURES.TRANSLATION,
+        maxOutputTokens: LLM_GENERATION_CONFIG.MAX_TOKENS_TRANSLATION,
+        topP: LLM_GENERATION_CONFIG.TOP_P,
       },
     };
 
@@ -157,26 +158,7 @@ export class ChapterTranslator {
     console.log(`   Source: auto-detected by LLM`);
     console.log(`   Text length: ${chapterText.length} chars`);
 
-    const prompt = `You are a professional literary translator.
-
-TASK: Translate the following text to ${targetLangName}.
-
-/*
-CRITICAL RULES (COMMENTED FOR LITE MODEL TESTING - REVERT IF NEEDED):
-1. Translate ALL text naturally, including character names and references.
-
-2. Preserve dialogue formatting:
-   - Keep quotation marks style consistent
-   - Maintain paragraph breaks
-   - Keep dialogue attribution natural in target language
-
-3. Preserve the original tone, style, and literary quality of the text.
-
-4. Return ONLY the translated text - no explanations, notes, or metadata.
-*/
-
-TEXT TO TRANSLATE:
-${chapterText}`;
+    const prompt = getTranslationPrompt(targetLangName, chapterText);
 
     const startTime = Date.now();
     const translatedText = await this.callGemini(prompt);
