@@ -11,15 +11,17 @@ interface BookGridProps {
   books: Book[];
   onCoverPress: (book: Book) => void;      // Opens FullPlayer
   onChapterPress: (book: Book, chapter: Chapter) => void;  // Opens FullPlayer at specific chapter
+  onDeleteBook?: (bookId: string) => void;  // Delete audiobook
   onLoadDemo?: () => void;
   isLoading?: boolean;
+  generatingBooks?: Map<string, number>;  // bookId -> progress percentage
 }
 
 /**
  * Neumorphism Book List
  * List layout with neumorphism cards and expandable chapters
  */
-export function BookGrid({ books, onCoverPress, onChapterPress, onLoadDemo, isLoading }: BookGridProps) {
+export function BookGrid({ books, onCoverPress, onChapterPress, onDeleteBook, onLoadDemo, isLoading, generatingBooks }: BookGridProps) {
   if (isLoading) {
     return <BookGridSkeleton />;
   }
@@ -30,14 +32,22 @@ export function BookGrid({ books, onCoverPress, onChapterPress, onLoadDemo, isLo
 
   return (
     <div className="flex flex-col gap-3">
-      {books.map((book) => (
-        <BookCard
-          key={book.id}
-          book={book}
-          onCoverPress={() => onCoverPress(book)}
-          onChapterPress={(chapter) => onChapterPress(book, chapter)}
-        />
-      ))}
+      {books.map((book) => {
+        const isGenerating = generatingBooks?.has(book.id);
+        const generationProgress = generatingBooks?.get(book.id);
+        
+        return (
+          <BookCard
+            key={book.id}
+            book={book}
+            onCoverPress={() => onCoverPress(book)}
+            onChapterPress={(chapter) => onChapterPress(book, chapter)}
+            onDelete={onDeleteBook}
+            isGenerating={isGenerating}
+            generationProgress={generationProgress}
+          />
+        );
+      })}
     </div>
   );
 }

@@ -161,6 +161,20 @@ export async function getGenerationProgress(bookTitle: string): Promise<{
 }
 
 /**
+ * Delete audiobook from library
+ */
+export async function deleteAudiobook(bookTitle: string): Promise<{ success: boolean; message: string }> {
+  const response = await fetch(`${API_BASE_URL}/audiobooks/${encodeURIComponent(bookTitle)}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({ message: 'Failed to delete audiobook' }));
+    throw new Error(errorData.message || 'Failed to delete audiobook');
+  }
+  return response.json();
+}
+
+/**
  * Get chapter audio URL
  */
 export function getChapterAudioUrl(bookTitle: string, chapterIndex: number): string {

@@ -43,7 +43,7 @@ export const LLM_TEMPERATURES = {
   /** Character analysis - low for consistent extraction */
   CHARACTER_ANALYSIS: 0.1,
   /** Speech style generation - slightly higher for creative styles */
-  SPEECH_STYLE: 0.2,
+  SPEECH_STYLE: 1.0,
   /** Translation - balanced for quality translations */
   TRANSLATION: 0.3,
   /** Dialogue tagging - low for consistent formatting */

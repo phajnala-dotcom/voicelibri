@@ -21,6 +21,7 @@ import {
   mergeWithNarration,
   TaggingResult 
 } from './hybridTagger.js';
+import { estimateTokens, TOKEN_COEFFICIENTS } from './costTracker.js';
 
 export interface HybridDramatizationResult {
   taggedChapters: Array<{
@@ -119,9 +120,10 @@ export async function tagChapterHybrid(
   // Text is already in Gemini TTS format "SPEAKER: text"
   const finalText = mergedText;
   
-  // Estimate cost (much cheaper than full chapter)
-  const inputTokens = Math.ceil(dialogueText.length / 4);
-  const outputTokens = Math.ceil(llmTagged.length / 4);
+  // Estimate cost using validated token coefficients (words × 2.15 for Slavic)
+  // Note: Assuming Slavic language - adjust if language detection is available
+  const inputTokens = estimateTokens(dialogueText, 'slavic');
+  const outputTokens = estimateTokens(llmTagged, 'slavic');
   const cost = (inputTokens * 0.30 / 1_000_000) + (outputTokens * 2.50 / 1_000_000);
   
   console.log(`💰 LLM fallback cost: $${cost.toFixed(4)} (${inputTokens} in + ${outputTokens} out tokens)`);

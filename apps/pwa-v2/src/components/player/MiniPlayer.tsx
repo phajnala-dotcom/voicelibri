@@ -4,7 +4,7 @@
  * Fixed bottom bar for audio playback
  */
 
-import { Play, Pause, RotateCcw } from 'lucide-react';
+import { Play, Pause, RotateCcw, SkipBack, SkipForward } from 'lucide-react';
 import { usePlayerStore } from '../../stores/playerStore';
 import { LinearProgress } from '../ui/ProgressBar';
 import { formatDuration } from '../../utils/formatters';
@@ -20,10 +20,13 @@ interface MiniPlayerProps {
 export function MiniPlayer({ onExpand }: MiniPlayerProps) {
   const {
     currentBook,
+    currentChapter,
     playbackState,
     currentTime,
     playPause,
     skipBackward,
+    previousChapter,
+    nextChapter,
     isMiniPlayerVisible,
     playbackMode,
     currentSubChunk,
@@ -32,10 +35,18 @@ export function MiniPlayer({ onExpand }: MiniPlayerProps) {
   const isPlaying = playbackState === 'playing';
   const progress = currentBook ? currentTime / currentBook.totalDuration : 0;
   
+  // Determine if we can navigate chapters
+  const currentChapterIndex = currentChapter?.index ?? 0;
+  const canGoPrevious = currentChapterIndex > 0;
+  const canGoNext = currentBook ? currentChapterIndex < currentBook.chapters.length - 1 : false;
+  
   // Show different info based on playback mode
   const getPlaybackInfo = () => {
     if (playbackMode === 'progressive' && currentSubChunk) {
       return `Chapter ${currentSubChunk.chapterIndex + 1}, Part ${currentSubChunk.subChunkIndex + 1}`;
+    }
+    if (currentChapter) {
+      return `${currentChapter.title} • ${formatDuration(currentTime)}`;
     }
     return currentBook?.author ? `${currentBook.author} • ${formatDuration(currentTime)}` : formatDuration(currentTime);
   };
@@ -82,7 +93,28 @@ export function MiniPlayer({ onExpand }: MiniPlayerProps) {
         </div>
         
         {/* Controls */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
+          {/* Previous chapter button */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              previousChapter();
+            }}
+            disabled={!canGoPrevious}
+            className={`
+              neu-btn-icon-sm neu-raised
+              flex items-center justify-center
+              transition-all duration-200
+              ${canGoPrevious 
+                ? 'text-[var(--neu-gray-700)] hover:text-[var(--neu-secondary)] active:shadow-[var(--neu-shadow-inset)]' 
+                : 'text-[var(--neu-gray-400)] cursor-not-allowed'
+              }
+            `}
+            aria-label="Previous chapter"
+          >
+            <SkipBack className="w-4 h-4" />
+          </button>
+          
           {/* Rewind button */}
           <button
             onClick={(e) => {
@@ -120,6 +152,27 @@ export function MiniPlayer({ onExpand }: MiniPlayerProps) {
             ) : (
               <Play className="w-5 h-5 ml-0.5" fill="currentColor" />
             )}
+          </button>
+          
+          {/* Next chapter button */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              nextChapter();
+            }}
+            disabled={!canGoNext}
+            className={`
+              neu-btn-icon-sm neu-raised
+              flex items-center justify-center
+              transition-all duration-200
+              ${canGoNext 
+                ? 'text-[var(--neu-gray-700)] hover:text-[var(--neu-secondary)] active:shadow-[var(--neu-shadow-inset)]' 
+                : 'text-[var(--neu-gray-400)] cursor-not-allowed'
+              }
+            `}
+            aria-label="Next chapter"
+          >
+            <SkipForward className="w-4 h-4" />
           </button>
         </div>
         </div>

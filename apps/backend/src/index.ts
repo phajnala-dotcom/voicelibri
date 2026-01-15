@@ -44,6 +44,7 @@ import {
   countChapterSubChunks,
   isChapterConsolidated,
   loadChapterFile,
+  deleteAudiobook,
   type AudiobookMetadata,
 } from './audiobookManager.js';
 import { 
@@ -69,6 +70,8 @@ import {
 import { CharacterRegistry } from './characterRegistry.js';
 // Parallel pipeline manager - only resetPipeline() is used for book switching
 import { resetPipeline } from './parallelPipelineManager.js';
+// Cost tracking for audiobook generation
+import { CostTracker, estimateTokens } from './costTracker.js';
 
 // ES modules dirname workaround
 const __filename = fileURLToPath(import.meta.url);
@@ -98,6 +101,7 @@ let ASSETS_DIR: string;
 let VOICE_MAP: Record<string, string> = {}; // Global voice map for dramatized books
 let NARRATOR_VOICE: string = 'Achird'; // Global narrator voice selection (default: Achird)
 let TARGET_LANGUAGE: string | null = null; // Target language for translation (null = no translation)
+let COST_TRACKER: CostTracker | null = null; // Cost tracking for current audiobook generation
 
 // Helper: Get actual chapter count (BOOK_CHAPTERS.length - 1 because index 0 is unused)
 function getChapterCount(): number {
@@ -615,6 +619,10 @@ async function startBackgroundDramatization(
   createAudiobookFolder(bookTitle);
   console.log(`   📁 Audiobook folder: ${bookTitle}`);
   
+  // Initialize cost tracker for this audiobook
+  COST_TRACKER = new CostTracker(bookTitle);
+  console.log(`   💰 Cost tracking enabled`);
+  
   try {
     // Process chapters in parallel batches (1-based: chapter 1, 2, 3, ...)
     for (let batchStart = 1; batchStart < BOOK_CHAPTERS.length; batchStart += parallelism) {
@@ -677,6 +685,13 @@ async function startBackgroundDramatization(
               );
               textToDramatize = translationResult.translatedText;
               
+              // Track translation cost
+              if (COST_TRACKER) {
+                const inputTokens = estimateTokens(chapter.text, TARGET_LANGUAGE || 'slavic');
+                const outputTokens = estimateTokens(textToDramatize, TARGET_LANGUAGE || 'slavic');
+                COST_TRACKER.addTranslation(inputTokens, outputTokens);
+              }
+              
               // Normalize quotes: curly single quotes → straight apostrophes
               // This prevents contractions (can't, won't) from being treated as dialogue
               textToDramatize = normalizeQuotesForDramatization(textToDramatize);
@@ -696,7 +711,15 @@ async function startBackgroundDramatization(
           // ★ STEP 1: EXTRACT CHARACTERS from this chapter (after translation) ★
           // Only extract from content chapters, skip front matter sections
           // This is the key change: per-chapter extraction with alias detection
+          const chapterTextForExtraction = textToDramatize;
           await characterRegistry.extractFromChapter(textToDramatize, chapterNum, chapter.isFrontMatter);
+          
+          // Track character extraction cost (input = chapter text, output = ~500 tokens for JSON response)
+          if (COST_TRACKER && !chapter.isFrontMatter) {
+            const inputTokens = estimateTokens(chapterTextForExtraction, TARGET_LANGUAGE || 'slavic');
+            const outputTokens = 500; // Approximate JSON response size
+            COST_TRACKER.addCharacterExtraction(inputTokens, outputTokens);
+          }
           
           // Update global VOICE_MAP with current registry state
           VOICE_MAP = characterRegistry.getVoiceMap();
@@ -730,6 +753,13 @@ async function startBackgroundDramatization(
             analyzer,
             chapterNum  // chapter number (1-based)
           );
+          
+          // Track dramatization cost (only for LLM-based methods)
+          if (COST_TRACKER && result.method === 'llm-fallback') {
+            const inputTokens = estimateTokens(textToDramatize, TARGET_LANGUAGE || 'slavic');
+            const outputTokens = estimateTokens(result.taggedText, TARGET_LANGUAGE || 'slavic');
+            COST_TRACKER.addDramatization(inputTokens, outputTokens);
+          }
           
           // Update chapter with dramatized text
           BOOK_CHAPTERS[chapterNum] = {
@@ -830,6 +860,17 @@ async function startBackgroundDramatization(
             3 // TTS parallelism within chapter
           );
           
+          // Track audio generation cost (TTS: input = text, output = ~10x for audio tokens)
+          if (COST_TRACKER) {
+            // Sum up all sub-chunk text for this chapter
+            const totalTextForTTS = newSubChunks.reduce((sum, sc) => 
+              sum + sc.segments.reduce((s, seg) => s + seg.text.length, 0), 0);
+            const inputTokens = estimateTokens(result.taggedText, TARGET_LANGUAGE || 'slavic');
+            // Audio output tokens are roughly 10x the input for Gemini TTS
+            const outputTokens = inputTokens * 10;
+            COST_TRACKER.addAudioGeneration(inputTokens, outputTokens);
+          }
+          
           // Update activity after generation
           dramatizationStatus.lastActivityAt = Date.now();
           
@@ -888,6 +929,13 @@ async function startBackgroundDramatization(
             3 // TTS parallelism within chapter
           );
           
+          // Track audio generation cost for fallback path
+          if (COST_TRACKER) {
+            const inputTokens = estimateTokens(narratorText, TARGET_LANGUAGE || 'slavic');
+            const outputTokens = inputTokens * 10;
+            COST_TRACKER.addAudioGeneration(inputTokens, outputTokens);
+          }
+          
           // AUTO-CONSOLIDATE immediately after all sub-chunks generated
           try {
             const chapterTitle = BOOK_CHAPTERS[chapterNum]?.title;
@@ -908,6 +956,17 @@ async function startBackgroundDramatization(
       (global as any).DRAMATIZATION_ENABLED = false; // All chapters dramatized
       if (BOOK_METADATA) {
         BOOK_METADATA.isDramatized = true;
+      }
+      
+      // Save cost summary to audiobook folder
+      if (COST_TRACKER) {
+        try {
+          await COST_TRACKER.saveToFile();
+          console.log(`   💰 Cost summary saved`);
+          console.log(COST_TRACKER.getTextReport());
+        } catch (costErr) {
+          console.error(`   ⚠️ Failed to save cost summary:`, costErr);
+        }
       }
     }
   } catch (error) {
@@ -1413,9 +1472,15 @@ app.post('/api/book/from-url', async (req: Request, res: Response) => {
     
     // Download file
     console.log(`   Downloading...`);
-    const response = await fetch(url);
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'VoiceLibri/1.0 (Audiobook Generator)',
+        'Accept': 'text/plain, application/epub+zip, */*',
+      },
+    });
     
     if (!response.ok) {
+      console.error(`   Download failed: ${response.status} ${response.statusText}`);
       return res.status(400).json({
         error: 'Download failed',
         message: `Failed to download file: ${response.status} ${response.statusText}`,
@@ -2196,6 +2261,45 @@ app.get('/api/audiobooks/:bookTitle', (req: Request, res: Response) => {
     console.error('✗ Error getting audiobook:', error);
     res.status(500).json({
       error: 'Failed to get audiobook',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * Delete an audiobook from library
+ * 
+ * DELETE /api/audiobooks/:bookTitle
+ */
+app.delete('/api/audiobooks/:bookTitle', (req: Request, res: Response) => {
+  try {
+    const { bookTitle } = req.params;
+    
+    if (!bookTitle) {
+      return res.status(400).json({
+        error: 'Missing bookTitle',
+        message: 'bookTitle is required',
+      });
+    }
+    
+    const success = deleteAudiobook(bookTitle);
+    
+    if (!success) {
+      return res.status(404).json({
+        error: 'Audiobook not found',
+        message: `No audiobook found with title: ${bookTitle}`,
+      });
+    }
+    
+    console.log(`✓ Deleted audiobook: ${bookTitle}`);
+    res.json({
+      success: true,
+      message: `Audiobook "${bookTitle}" deleted successfully`,
+    });
+  } catch (error) {
+    console.error('✗ Error deleting audiobook:', error);
+    res.status(500).json({
+      error: 'Failed to delete audiobook',
       message: error instanceof Error ? error.message : 'Unknown error',
     });
   }
