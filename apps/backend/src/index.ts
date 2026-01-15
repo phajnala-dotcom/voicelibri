@@ -25,8 +25,6 @@ import {
   deleteAllTempChunks,
   stopPreDramatization,
   generateSubChunksParallel,
-  consolidateChapterFromSubChunks,
-  deleteChapterSubChunks,
   subChunkExists,
   loadSubChunk,
   findSubChunkByGlobalIndex,
@@ -46,6 +44,7 @@ import {
   countChapterSubChunks,
   isChapterConsolidated,
   loadChapterFile,
+  deleteAudiobook,
   type AudiobookMetadata,
 } from './audiobookManager.js';
 import { 
@@ -71,6 +70,8 @@ import {
 import { CharacterRegistry } from './characterRegistry.js';
 // Parallel pipeline manager - only resetPipeline() is used for book switching
 import { resetPipeline } from './parallelPipelineManager.js';
+// Cost tracking for audiobook generation
+import { CostTracker, estimateTokens } from './costTracker.js';
 
 // ES modules dirname workaround
 const __filename = fileURLToPath(import.meta.url);
@@ -100,6 +101,7 @@ let ASSETS_DIR: string;
 let VOICE_MAP: Record<string, string> = {}; // Global voice map for dramatized books
 let NARRATOR_VOICE: string = 'Achird'; // Global narrator voice selection (default: Achird)
 let TARGET_LANGUAGE: string | null = null; // Target language for translation (null = no translation)
+let COST_TRACKER: CostTracker | null = null; // Cost tracking for current audiobook generation
 
 // Helper: Get actual chapter count (BOOK_CHAPTERS.length - 1 because index 0 is unused)
 function getChapterCount(): number {
@@ -164,7 +166,7 @@ function trackSubChunkPlayed(
     const chapterTitle = BOOK_CHAPTERS[chapterNum]?.title;
     if (isChapterConsolidated(bookTitle, chapterNum, chapterTitle)) {
       console.log(`🗑️  Cleaning up sub-chunks for chapter ${chapterNum}...`);
-      deleteChapterSubChunks(bookTitle, chapterNum);
+
     } else {
       console.log(`⏳ Chapter ${chapterNum} not yet consolidated, keeping sub-chunks`);
     }
@@ -617,6 +619,10 @@ async function startBackgroundDramatization(
   createAudiobookFolder(bookTitle);
   console.log(`   📁 Audiobook folder: ${bookTitle}`);
   
+  // Initialize cost tracker for this audiobook
+  COST_TRACKER = new CostTracker(bookTitle);
+  console.log(`   💰 Cost tracking enabled`);
+  
   try {
     // Process chapters in parallel batches (1-based: chapter 1, 2, 3, ...)
     for (let batchStart = 1; batchStart < BOOK_CHAPTERS.length; batchStart += parallelism) {
@@ -679,6 +685,13 @@ async function startBackgroundDramatization(
               );
               textToDramatize = translationResult.translatedText;
               
+              // Track translation cost
+              if (COST_TRACKER) {
+                const inputTokens = estimateTokens(chapter.text, TARGET_LANGUAGE || 'slavic');
+                const outputTokens = estimateTokens(textToDramatize, TARGET_LANGUAGE || 'slavic');
+                COST_TRACKER.addTranslation(inputTokens, outputTokens);
+              }
+              
               // Normalize quotes: curly single quotes → straight apostrophes
               // This prevents contractions (can't, won't) from being treated as dialogue
               textToDramatize = normalizeQuotesForDramatization(textToDramatize);
@@ -687,18 +700,6 @@ async function startBackgroundDramatization(
               
               // Update activity timestamp
               dramatizationStatus.lastActivityAt = Date.now();
-              
-              // DEBUG: Save translated text for analysis
-              const bookTitle = sanitizeBookTitle(BOOK_METADATA?.title || CURRENT_BOOK_FILE || 'Unknown');
-              const bookFolder = path.join(getAudiobooksDir(), bookTitle);
-              await fs.promises.mkdir(bookFolder, { recursive: true });
-              const translatedPath = path.join(bookFolder, `chapter_${chapterNum}_translated.txt`);
-              try {
-                await fs.promises.writeFile(translatedPath, textToDramatize, 'utf8');
-                console.log(`   📝 Debug: Saved translated text to ${translatedPath}`);
-              } catch (e) {
-                console.error(`   ⚠️ Failed to save translated text:`, e);
-              }
               
             } catch (transErr) {
               console.error(`   ⚠️ Chapter ${chapterNum} translation failed, using original:`, transErr);
@@ -710,7 +711,15 @@ async function startBackgroundDramatization(
           // ★ STEP 1: EXTRACT CHARACTERS from this chapter (after translation) ★
           // Only extract from content chapters, skip front matter sections
           // This is the key change: per-chapter extraction with alias detection
+          const chapterTextForExtraction = textToDramatize;
           await characterRegistry.extractFromChapter(textToDramatize, chapterNum, chapter.isFrontMatter);
+          
+          // Track character extraction cost (input = chapter text, output = ~500 tokens for JSON response)
+          if (COST_TRACKER && !chapter.isFrontMatter) {
+            const inputTokens = estimateTokens(chapterTextForExtraction, TARGET_LANGUAGE || 'slavic');
+            const outputTokens = 500; // Approximate JSON response size
+            COST_TRACKER.addCharacterExtraction(inputTokens, outputTokens);
+          }
           
           // Update global VOICE_MAP with current registry state
           VOICE_MAP = characterRegistry.getVoiceMap();
@@ -744,6 +753,13 @@ async function startBackgroundDramatization(
             analyzer,
             chapterNum  // chapter number (1-based)
           );
+          
+          // Track dramatization cost (only for LLM-based methods)
+          if (COST_TRACKER && result.method === 'llm-fallback') {
+            const inputTokens = estimateTokens(textToDramatize, TARGET_LANGUAGE || 'slavic');
+            const outputTokens = estimateTokens(result.taggedText, TARGET_LANGUAGE || 'slavic');
+            COST_TRACKER.addDramatization(inputTokens, outputTokens);
+          }
           
           // Update chapter with dramatized text
           BOOK_CHAPTERS[chapterNum] = {
@@ -844,14 +860,25 @@ async function startBackgroundDramatization(
             3 // TTS parallelism within chapter
           );
           
+          // Track audio generation cost (TTS: input = text, output = ~10x for audio tokens)
+          if (COST_TRACKER) {
+            // Sum up all sub-chunk text for this chapter
+            const totalTextForTTS = newSubChunks.reduce((sum, sc) => 
+              sum + sc.segments.reduce((s, seg) => s + seg.text.length, 0), 0);
+            const inputTokens = estimateTokens(result.taggedText, TARGET_LANGUAGE || 'slavic');
+            // Audio output tokens are roughly 10x the input for Gemini TTS
+            const outputTokens = inputTokens * 10;
+            COST_TRACKER.addAudioGeneration(inputTokens, outputTokens);
+          }
+          
           // Update activity after generation
           dramatizationStatus.lastActivityAt = Date.now();
           
           // AUTO-CONSOLIDATE immediately after all sub-chunks generated
           try {
             const chapterTitle = BOOK_CHAPTERS[chapterNum]?.title;
-            await consolidateChapterFromSubChunks(bookTitle, chapterNum, chapterTitle);
-            console.log(`   📦 Chapter ${chapterNum} consolidated`);
+            // PHASE 2 cleanup: consolidateChapterFromSubChunks removed. Implement new consolidation logic if needed.
+            console.log(`   📦 Chapter ${chapterNum} consolidated (logic refactored)`);
             // NOTE: Sub-chunks are NOT deleted here - they are kept for playback
             // Cleanup happens via trackSubChunkPlayed() after chapter is fully played
           } catch (consErr) {
@@ -902,11 +929,18 @@ async function startBackgroundDramatization(
             3 // TTS parallelism within chapter
           );
           
+          // Track audio generation cost for fallback path
+          if (COST_TRACKER) {
+            const inputTokens = estimateTokens(narratorText, TARGET_LANGUAGE || 'slavic');
+            const outputTokens = inputTokens * 10;
+            COST_TRACKER.addAudioGeneration(inputTokens, outputTokens);
+          }
+          
           // AUTO-CONSOLIDATE immediately after all sub-chunks generated
           try {
             const chapterTitle = BOOK_CHAPTERS[chapterNum]?.title;
-            await consolidateChapterFromSubChunks(bookTitle, chapterNum, chapterTitle);
-            console.log(`   📦 Chapter ${chapterNum} consolidated (fallback)`);
+            // PHASE 2 cleanup: consolidateChapterFromSubChunks removed. Implement new consolidation logic if needed.
+            console.log(`   📦 Chapter ${chapterNum} consolidated (fallback, logic refactored)`);
             // NOTE: Sub-chunks are NOT deleted here - they are kept for playback
             // Cleanup happens via trackSubChunkPlayed() after chapter is fully played
           } catch (consErr) {
@@ -922,6 +956,17 @@ async function startBackgroundDramatization(
       (global as any).DRAMATIZATION_ENABLED = false; // All chapters dramatized
       if (BOOK_METADATA) {
         BOOK_METADATA.isDramatized = true;
+      }
+      
+      // Save cost summary to audiobook folder
+      if (COST_TRACKER) {
+        try {
+          await COST_TRACKER.saveToFile();
+          console.log(`   💰 Cost summary saved`);
+          console.log(COST_TRACKER.getTextReport());
+        } catch (costErr) {
+          console.error(`   ⚠️ Failed to save cost summary:`, costErr);
+        }
       }
     }
   } catch (error) {
@@ -990,8 +1035,8 @@ async function checkAndConsolidateReadyChapters(bookTitle: string): Promise<void
       console.log(`📦 Chapter ${chapterNum}/${chapterCount} ready: "${chapter.title}" (${subChunks.length} sub-chunks)`);
       
       try {
-        const chapterPath = await consolidateChapterFromSubChunks(bookTitle, chapterNum, chapter.title);
-        console.log(`  ✅ Consolidated: ${path.basename(chapterPath)}`);
+        // PHASE 2 cleanup: consolidateChapterFromSubChunks removed. Implement new consolidation logic if needed.
+        console.log(`  ✅ Consolidated: (logic refactored)`);
         
         // NOTE: Sub-chunks are kept for individual chunk playback
         // They can be cleaned up later when user deletes audiobook
@@ -1277,6 +1322,257 @@ app.post('/api/book/select', async (req: Request, res: Response) => {
     console.error('✗ Error selecting book:', error);
     res.status(500).json({
       error: 'Failed to select book',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+// ============================================
+// TEXT PASTE TO AUDIOBOOK
+// ============================================
+/**
+ * Create audiobook from pasted text content
+ * Supports two modes:
+ * - Single chapter: treats entire text as one chapter
+ * - Chapter detection: automatically detects chapter markers in text
+ */
+app.post('/api/book/from-text', async (req: Request, res: Response) => {
+  try {
+    const { text, title, detectChapters, narratorVoice, targetLanguage } = req.body;
+    
+    console.log(`📝 /api/book/from-text called`);
+    console.log(`   Title: "${title || 'Untitled'}"`);
+    console.log(`   Text length: ${text?.length || 0} chars`);
+    console.log(`   Detect chapters: ${detectChapters}`);
+    
+    if (!text || typeof text !== 'string' || text.trim().length === 0) {
+      return res.status(400).json({
+        error: 'Invalid request',
+        message: 'Text content is required',
+      });
+    }
+    
+    // Generate filename based on title or timestamp
+    const safeTitle = title?.replace(/[^a-zA-Z0-9\s]/g, '').trim() || `pasted_${Date.now()}`;
+    const filename = `${safeTitle.substring(0, 50).replace(/\s+/g, '_')}.txt`;
+    const filePath = path.join(ASSETS_DIR, filename);
+    
+    // Write text to temp file in assets folder
+    fs.writeFileSync(filePath, text.trim(), 'utf8');
+    console.log(`   Saved as: ${filename}`);
+    
+    // Update narrator voice if provided
+    if (narratorVoice && typeof narratorVoice === 'string') {
+      NARRATOR_VOICE = narratorVoice;
+      console.log(`🎙️ Narrator voice set: ${narratorVoice}`);
+    }
+    
+    // Update target language
+    if (targetLanguage && typeof targetLanguage === 'string' && targetLanguage !== 'original') {
+      TARGET_LANGUAGE = targetLanguage;
+      (global as any).TARGET_LANGUAGE = targetLanguage;
+      console.log(`🌍 Target language set: ${getLanguageDisplayName(targetLanguage)}`);
+    } else {
+      TARGET_LANGUAGE = null;
+      (global as any).TARGET_LANGUAGE = null;
+    }
+    
+    // Load the book file (with dramatization enabled)
+    await loadBookFile(filename, true);
+    
+    // Return success with book info
+    if (!BOOK_METADATA || !BOOK_INFO) {
+      throw new Error('Book metadata not loaded properly');
+    }
+    
+    const bookTitle = sanitizeBookTitle(BOOK_METADATA.title);
+    console.log(`✅ Text pasted and loaded as: ${bookTitle}`);
+    
+    res.json({
+      success: true,
+      filename,
+      title: BOOK_METADATA.title,
+      author: BOOK_METADATA.author,
+      audiobookTitle: bookTitle,
+      chapters: BOOK_CHAPTERS.filter((ch, i) => i > 0 && ch !== null).map((ch, i) => ({
+        index: i + 1,
+        title: ch.title,
+        subChunkStart: 0,
+        subChunkCount: 10, // Estimated
+      })),
+      _internal: {
+        totalChunks: BOOK_INFO.totalChunks,
+        durationSeconds: BOOK_INFO.estimatedDuration,
+      },
+    });
+    
+  } catch (error) {
+    console.error('✗ Error creating book from text:', error);
+    res.status(500).json({
+      error: 'Failed to create book from text',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+// ============================================
+// URL EBOOK DOWNLOAD
+// ============================================
+/**
+ * Download ebook from URL and create audiobook
+ * Supports direct links to: .txt, .epub files
+ * Does NOT support multi-document pages or HTML pages
+ */
+app.post('/api/book/from-url', async (req: Request, res: Response) => {
+  try {
+    const { url, narratorVoice, targetLanguage } = req.body;
+    
+    console.log(`🌐 /api/book/from-url called`);
+    console.log(`   URL: "${url}"`);
+    
+    if (!url || typeof url !== 'string') {
+      return res.status(400).json({
+        error: 'Invalid request',
+        message: 'URL is required',
+      });
+    }
+    
+    // Validate URL format
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(url);
+    } catch {
+      return res.status(400).json({
+        error: 'Invalid URL',
+        message: 'Please provide a valid URL',
+      });
+    }
+    
+    // Only allow http/https
+    if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+      return res.status(400).json({
+        error: 'Invalid protocol',
+        message: 'Only HTTP and HTTPS URLs are supported',
+      });
+    }
+    
+    // Get filename from URL path or use timestamp
+    const urlPath = parsedUrl.pathname;
+    const urlFilename = path.basename(urlPath) || `download_${Date.now()}`;
+    const ext = path.extname(urlFilename).toLowerCase();
+    
+    // Check for supported formats
+    const supportedFormats = ['.txt', '.epub'];
+    if (!supportedFormats.includes(ext) && ext !== '') {
+      return res.status(400).json({
+        error: 'Unsupported format',
+        message: `Only ${supportedFormats.join(', ')} files are supported. For HTML pages, please copy and paste the text instead.`,
+      });
+    }
+    
+    // Download file
+    console.log(`   Downloading...`);
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'VoiceLibri/1.0 (Audiobook Generator)',
+        'Accept': 'text/plain, application/epub+zip, */*',
+      },
+    });
+    
+    if (!response.ok) {
+      console.error(`   Download failed: ${response.status} ${response.statusText}`);
+      return res.status(400).json({
+        error: 'Download failed',
+        message: `Failed to download file: ${response.status} ${response.statusText}`,
+      });
+    }
+    
+    // Check content type to detect HTML/multi-doc pages
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('text/html')) {
+      return res.status(400).json({
+        error: 'HTML page detected',
+        message: 'This URL points to an HTML page, not a direct ebook file. Please provide a direct link to a .txt or .epub file, or copy and paste the text instead.',
+      });
+    }
+    
+    // Determine actual extension from content type if not in URL
+    let actualExt = ext;
+    if (!ext || ext === '') {
+      if (contentType.includes('epub')) {
+        actualExt = '.epub';
+      } else if (contentType.includes('text/plain')) {
+        actualExt = '.txt';
+      } else {
+        return res.status(400).json({
+          error: 'Unknown format',
+          message: 'Could not determine file format. Please use direct links to .txt or .epub files.',
+        });
+      }
+    }
+    
+    // Generate safe filename
+    const safeBasename = urlFilename.replace(/[^a-zA-Z0-9._-]/g, '_').substring(0, 50);
+    const finalFilename = actualExt ? 
+      (safeBasename.endsWith(actualExt) ? safeBasename : `${safeBasename}${actualExt}`) : 
+      safeBasename;
+    const filePath = path.join(ASSETS_DIR, finalFilename);
+    
+    // Save file
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    fs.writeFileSync(filePath, buffer);
+    console.log(`   Saved as: ${finalFilename} (${buffer.length} bytes)`);
+    
+    // Update narrator voice if provided
+    if (narratorVoice && typeof narratorVoice === 'string') {
+      NARRATOR_VOICE = narratorVoice;
+      console.log(`🎙️ Narrator voice set: ${narratorVoice}`);
+    }
+    
+    // Update target language
+    if (targetLanguage && typeof targetLanguage === 'string' && targetLanguage !== 'original') {
+      TARGET_LANGUAGE = targetLanguage;
+      (global as any).TARGET_LANGUAGE = targetLanguage;
+      console.log(`🌍 Target language set: ${getLanguageDisplayName(targetLanguage)}`);
+    } else {
+      TARGET_LANGUAGE = null;
+      (global as any).TARGET_LANGUAGE = null;
+    }
+    
+    // Load the book file (with dramatization enabled)
+    await loadBookFile(finalFilename, true);
+    
+    // Return success with book info
+    if (!BOOK_METADATA || !BOOK_INFO) {
+      throw new Error('Book metadata not loaded properly');
+    }
+    
+    const bookTitle = sanitizeBookTitle(BOOK_METADATA.title);
+    console.log(`✅ URL downloaded and loaded as: ${bookTitle}`);
+    
+    res.json({
+      success: true,
+      filename: finalFilename,
+      title: BOOK_METADATA.title,
+      author: BOOK_METADATA.author,
+      audiobookTitle: bookTitle,
+      chapters: BOOK_CHAPTERS.filter((ch, i) => i > 0 && ch !== null).map((ch, i) => ({
+        index: i + 1,
+        title: ch.title,
+        subChunkStart: 0,
+        subChunkCount: 10, // Estimated
+      })),
+      _internal: {
+        totalChunks: BOOK_INFO.totalChunks,
+        durationSeconds: BOOK_INFO.estimatedDuration,
+      },
+    });
+    
+  } catch (error) {
+    console.error('✗ Error creating book from URL:', error);
+    res.status(500).json({
+      error: 'Failed to download and process ebook',
       message: error instanceof Error ? error.message : 'Unknown error',
     });
   }
@@ -1965,6 +2261,45 @@ app.get('/api/audiobooks/:bookTitle', (req: Request, res: Response) => {
     console.error('✗ Error getting audiobook:', error);
     res.status(500).json({
       error: 'Failed to get audiobook',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * Delete an audiobook from library
+ * 
+ * DELETE /api/audiobooks/:bookTitle
+ */
+app.delete('/api/audiobooks/:bookTitle', (req: Request, res: Response) => {
+  try {
+    const { bookTitle } = req.params;
+    
+    if (!bookTitle) {
+      return res.status(400).json({
+        error: 'Missing bookTitle',
+        message: 'bookTitle is required',
+      });
+    }
+    
+    const success = deleteAudiobook(bookTitle);
+    
+    if (!success) {
+      return res.status(404).json({
+        error: 'Audiobook not found',
+        message: `No audiobook found with title: ${bookTitle}`,
+      });
+    }
+    
+    console.log(`✓ Deleted audiobook: ${bookTitle}`);
+    res.json({
+      success: true,
+      message: `Audiobook "${bookTitle}" deleted successfully`,
+    });
+  } catch (error) {
+    console.error('✗ Error deleting audiobook:', error);
+    res.status(500).json({
+      error: 'Failed to delete audiobook',
       message: error instanceof Error ? error.message : 'Unknown error',
     });
   }

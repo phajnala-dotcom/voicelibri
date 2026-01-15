@@ -10,7 +10,7 @@
  */
 
 import { useState } from 'react';
-import { Play, ChevronDown, ChevronUp } from 'lucide-react';
+import { Play, ChevronDown, ChevronUp, Trash2, Loader } from 'lucide-react';
 import type { Book, Chapter } from '../../types';
 import { formatDurationLong, formatDuration } from '../../utils/formatters';
 
@@ -18,6 +18,9 @@ interface BookCardProps {
   book: Book;
   onCoverPress: () => void;     // Opens FullPlayer
   onChapterPress: (chapter: Chapter) => void;  // Opens FullPlayer at specific chapter
+  onDelete?: (bookId: string) => void;  // Delete audiobook
+  isGenerating?: boolean;  // Show generation indicator
+  generationProgress?: number;  // 0-100 percentage
 }
 
 /**
@@ -26,8 +29,9 @@ interface BookCardProps {
  * - Row click = expand chapters  
  * - Chapter click = FullPlayer at chapter
  */
-export function BookCard({ book, onCoverPress, onChapterPress }: BookCardProps) {
+export function BookCard({ book, onCoverPress, onChapterPress, onDelete, isGenerating, generationProgress }: BookCardProps) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   
   const progressPercent = book.progress
     ? Math.round((book.progress.position / book.totalDuration) * 100)
@@ -37,6 +41,22 @@ export function BookCard({ book, onCoverPress, onChapterPress }: BookCardProps) 
     // Don't expand if clicking the cover
     e.stopPropagation();
     setIsExpanded(!isExpanded);
+  };
+
+  const handleDeleteClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setShowDeleteConfirm(true);
+  };
+
+  const handleConfirmDelete = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onDelete?.(book.id);
+    setShowDeleteConfirm(false);
+  };
+
+  const handleCancelDelete = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setShowDeleteConfirm(false);
   };
 
   return (
@@ -100,21 +120,95 @@ export function BookCard({ book, onCoverPress, onChapterPress }: BookCardProps) 
                 ✓
               </div>
             )}
+            
+            {/* Generation indicator */}
+            {isGenerating && (
+              <div className="
+                absolute inset-0 
+                bg-[var(--neu-dark)]/70 
+                flex flex-col items-center justify-center
+              ">
+                <Loader className="w-6 h-6 text-[var(--neu-secondary)] animate-spin" />
+                {generationProgress !== undefined && (
+                  <span className="text-white text-[10px] mt-1 font-medium">
+                    {generationProgress}%
+                  </span>
+                )}
+              </div>
+            )}
           </div>
           
           {/* Book Info */}
           <div className="flex-1 min-w-0 flex flex-col justify-between">
-            <div>
-              <h3 className="text-[var(--neu-dark)] font-semibold text-sm line-clamp-2 mb-1">
-                {book.title}
-              </h3>
-              <p className="text-[var(--neu-gray-700)] text-xs line-clamp-1">
-                {book.author}
-              </p>
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex-1 min-w-0">
+                <h3 className="text-[var(--neu-dark)] font-semibold text-sm line-clamp-2 mb-1">
+                  {book.title}
+                </h3>
+                <p className="text-[var(--neu-gray-700)] text-xs line-clamp-1">
+                  {book.author}
+                </p>
+              </div>
+              
+              {/* Delete button */}
+              {onDelete && !showDeleteConfirm && (
+                <button
+                  onClick={handleDeleteClick}
+                  className="
+                    p-1.5 rounded-full
+                    text-[var(--neu-gray-500)]
+                    hover:text-[var(--neu-danger)]
+                    hover:bg-[var(--neu-danger)]/10
+                    transition-colors duration-150
+                    flex-shrink-0
+                  "
+                  title="Delete audiobook"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              )}
+              
+              {/* Delete confirmation */}
+              {showDeleteConfirm && (
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <button
+                    onClick={handleConfirmDelete}
+                    className="
+                      px-2 py-1 text-[10px] rounded
+                      bg-[var(--neu-danger)] text-white
+                      hover:bg-[var(--neu-danger)]/80
+                      transition-colors duration-150
+                    "
+                  >
+                    Delete
+                  </button>
+                  <button
+                    onClick={handleCancelDelete}
+                    className="
+                      px-2 py-1 text-[10px] rounded
+                      bg-[var(--neu-gray-300)] text-[var(--neu-gray-700)]
+                      hover:bg-[var(--neu-gray-400)]
+                      transition-colors duration-150
+                    "
+                  >
+                    Cancel
+                  </button>
+                </div>
+              )}
             </div>
             
-            {/* Progress bar */}
-            {progressPercent > 0 && !book.isFinished && (
+            {/* Generation progress bar */}
+            {isGenerating && generationProgress !== undefined && (
+              <div className="neu-progress mt-2">
+                <div
+                  className="neu-progress-bar bg-[var(--neu-warning)]"
+                  style={{ width: `${generationProgress}%` }}
+                />
+              </div>
+            )}
+            
+            {/* Playback progress bar */}
+            {!isGenerating && progressPercent > 0 && !book.isFinished && (
               <div className="neu-progress mt-2">
                 <div
                   className="neu-progress-bar"

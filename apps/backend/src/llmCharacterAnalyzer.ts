@@ -15,6 +15,14 @@
 import { GoogleAuth } from 'google-auth-library';
 import { cleanText, CleaningConfig } from './textCleaner.js';
 import { Chapter } from './bookChunker.js';
+import { 
+  LLM_MODELS, 
+  LLM_TEMPERATURES, 
+  LLM_GENERATION_CONFIG,
+  getFullBookAnalysisPrompt,
+  getChapterEnrichmentPrompt,
+  getVoiceTaggingPrompt
+} from './promptConfig.js';
 
 /**
  * Convert a character name to valid TTS speaker alias
@@ -201,14 +209,14 @@ export interface LlmCharacterAnalyzer {
 export class GeminiCharacterAnalyzer implements LlmCharacterAnalyzer {
   private projectId: string;
   private location: string;
-  private model: string = process.env.LLM_MODEL_CHARACTER || 'gemini-2.5-flash'; // Latest flash model
+  private model: string = LLM_MODELS.CHARACTER;
   private auth: GoogleAuth;
   private endpoint: string;
   
   constructor(config: GeminiConfig) {
     this.projectId = config.projectId;
     this.location = config.location || 'us-central1';
-    this.model = config.model || process.env.LLM_MODEL_CHARACTER || 'gemini-2.5-flash';
+    this.model = config.model || LLM_MODELS.CHARACTER;
     this.auth = new GoogleAuth({
       scopes: ['https://www.googleapis.com/auth/cloud-platform'],
     });
@@ -232,9 +240,9 @@ export class GeminiCharacterAnalyzer implements LlmCharacterAnalyzer {
         parts: [{ text: prompt }]
       }],
       generationConfig: {
-        temperature: 0.1, // Low temperature for consistent output
-        maxOutputTokens: 32768, // Increased to prevent JSON truncation for books with many characters
-        topP: 0.95,
+        temperature: LLM_TEMPERATURES.CHARACTER_ANALYSIS,
+        maxOutputTokens: LLM_GENERATION_CONFIG.MAX_TOKENS_CHARACTER,
+        topP: LLM_GENERATION_CONFIG.TOP_P,
       }
     };
     

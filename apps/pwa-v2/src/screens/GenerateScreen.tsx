@@ -17,7 +17,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { Card, CardBody, Toggle } from '../components/ui';
-import { selectBook, convertToBook, getGenerationProgress, getAudiobook } from '../services/api';
+import { selectBook, convertToBook, getGenerationProgress, getAudiobook, createFromText, createFromUrl } from '../services/api';
 import { useLibraryStore } from '../stores/libraryStore';
 import { usePlayerStore } from '../stores/playerStore';
 import { useProgressiveAudioPlayback } from '../hooks/useProgressiveAudioPlayback';
@@ -70,6 +70,8 @@ export function GenerateScreen() {
   // Upload state
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [pastedText, setPastedText] = useState('');
+  const [urlInput, setUrlInput] = useState('');
+  const [inputMode, setInputMode] = useState<'file' | 'text' | 'url'>('file');
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   // Settings state
@@ -97,7 +99,9 @@ export function GenerateScreen() {
     const file = e.target.files?.[0];
     if (file) {
       setSelectedFile(file);
-      setPastedText(''); // Clear pasted text when file is selected
+      setPastedText('');
+      setUrlInput('');
+      setInputMode('file');
     }
   };
 
@@ -109,7 +113,25 @@ export function GenerateScreen() {
     const text = e.clipboardData.getData('text');
     if (text) {
       setPastedText(text);
-      setSelectedFile(null); // Clear file when text is pasted
+      setSelectedFile(null);
+      setUrlInput('');
+      setInputMode('text');
+    }
+  };
+  
+  const handleTextChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    // Check if it looks like a URL
+    if (value.startsWith('http://') || value.startsWith('https://')) {
+      setUrlInput(value);
+      setPastedText('');
+      setSelectedFile(null);
+      setInputMode('url');
+    } else {
+      setPastedText(value);
+      setUrlInput('');
+      if (value) setSelectedFile(null);
+      setInputMode(value ? 'text' : 'file');
     }
   };
 
@@ -121,8 +143,8 @@ export function GenerateScreen() {
   };
 
   const handleCreate = async () => {
-    if (!selectedFile && !pastedText) {
-      setError('Please upload an e-book or paste text first');
+    if (!selectedFile && !pastedText && !urlInput) {
+      setError('Please upload an e-book, paste text, or enter a URL');
       return;
     }
     
@@ -131,9 +153,6 @@ export function GenerateScreen() {
     setProgress(0);
     
     try {
-      // Backend expects files to be in assets/ folder
-      const bookFile = selectedFile?.name || 'pasted_text.txt';
-      
       // Convert target language to backend format
       const langMap: Record<string, string> = {
         'Original': 'original',
@@ -155,14 +174,38 @@ export function GenerateScreen() {
         'Ukrainian': 'uk-UA',
       };
       const targetLangCode = langMap[targetLanguage] || 'original';
+      const geminiVoice = aliasToGeminiName(narratorVoice);
       
-      // Use the correct API: /api/book/select with dramatize=true
-      const result = await selectBook({
-        filename: bookFile,
-        narratorVoice: aliasToGeminiName(narratorVoice),
-        targetLanguage: targetLangCode,
-        dramatize: true,
-      });
+      let result;
+      
+      // Choose API based on input mode
+      if (inputMode === 'text' && pastedText) {
+        // Use text paste API
+        result = await createFromText({
+          text: pastedText,
+          title: 'Pasted Text',
+          detectChapters: true,
+          narratorVoice: geminiVoice,
+          targetLanguage: targetLangCode,
+        });
+      } else if (inputMode === 'url' && urlInput) {
+        // Use URL download API
+        result = await createFromUrl({
+          url: urlInput,
+          narratorVoice: geminiVoice,
+          targetLanguage: targetLangCode,
+        });
+      } else if (selectedFile) {
+        // Use existing file upload API
+        result = await selectBook({
+          filename: selectedFile.name,
+          narratorVoice: geminiVoice,
+          targetLanguage: targetLangCode,
+          dramatize: true,
+        });
+      } else {
+        throw new Error('No valid input provided');
+      }
       
       const bookTitle = result.audiobookTitle || result.title;
       
@@ -233,8 +276,11 @@ export function GenerateScreen() {
   };
 
   // Display text for the text box
-  const displayText = selectedFile?.name || pastedText || '';
-  const placeholderText = 'Paste text from clipboard here';
+  const displayText = selectedFile?.name || urlInput || pastedText || '';
+  const placeholderText = 'Paste text or URL here';
+
+  // Has valid input
+  const hasInput = selectedFile || pastedText || urlInput;
 
   return (
     <div className="min-h-screen bg-[var(--neu-body-bg)]">
@@ -295,10 +341,7 @@ export function GenerateScreen() {
                 type="text"
                 value={displayText}
                 onPaste={handlePaste}
-                onChange={(e) => {
-                  setPastedText(e.target.value);
-                  if (e.target.value) setSelectedFile(null);
-                }}
+                onChange={handleTextChange}
                 placeholder={placeholderText}
                 className="
                   neu-input w-full
@@ -306,6 +349,16 @@ export function GenerateScreen() {
                   placeholder:text-[var(--neu-gray-500)]
                 "
               />
+              {inputMode === 'url' && (
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[var(--neu-secondary)]">
+                  🌐 URL
+                </span>
+              )}
+              {inputMode === 'text' && pastedText.length > 0 && (
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[var(--neu-gray-500)]">
+                  {(pastedText.length / 1000).toFixed(1)}k chars
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -401,13 +454,13 @@ export function GenerateScreen() {
         {/* ==================== SECTION C: Create Button ==================== */}
         <button
           onClick={handleCreate}
-          disabled={isGenerating || (!selectedFile && !pastedText)}
+          disabled={isGenerating || !hasInput}
           className={`
             w-full py-4 rounded-[var(--neu-radius)]
             font-bold text-lg
             flex items-center justify-center gap-3
             transition-all duration-200
-            ${isGenerating || (!selectedFile && !pastedText)
+            ${isGenerating || !hasInput
               ? 'neu-pressed text-[var(--neu-gray-500)] cursor-not-allowed'
               : 'neu-btn-secondary text-white shadow-[var(--neu-shadow-soft)] active:shadow-[var(--neu-shadow-inset)]'
             }

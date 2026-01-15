@@ -12,6 +12,14 @@
 import { GoogleAuth } from 'google-auth-library';
 import { GeminiConfig, toTTSSpeakerAlias } from './llmCharacterAnalyzer.js';
 import { GEMINI_VOICES, getVoiceByName, getVoicesByGender } from './geminiVoices.js';
+import { 
+  LLM_MODELS, 
+  LLM_TEMPERATURES, 
+  LLM_GENERATION_CONFIG,
+  getCharacterExtractionPrompt,
+  buildNarratorInstruction as buildNarratorInstructionFromConfig,
+  DEFAULT_NARRATOR_VOICE
+} from './promptConfig.js';
 
 /**
  * Book/document information for narrator TTS instruction
@@ -109,12 +117,12 @@ export class CharacterRegistry {
   
   private projectId: string;
   private location: string;
-  private model: string = process.env.LLM_MODEL_CHARACTER || 'gemini-2.5-flash';
+  private model: string = LLM_MODELS.CHARACTER;
   private auth: GoogleAuth;
   private endpoint: string;
   
   // Narrator voice (excluded from character assignments)
-  private narratorVoice: string = 'Enceladus';
+  private narratorVoice: string = DEFAULT_NARRATOR_VOICE;
   private usedVoices: Set<string> = new Set();
   
   // Book info for narrator TTS instruction (locked after chapter 2)
@@ -126,7 +134,7 @@ export class CharacterRegistry {
   constructor(config: GeminiConfig) {
     this.projectId = config.projectId;
     this.location = config.location || 'us-central1';
-    this.model = config.model || process.env.LLM_MODEL_CHARACTER || 'gemini-2.5-flash';
+    this.model = config.model || LLM_MODELS.CHARACTER;
     this.auth = new GoogleAuth({
       scopes: ['https://www.googleapis.com/auth/cloud-platform'],
     });
@@ -152,9 +160,9 @@ export class CharacterRegistry {
     const requestBody = {
       contents: [{ role: 'user', parts: [{ text: prompt }] }],
       generationConfig: {
-        temperature: 0.2, // Slightly higher for creative speech styles
-        maxOutputTokens: 8192,
-        topP: 0.95,
+        temperature: LLM_TEMPERATURES.SPEECH_STYLE,
+        maxOutputTokens: LLM_GENERATION_CONFIG.MAX_TOKENS_SPEECH_STYLE,
+        topP: LLM_GENERATION_CONFIG.TOP_P,
       },
     };
 
@@ -249,73 +257,14 @@ FEMALE VOICES: ${femaleVoices}`;
     // Include bookInfo request for chapters 1-2 only (unless already locked)
     const needsBookInfo = chapterNum <= 2 && (!this.bookInfo || !this.bookInfo.locked);
     
-    const prompt = `You are an expert literary analyst and voice casting director for audiobook production.
-
-AVAILABLE GEMINI TTS VOICES:
-${voiceList}
-
-${assignedVoices ? `${assignedVoices}
-
-` : ''}${knownCharsList ? `KNOWN CHARACTERS (already cast - check if any names refer to these):
-${knownCharsList}
-
-` : ''}CHAPTER TEXT:
-${chapterText.substring(0, 30000)}
-
-TASK: Extract ALL characters who speak dialogue and cast them with the perfect voice.
-
-For EACH character, analyze their:
-- Age, personality, social class, nationality/accent, occupation, health/habits
-- Craft a complete TTS voice direction as a natural sentence (MAX 12 WORDS)
-- Select the BEST matching Gemini voice from the available list
-
-${needsBookInfo ? `ALSO EXTRACT BOOK/DOCUMENT INFO - CRITICAL RULES:
-- Total combined output MAX 10 WORDS across all three fields
-- Be EXTREMELY concise - each word must add unique semantic value
-- MUST AVOID OXYMORONS AND SYNONYMY, INCLUDING SEMANTICALLY EQUIVALENT FORMS ACROSS WORD CLASSES
-- BAD example: genre "mystery" + tone "mysterious" = wasted word (mystery already implies mysterious)
-- BAD example: tone "mundane, mysterious" = oxymoron (contradictory)
-- GOOD example: genre "young adult fantasy" + tone "ominous, wondrous" + setting "1990s suburban britain"
-
-Fields:
-- genre: Primary genre (e.g., "gothic horror", "young adult fantasy")
-- tone: Mood/atmosphere - NO words derivable from genre (e.g., "tense, melancholic")
-- setting: Era and place only (e.g., "victorian london", "1990s suburban britain")
-
-` : ''}Return JSON only:
-{${needsBookInfo ? `
-  "bookInfo": {
-    "genre": "concise genre (few words)",
-    "tone": "unique mood descriptors (few words)",
-    "setting": "era and place (few words)"
-  },` : ''}
-  "characters": [
-    {
-      "name": "exact name as written",
-      "sameAs": "known character name if same person (optional)",
-      "gender": "male|female|neutral|unknown",
-      "voiceName": "ExactGeminiVoiceName",
-      "speechStyle": "Complete TTS direction as natural sentence (max 12 words)"
-    }
-  ]
-}
-
-RULES:
-1. Include ONLY characters who speak dialogue (have quoted speech)
-2. Use the EXACT name as it appears in the text
-3. If a character is the SAME PERSON as a known character (different name/alias):
-   - Set "sameAs" to the known character's primary name
-   - Do NOT assign new voice/speechStyle (they inherit from the original)
-4. For NEW characters: select voice matching gender, and craft unique speechStyle
-5. speechStyle MUST be a complete, natural TTS direction sentence ready to use directly
-   Examples: "Speak slowly with a gravelly, menacing Eastern European accent."
-            "Say nervously with quick stammering and high pitch."
-            "Read warmly with a gentle maternal tone and slight rural accent."
-6. Do NOT include NARRATOR - that is handled separately
-7. Voice selection: Match voice characteristics to character (e.g., elderly → low pitch, child → high pitch)
-8. speechStyle is a direct TTS command - phrase it as natural spoken instruction
-
-Return ONLY valid JSON, no markdown or explanation.`;
+    // Use centralized prompt from Control Room
+    const prompt = getCharacterExtractionPrompt(
+      voiceList,
+      assignedVoices,
+      knownCharsList,
+      chapterText,
+      needsBookInfo
+    );
 
     try {
       const response = await this.callGemini(prompt);
@@ -365,25 +314,10 @@ Return ONLY valid JSON, no markdown or explanation.`;
   
   /**
    * Build narrator TTS instruction from bookInfo
-   * Same natural sentence format as character speechStyle - direct speech command with action verb
-   * Format: "Narrate this audiobook as a top voice artist with immersive and expressive style, perfectly capturing its genre and reality - {bookInfo lowercase, max 10 words}."
+   * Uses centralized template from Control Room
    */
   private buildNarratorInstruction(): void {
-    // Build variable part from bookInfo (lowercase, MAX 10 WORDS total)
-    let variablePart = 'atmospheric fiction in an evocative setting';
-    
-    if (this.bookInfo) {
-      const { genre, tone, setting } = this.bookInfo;
-      const parts = [genre, tone, setting].filter(Boolean);
-      if (parts.length > 0) {
-        // Combine, lowercase, and limit to 10 words
-        variablePart = parts.join(', ').toLowerCase().split(/\s+/).slice(0, 10).join(' ');
-      }
-    }
-    
-    // Natural sentence format - bookInfo at the end for cleaner structure
-    this.narratorInstruction = `Narrate this audiobook as a top voice artist with immersive and expressive style, perfectly capturing its genre and reality - ${variablePart}.\n`;
-    
+    this.narratorInstruction = buildNarratorInstructionFromConfig(this.bookInfo);
     console.log(`   🎭 Narrator instruction: ${this.narratorInstruction.trim()}`);
   }
   
