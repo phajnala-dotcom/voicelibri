@@ -9,12 +9,12 @@
  * - Click chapter = open FullPlayer at that chapter
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Search } from 'lucide-react';
 import { useLibraryStore } from '../stores/libraryStore';
 import { usePlayerStore } from '../stores/playerStore';
 import { BookGrid } from '../components/library';
-import { getAudiobooks, convertToBook } from '../services/api';
+import { getAudiobooks, convertToBook, deleteAudiobook, getGenerationStatus } from '../services/api';
 import type { Book, Chapter } from '../types';
 
 // Demo book for testing
@@ -40,10 +40,11 @@ const demoBook: Book = {
  * Neumorphism Library Screen
  */
 export function LibraryScreen() {
-  const { addBook, sortBy, setSortBy, searchQuery, setSearchQuery, getFilteredBooks } = useLibraryStore();
+  const { addBook, removeBook, sortBy, setSortBy, searchQuery, setSearchQuery, getFilteredBooks } = useLibraryStore();
   const { setCurrentBook, setCurrentChapter, openFullPlayer, showMiniPlayer } = usePlayerStore();
   const [showSearch, setShowSearch] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [generatingBooks, setGeneratingBooks] = useState<Map<string, number>>(new Map());
 
   // Load audiobooks from backend on mount
   useEffect(() => {
@@ -53,10 +54,20 @@ export function LibraryScreen() {
         const audiobookList = await getAudiobooks();
         let mostRecentBook: Book | null = null;
         let mostRecentTime = 0;
+        const generating = new Map<string, number>();
         
         // Add each audiobook to library
         audiobookList.forEach(metadata => {
           const book = convertToBook(metadata);
+          
+          // Track generating books
+          if (metadata.generationStatus === 'in-progress') {
+            // Calculate progress from chapters
+            const totalChapters = metadata.totalChapters || 1;
+            const generatedChapters = metadata.chapters.filter(ch => ch.isGenerated).length;
+            const progress = Math.round((generatedChapters / totalChapters) * 100);
+            generating.set(book.id, progress);
+          }
           
           // Only add if not already in library
           const existing = useLibraryStore.getState().books.find(b => b.id === book.id);
@@ -73,6 +84,8 @@ export function LibraryScreen() {
             }
           }
         });
+        
+        setGeneratingBooks(generating);
         
         // Restore most recently played book to player (if no book currently loaded)
         const currentBook = usePlayerStore.getState().currentBook;
@@ -92,7 +105,21 @@ export function LibraryScreen() {
     };
 
     loadAudiobooks();
+    
+    // Poll for generation status if any books are generating
+    const pollInterval = setInterval(loadAudiobooks, 5000);
+    return () => clearInterval(pollInterval);
   }, []); // Run once on mount
+
+  // Delete audiobook handler
+  const handleDeleteBook = useCallback(async (bookId: string) => {
+    try {
+      await deleteAudiobook(bookId);
+      removeBook(bookId);
+    } catch (error) {
+      console.error('Failed to delete audiobook:', error);
+    }
+  }, [removeBook]);
 
   const filteredBooks = getFilteredBooks();
 
@@ -207,8 +234,10 @@ export function LibraryScreen() {
             books={filteredBooks}
             onCoverPress={handleCoverPress}
             onChapterPress={handleChapterPress}
+            onDeleteBook={handleDeleteBook}
             onLoadDemo={loadDemoBook}
             isLoading={isLoading}
+            generatingBooks={generatingBooks}
           />
         )}
       </div>
