@@ -5,7 +5,7 @@
 
 import { useEffect, useRef, useCallback } from 'react';
 import { usePlayerStore } from '../stores/playerStore';
-import { getChapterAudioUrl, getSubChunkAudioUrl, getHighestReadyChapter } from '../services/api';
+import { getChapterAudioUrl, getSubChunkAudioUrl, isChapterReady, getHighestReadyChapter } from '../services/api';
 
 // Audio cache for blob URLs
 interface AudioCache {
@@ -23,6 +23,7 @@ export function useProgressiveAudioPlayback() {
     currentBook,
     currentChapter,
     playbackState,
+    currentTime,
     playbackMode,
     currentSubChunk,
     highestReadyChapter,
