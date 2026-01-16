@@ -1,0 +1,33 @@
+{
+  "expo": {
+    "name": "VoiceLibri",
+    "slug": "voicelibri",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "scheme": "voicelibri",
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0f172a"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.voicelibri.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0f172a"
+      },
+      "package": "com.voicelibri.app",
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": true
+    },
+    "plugins": [
+      "expo-router"
+    ]
+  }
+}

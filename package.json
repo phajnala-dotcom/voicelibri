@@ -4,7 +4,9 @@
   "description": "VoiceLibri - AI-Powered Multi-Voice Dramatized Audiobook Platform",
   "private": true,
   "workspaces": [
-    "apps/*",
+    "apps/backend",
+    "apps/frontend",
+    "apps/pwa-v2",
     "packages/*"
   ],
   "scripts": {

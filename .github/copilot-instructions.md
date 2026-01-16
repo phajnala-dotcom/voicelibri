@@ -21,7 +21,8 @@ VoiceLibri is a **commercial-grade AI-powered multi-voice dramatized audiobook p
 ```
 ebook-reader/ (npm workspaces root)
 ├── apps/backend/         # Express API server (main processing engine)  
-├── apps/pwa-v2/          # React PWA (primary frontend)
+├── apps/pwa-v2/          # React PWA (web frontend)
+├── apps/mobile/          # React Native mobile app (iOS/Android)
 ├── audiobooks/           # Generated audiobook library (file-based storage)
 ├── handoffs/             # Session documentation & specs
 └── docs/                 # Architecture & API documentation
@@ -29,7 +30,8 @@ ebook-reader/ (npm workspaces root)
 
 ### Core Technologies
 - **Backend**: Express + TypeScript, Google Cloud Vertex AI (Gemini TTS), vitest for testing
-- **Frontend**: React 18 + TypeScript, Vite, TanStack Query, Zustand, Tailwind CSS
+- **Web Frontend**: React 18 + TypeScript, Vite, TanStack Query, Zustand, Tailwind CSS
+- **Mobile Frontend**: React Native + TypeScript, Expo SDK 54, expo-router, TanStack Query, Zustand, AsyncStorage
 - **Audio**: WAV format, multi-speaker synthesis via Google Gemini TTS
 - **File Processing**: EPUB (adm-zip, fast-xml-parser), TXT, with plans for PDF/DOCX
 
@@ -40,6 +42,11 @@ npm run dev           # Concurrent backend + PWA
 npm run dev:backend   # Backend only (port 3001)
 npm run dev:pwa       # PWA only (port 5180)
 npm run build         # Production build both apps
+
+# Mobile app (from apps/mobile/)
+cd apps/mobile
+npx expo start        # Start Expo dev server
+npx expo start --tunnel  # For cross-network development
 ```
 
 ## Core Systems
@@ -72,10 +79,127 @@ const BOOK_METADATA: BookMetadata | null = null;
 
 **Frontend state**: Zustand + TanStack Query
 ```typescript
-// Store pattern: apps/pwa-v2/src/stores/
+// Web (PWA) Store pattern: apps/pwa-v2/src/stores/
 export const useAudioStore = create((set) => ({ /* local state */ }));
 // Server state via TanStack Query in components
+
+// Mobile Store pattern: apps/mobile/src/stores/
+export const useSettingsStore = create(
+  persist(
+    (set) => ({ /* mobile state */ }),
+    { name: 'voicelibri-settings', storage: createJSONStorage(() => AsyncStorage) }
+  )
+);
 ```
+
+## Mobile App Architecture (apps/mobile/)
+
+### Tech Stack
+- **Expo SDK 54.0.31**: React 19.1.0, react-native 0.81.5
+- **expo-router ~6.0.21**: File-based navigation with Stack/Tabs
+- **TanStack Query**: Server state management (API integration)
+- **Zustand 5.0.0**: Client state with AsyncStorage persistence
+- **UI Libraries**: @gorhom/bottom-sheet, moti (animations), expo-blur
+
+### Mobile-Only Configuration
+**Critical**: This is a **mobile-only** app (iOS/Android). NO web support. Previous attempts to support web caused compatibility issues with packages like `@expo/vector-icons` and `react-native-reanimated` that use `import.meta.url` incompatible with Metro web bundler.
+
+**Package.json considerations**:
+- NO `react-dom`, `react-native-web`, `nativewind`, `tailwindcss`
+- Use `expo install` for all dependencies to ensure SDK compatibility
+- `react-native-reanimated@4.x` requires `react-native-worklets` as peer dependency
+
+### File Structure
+```
+apps/mobile/
+├── app/                          # expo-router file-based routes
+│   ├── _layout.tsx              # Root layout with providers (Theme, Query, Gesture)
+│   ├── index.tsx                # Entry redirect to /(tabs)
+│   ├── (tabs)/                  # Tab navigator
+│   │   ├── _layout.tsx          # Tab bar config
+│   │   ├── index.tsx            # Explore screen
+│   │   ├── library.tsx          # Library screen
+│   │   └── settings.tsx         # Settings screen
+│   ├── book/[id].tsx           # Book detail dynamic route
+│   ├── genre/[slug].tsx        # Genre browse
+│   └── player.tsx              # Modal audio player
+├── src/
+│   ├── components/ui/          # Reusable UI components
+│   ├── stores/                 # Zustand stores with AsyncStorage
+│   │   ├── settingsStore.ts
+│   │   ├── bookStore.ts
+│   │   └── playerStore.ts
+│   ├── services/               # API integration
+│   │   ├── api.ts              # Backend API client
+│   │   └── storage.ts          # AsyncStorage wrapper
+│   └── theme/                  # Theme system
+│       ├── ThemeContext.tsx
+│       └── index.ts
+└── package.json
+```
+
+### Provider Setup Pattern
+**Root Layout** (`app/_layout.tsx`):
+```typescript
+export default function RootLayout() {
+  return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider>
+          <StatusBar style="light" />
+          <Stack screenOptions={{ headerShown: false }}>
+            {/* Routes */}
+          </Stack>
+        </ThemeProvider>
+      </QueryClientProvider>
+    </GestureHandlerRootView>
+  );
+}
+```
+
+**Required providers**:
+1. `GestureHandlerRootView` - Enables gesture handling (bottom sheets, swipes)
+2. `QueryClientProvider` - TanStack Query for API state
+3. `ThemeProvider` - Custom theme context with dark/light mode
+
+### Common Issues & Solutions
+
+**Issue 1: "Cannot find module 'react-native-worklets/plugin'"**
+- **Cause**: `react-native-reanimated@4.x` requires separate worklets package
+- **Fix**: `npx expo install react-native-worklets`
+
+**Issue 2: "No QueryClient set"**
+- **Cause**: Missing `QueryClientProvider` in root layout
+- **Fix**: Wrap app with provider as shown above
+
+**Issue 3: Expo commands running from wrong directory**
+- **Cause**: Terminal defaults to workspace root instead of apps/mobile
+- **Fix**: Always `cd apps/mobile` before `npx expo start`
+
+**Issue 4: Phone can't connect to dev server**
+- **Cause**: Network issues, firewall, or Expo Go caching old IP
+- **Fix**: Use `npx expo start --tunnel` for public URL
+
+**Issue 5: Metro bundler errors with web-specific code**
+- **Cause**: Accidentally imported web dependencies
+- **Fix**: Remove all `react-dom`, `react-native-web` references; mobile-only architecture
+
+### Storage Patterns
+**Mobile uses AsyncStorage exclusively** (no localStorage/web fallbacks):
+```typescript
+import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Zustand persistence
+const useStore = create(
+  persist(
+    (set) => ({ /* state */ }),
+    { name: 'key', storage: createJSONStorage(() => AsyncStorage) }
+  )
+);
+```
+
+### API Integration
+Mobile app connects to same backend as PWA (port 3001). API service in `apps/mobile/src/services/api.ts` mirrors PWA patterns but adapts for mobile context (fetch API, AsyncStorage for tokens, etc.).
 
 ### 3. File Processing Conventions
 **Input formats**: Use `extractTextFromEpub()` for EPUB, direct `fs.readFileSync()` for TXT
@@ -156,6 +280,12 @@ try {
 - `services/api.ts` - Backend integration
 - `stores/` - Zustand state management
 
+**Mobile**: Expo router file-based structure in `apps/mobile/`
+- `app/` - File-based routes (expo-router convention)
+- `src/components/` - Reusable UI components
+- `src/stores/` - Zustand with AsyncStorage persistence
+- `src/services/` - API client and storage utilities
+
 ### Testing Patterns
 **Backend**: Vitest in `*.test.ts` files
 ```typescript
@@ -230,9 +360,14 @@ ls audiobooks/BookTitle/temp/
 
 ## Current State & Next Steps
 
-**Completed (MVP 1.2)**: EPUB support, multi-book management, basic PWA UI
-**In Progress**: Advanced dramatization pipeline, library UI improvements  
-**Planned**: PDF/DOCX support, mobile app (React Native), payment integration
+**Completed (MVP 1.2)**: 
+- ✅ EPUB support, multi-book management, basic PWA UI
+- ✅ React Native mobile app with Expo SDK 54 (iOS/Android)
+- ✅ Mobile app working with tabs navigation, theme system, TanStack Query integration
+
+**In Progress**: Advanced dramatization pipeline, library UI improvements, mobile-backend integration
+
+**Planned**: PDF/DOCX support, mobile audiobook storage, payment integration
 
 **Key handoff files**: Check `handoffs/` directory for detailed session context and implementation specs. `ActionPlan.txt` contains immediate priorities.
 
