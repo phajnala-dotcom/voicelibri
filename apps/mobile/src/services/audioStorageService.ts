@@ -308,12 +308,24 @@ export function isChapterDownloaded(bookTitle: string, chapterIndex: number): bo
 export function getDownloadedChapters(bookTitle: string): number[] {
   const bookDir = getBookDirectory(bookTitle);
   
+  // DEBUG: Log the directory being checked
+  console.log('📂 [getDownloadedChapters] Checking for bookTitle:', bookTitle);
+  console.log('📂 [getDownloadedChapters] Book directory URI:', bookDir.uri);
+  console.log('📂 [getDownloadedChapters] Directory exists:', bookDir.exists);
+  
   if (!bookDir.exists) {
+    console.log('📂 [getDownloadedChapters] Directory does NOT exist, returning []');
     return [];
   }
   
   const chapters: number[] = [];
   const contents = bookDir.list();
+  
+  // DEBUG: Log directory contents
+  console.log('📂 [getDownloadedChapters] Directory contents:', contents.map(item => ({
+    name: item.name || 'unknown',
+    isFile: item instanceof File,
+  })));
   
   for (const item of contents) {
     if (item instanceof File && item.name.startsWith('chapter_') && item.name.endsWith('.wav')) {
@@ -324,6 +336,7 @@ export function getDownloadedChapters(bookTitle: string): number[] {
     }
   }
   
+  console.log('📂 [getDownloadedChapters] Found chapters:', chapters);
   return chapters.sort((a, b) => a - b);
 }
 

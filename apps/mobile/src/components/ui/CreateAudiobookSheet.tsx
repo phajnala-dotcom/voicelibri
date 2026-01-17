@@ -247,7 +247,8 @@ const CreateAudiobookSheet = forwardRef<CreateAudiobookSheetRef, CreateAudiobook
         // This catches cases where iOS UTI filtering didn't work perfectly
         if (isUnsupportedMimeType(asset.mimeType)) {
           const mimeCategory = asset.mimeType?.split('/')[0] || 'unknown';
-          setError(`${mimeCategory.charAt(0).toUpperCase() + mimeCategory.slice(1)} files are not supported.\n\nVoiceLibri can only convert text-based files to audiobooks.\n\nSupported formats:\n• Ebooks: EPUB, MOBI, AZW\n• Documents: DOCX, DOC, ODT, RTF, PDF\n• Text: TXT, MD, HTML`);
+          const categoryName = mimeCategory.charAt(0).toUpperCase() + mimeCategory.slice(1);
+          setError(`❌ ${categoryName} files cannot be converted\n\nVoiceLibri creates audiobooks from text-based files like ebooks and documents.\n\n${categoryName} files don't contain readable text to narrate.`);
           setIsLoadingFile(false);
           return;
         }
@@ -255,7 +256,7 @@ const CreateAudiobookSheet = forwardRef<CreateAudiobookSheetRef, CreateAudiobook
         // Second check: Validate file extension
         const ext = asset.name.toLowerCase().split('.').pop() || '';
         if (!SUPPORTED_EXTENSIONS.includes(ext)) {
-          setError(`Unsupported file type: .${ext}\n\nSupported formats:\n• Ebooks: EPUB, MOBI, AZW\n• Documents: DOCX, DOC, ODT, RTF, PDF\n• Text: TXT, MD, HTML`);
+          setError(`❌ .${ext.toUpperCase()} files are not supported\n\nVoiceLibri converts text-based files to audiobooks:\n\n📚 Ebooks: EPUB, MOBI, AZW\n📄 Documents: DOCX, PDF, ODT, RTF\n📝 Text: TXT, MD, HTML`);
           setIsLoadingFile(false);
           return;
         }
@@ -376,7 +377,7 @@ const CreateAudiobookSheet = forwardRef<CreateAudiobookSheetRef, CreateAudiobook
           console.log(`📄 File type: ${ext}, isBinary: ${isBinaryFormat}, isText: ${isTextFormat}`);
           
           if (!isBinaryFormat && !isTextFormat) {
-            throw new Error(`Unsupported file format: .${ext}\n\nSupported formats:\n• Ebooks: EPUB, MOBI, AZW, KF8\n• Documents: DOCX, DOC, ODT, RTF, PDF\n• Text: TXT, MD, HTML`);
+            throw new Error(`❌ .${ext.toUpperCase()} files are not supported\n\nVoiceLibri converts text-based files to audiobooks:\n\n📚 Ebooks: EPUB, MOBI, AZW\n📄 Documents: DOCX, PDF, ODT, RTF\n📝 Text: TXT, MD, HTML`);
           }
           
           if (isBinaryFormat) {
@@ -423,41 +424,77 @@ const CreateAudiobookSheet = forwardRef<CreateAudiobookSheetRef, CreateAudiobook
         // The backend will automatically process the book and generate audio.
         console.log(`✅ Book loaded and generation started: ${bookTitle}`);
         
-        // Create book object for library
+        // Create book object for library with generation started
         const hasChapters = result.chapters && result.chapters.length > 0;
+        const chaptersForBook = hasChapters ? result.chapters!.map((ch, i) => ({
+          id: `ch-${i}`,
+          title: ch.title,
+          index: i,
+          duration: 0,
+          url: '',
+        })) : [{
+          id: 'ch-0',
+          title: 'Full Text',
+          index: 0,
+          duration: 0,
+          url: '',
+        }];
+        
         const book = {
           id: bookTitle,
           title: result.title,
           author: result.author || 'Unknown Author',
           coverUrl: null,
           totalDuration: result._internal?.durationSeconds || 0,
-          chapters: hasChapters ? result.chapters!.map((ch, i) => ({
-            id: `ch-${i}`,
-            title: ch.title,
-            index: i,
-            duration: 0,
-            url: '',
-          })) : [{
-            id: 'ch-0',
-            title: 'Full Text',
-            index: 0,
-            duration: 0,
-            url: '',
-          }],
-          isGenerated: false,
+          chapters: chaptersForBook,
+          isGenerated: true, // Mark as generated - playback will start immediately
           generationProgress: 0,
         };
         
-        // Add to library
+        // Add to library immediately
+        console.log('📖 [CreateAudiobookSheet] Adding book to library:', {
+          id: book.id,
+          title: book.title,
+          isGenerated: book.isGenerated,
+        });
         addBook(book);
         
-        // Close sheet - don't try to play yet since generation just started
+        // Set up now playing for mini player (matching PWA pattern)
+        const nowPlayingData = {
+          bookId: bookTitle,
+          bookTitle: result.title,
+          author: result.author || 'Unknown Author',
+          coverUrl: null,
+          chapters: chaptersForBook,
+          totalDuration: result._internal?.durationSeconds || 0,
+        };
+        
+        // Show mini player and set now playing
+        console.log('🚀 Starting progressive playback for new audiobook:', bookTitle);
+        setNowPlaying(nowPlayingData);
+        setShowMiniPlayer(true);
+        
+        // Close sheet and navigate to player
         bottomSheetRef.current?.close();
         resetForm();
         setIsGenerating(false);
-        onCreated?.(bookTitle);
         
-        // Notify user
+        // Navigate to player screen
+        router.push('/player');
+        
+        // Start progressive playback - import dynamically to avoid circular deps
+        const { playChapter } = await import('../../services/audioService');
+        
+        // Start playing from chapter 0 - playChapter will handle progressive subchunk fallback
+        try {
+          await playChapter(bookTitle, chaptersForBook[0], 0);
+          console.log('✅ Progressive playback started!');
+        } catch (playError) {
+          console.log('⏳ Playback will start when first subchunk is ready:', playError);
+          // Don't throw - player is open and will retry when content is ready
+        }
+        
+        onCreated?.(bookTitle);
         console.log(`✅ Audiobook "${bookTitle}" generation started!`);
       } catch (err) {
         console.error('Generation error:', err);
@@ -707,6 +744,13 @@ const CreateAudiobookSheet = forwardRef<CreateAudiobookSheetRef, CreateAudiobook
         color: theme.colors.primary,
         fontWeight: typography.medium,
       },
+      formatHint: {
+        fontSize: typography.xs,
+        color: theme.colors.textMuted,
+        textAlign: 'center',
+        marginTop: spacing.sm,
+        fontStyle: 'italic',
+      },
     });
     
     // Voice picker
@@ -863,6 +907,10 @@ const CreateAudiobookSheet = forwardRef<CreateAudiobookSheetRef, CreateAudiobook
                     </TouchableOpacity>
                   )}
                 </View>
+                {/* Supported formats hint */}
+                <Text style={styles.formatHint}>
+                  Supported: EPUB, MOBI, DOCX, PDF, TXT, MD, HTML
+                </Text>
               </View>
             </View>
             
