@@ -15,7 +15,10 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.voicelibri.app"
+      "bundleIdentifier": "com.voicelibri.app",
+      "infoPlist": {
+        "UIBackgroundModes": ["audio"]
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -26,8 +29,18 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": true
     },
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
     "plugins": [
-      "expo-router"
+      "expo-router",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": false
+        }
+      ]
     ]
   }
 }

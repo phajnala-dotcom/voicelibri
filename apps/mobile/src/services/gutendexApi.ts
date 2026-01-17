@@ -87,6 +87,13 @@ export async function getBooksByTopic(topic: string, language: string = 'en', pa
   return searchBooks({ topic, languages: language, page });
 }
 
+// ============================================================================
+// SUPPORTED FORMATS FOR AUDIOBOOK GENERATION
+// ============================================================================
+// We only show books that can be converted to audiobooks.
+// SUPPORTED: EPUB, TXT, HTML, MOBI
+// EXCLUDED: PDF (OCR quality issues), images, audio, metadata-only
+
 /**
  * Get book cover URL (from formats)
  */
@@ -100,7 +107,7 @@ export function getBookCoverUrl(book: GutendexBook): string | null {
 }
 
 /**
- * Get EPUB download URL
+ * Get EPUB download URL (preferred format)
  */
 export function getEpubUrl(book: GutendexBook): string | null {
   return book.formats['application/epub+zip'] || null;
@@ -115,11 +122,47 @@ export function getTextUrl(book: GutendexBook): string | null {
 }
 
 /**
- * Get HTML read URL
+ * Get HTML download URL (Gutenberg HTML books)
  */
 export function getHtmlUrl(book: GutendexBook): string | null {
   const htmlKey = Object.keys(book.formats).find(key => key.startsWith('text/html'));
   return htmlKey ? book.formats[htmlKey] : null;
+}
+
+/**
+ * Get MOBI/KF8 download URL (Kindle format)
+ */
+export function getMobiUrl(book: GutendexBook): string | null {
+  return book.formats['application/x-mobipocket-ebook'] || null;
+}
+
+/**
+ * Get the best available download URL for audiobook generation
+ * Priority: EPUB > TXT > HTML > MOBI
+ * Returns null if no supported format is available
+ */
+export function getBestDownloadUrl(book: GutendexBook): { url: string; format: string } | null {
+  // Priority order - EPUB is best, then TXT, then HTML, then MOBI
+  const epub = getEpubUrl(book);
+  if (epub) return { url: epub, format: 'epub' };
+  
+  const txt = getTextUrl(book);
+  if (txt) return { url: txt, format: 'txt' };
+  
+  const html = getHtmlUrl(book);
+  if (html) return { url: html, format: 'html' };
+  
+  const mobi = getMobiUrl(book);
+  if (mobi) return { url: mobi, format: 'mobi' };
+  
+  return null;
+}
+
+/**
+ * Check if book has any supported format for audiobook generation
+ */
+export function hasAudiobookFormat(book: GutendexBook): boolean {
+  return getBestDownloadUrl(book) !== null;
 }
 
 /**
@@ -149,5 +192,8 @@ export default {
   getEpubUrl,
   getTextUrl,
   getHtmlUrl,
+  getMobiUrl,
+  getBestDownloadUrl,
+  hasAudiobookFormat,
   CURATED_TOPICS,
 };

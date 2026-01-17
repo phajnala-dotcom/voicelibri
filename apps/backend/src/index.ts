@@ -5,6 +5,19 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { synthesizeText } from './ttsClient.js';
+import {
+  SUPPORTED_EXTENSIONS,
+  detectFormat,
+  extractTextFromHtml,
+  extractTextFromMobi,
+  extractTextFromDocx,
+  extractTextFromOdt,
+  extractTextFromRtf,
+  extractTextFromMarkdown,
+  extractTextFromPages,
+  extractTextFromWps,
+  extractTextFromPdf,
+} from './formatExtractors.js';
 import { 
   getBookInfo, 
   parseBookMetadata, 
@@ -22,6 +35,7 @@ import {
   tempChunkExists, 
   loadTempChunk,
   consolidateChapterSmart,
+  consolidateChapterFromSubChunks,
   deleteAllTempChunks,
   stopPreDramatization,
   generateSubChunksParallel,
@@ -85,7 +99,9 @@ const PORT = process.env.PORT || 3001;
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+// Increase body size limit for large EPUB/ebook uploads (default is 100kb)
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Book state variables (initialized empty, loaded on demand)
 let BOOK_TEXT: string = '';
@@ -95,7 +111,7 @@ let BOOK_TEXT: string = '';
 let BOOK_CHAPTERS: Chapter[] = []; // Store extracted chapters (1-based: index 0 unused)
 let BOOK_METADATA: BookMetadata | null = null;
 let BOOK_INFO: ReturnType<typeof getBookInfo> | null = null;
-let BOOK_FORMAT: 'txt' | 'epub' | 'pdf' = 'txt';
+let BOOK_FORMAT: 'txt' | 'epub' | 'pdf' | 'html' | 'mobi' | 'docx' | 'odt' | 'rtf' | 'md' | 'pages' | 'wps' = 'txt';
 let CURRENT_BOOK_FILE: string = '';
 let ASSETS_DIR: string;
 let VOICE_MAP: Record<string, string> = {}; // Global voice map for dramatized books
@@ -250,15 +266,198 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
     }
     console.log(`✓ Detected ${chaptersArray.length} chapters in TXT (1-based indexing)`);
     
+  } else if (ext === '.html' || ext === '.htm') {
+    BOOK_FORMAT = 'html';
+    console.log(`🌐 Loading HTML: ${filename}`);
+    
+    // Load and extract text from HTML
+    const htmlContent = fs.readFileSync(bookPath, 'utf-8');
+    BOOK_TEXT = extractTextFromHtml(htmlContent);
+    
+    // Parse metadata (use cleaned text)
+    BOOK_METADATA = parseBookMetadata(BOOK_TEXT, 'txt', bookPath);
+    (global as any).BOOK_METADATA = BOOK_METADATA;
+    
+    // Detect chapters in extracted text
+    const chaptersArray = detectTextChapters(BOOK_TEXT);
+    BOOK_CHAPTERS = [];
+    for (let i = 0; i < chaptersArray.length; i++) {
+      const chapterNum = i + 1;
+      BOOK_CHAPTERS[chapterNum] = { ...chaptersArray[i], index: chapterNum };
+    }
+    console.log(`✓ Extracted text from HTML, detected ${chaptersArray.length} chapters`);
+    
+  } else if (ext === '.mobi' || ext === '.azw' || ext === '.azw3' || ext === '.kf8') {
+    BOOK_FORMAT = 'mobi';
+    console.log(`📱 Loading MOBI/KF8: ${filename}`);
+    
+    // Load and extract text from MOBI
+    const mobiBuffer = fs.readFileSync(bookPath);
+    BOOK_TEXT = await extractTextFromMobi(mobiBuffer);
+    
+    // Parse metadata (use cleaned text)
+    BOOK_METADATA = parseBookMetadata(BOOK_TEXT, 'txt', bookPath);
+    (global as any).BOOK_METADATA = BOOK_METADATA;
+    
+    // Detect chapters in extracted text
+    const chaptersArray = detectTextChapters(BOOK_TEXT);
+    BOOK_CHAPTERS = [];
+    for (let i = 0; i < chaptersArray.length; i++) {
+      const chapterNum = i + 1;
+      BOOK_CHAPTERS[chapterNum] = { ...chaptersArray[i], index: chapterNum };
+    }
+    console.log(`✓ Extracted text from MOBI, detected ${chaptersArray.length} chapters`);
+    
+  } else if (ext === '.docx' || ext === '.doc') {
+    BOOK_FORMAT = 'docx';
+    console.log(`📝 Loading Word Document: ${filename}`);
+    
+    // Load and extract text from DOCX/DOC
+    const docBuffer = fs.readFileSync(bookPath);
+    BOOK_TEXT = await extractTextFromDocx(docBuffer);
+    
+    // Parse metadata
+    BOOK_METADATA = parseBookMetadata(BOOK_TEXT, 'txt', bookPath);
+    (global as any).BOOK_METADATA = BOOK_METADATA;
+    
+    // Detect chapters
+    const chaptersArray = detectTextChapters(BOOK_TEXT);
+    BOOK_CHAPTERS = [];
+    for (let i = 0; i < chaptersArray.length; i++) {
+      const chapterNum = i + 1;
+      BOOK_CHAPTERS[chapterNum] = { ...chaptersArray[i], index: chapterNum };
+    }
+    console.log(`✓ Extracted text from Word, detected ${chaptersArray.length} chapters`);
+    
+  } else if (ext === '.odt') {
+    BOOK_FORMAT = 'odt';
+    console.log(`📄 Loading OpenDocument: ${filename}`);
+    
+    // Load and extract text from ODT
+    const odtBuffer = fs.readFileSync(bookPath);
+    BOOK_TEXT = await extractTextFromOdt(odtBuffer);
+    
+    // Parse metadata
+    BOOK_METADATA = parseBookMetadata(BOOK_TEXT, 'txt', bookPath);
+    (global as any).BOOK_METADATA = BOOK_METADATA;
+    
+    // Detect chapters
+    const chaptersArray = detectTextChapters(BOOK_TEXT);
+    BOOK_CHAPTERS = [];
+    for (let i = 0; i < chaptersArray.length; i++) {
+      const chapterNum = i + 1;
+      BOOK_CHAPTERS[chapterNum] = { ...chaptersArray[i], index: chapterNum };
+    }
+    console.log(`✓ Extracted text from ODT, detected ${chaptersArray.length} chapters`);
+    
+  } else if (ext === '.rtf') {
+    BOOK_FORMAT = 'rtf';
+    console.log(`📃 Loading RTF: ${filename}`);
+    
+    // Load and extract text from RTF
+    const rtfBuffer = fs.readFileSync(bookPath);
+    BOOK_TEXT = await extractTextFromRtf(rtfBuffer);
+    
+    // Parse metadata
+    BOOK_METADATA = parseBookMetadata(BOOK_TEXT, 'txt', bookPath);
+    (global as any).BOOK_METADATA = BOOK_METADATA;
+    
+    // Detect chapters
+    const chaptersArray = detectTextChapters(BOOK_TEXT);
+    BOOK_CHAPTERS = [];
+    for (let i = 0; i < chaptersArray.length; i++) {
+      const chapterNum = i + 1;
+      BOOK_CHAPTERS[chapterNum] = { ...chaptersArray[i], index: chapterNum };
+    }
+    console.log(`✓ Extracted text from RTF, detected ${chaptersArray.length} chapters`);
+    
+  } else if (ext === '.md' || ext === '.markdown') {
+    BOOK_FORMAT = 'md';
+    console.log(`📑 Loading Markdown: ${filename}`);
+    
+    // Load and extract text from Markdown
+    const mdContent = fs.readFileSync(bookPath, 'utf-8');
+    BOOK_TEXT = await extractTextFromMarkdown(mdContent);
+    
+    // Parse metadata
+    BOOK_METADATA = parseBookMetadata(BOOK_TEXT, 'txt', bookPath);
+    (global as any).BOOK_METADATA = BOOK_METADATA;
+    
+    // Detect chapters
+    const chaptersArray = detectTextChapters(BOOK_TEXT);
+    BOOK_CHAPTERS = [];
+    for (let i = 0; i < chaptersArray.length; i++) {
+      const chapterNum = i + 1;
+      BOOK_CHAPTERS[chapterNum] = { ...chaptersArray[i], index: chapterNum };
+    }
+    console.log(`✓ Extracted text from Markdown, detected ${chaptersArray.length} chapters`);
+    
+  } else if (ext === '.pages') {
+    BOOK_FORMAT = 'pages';
+    console.log(`🍎 Loading Apple Pages: ${filename}`);
+    
+    // Load and extract text from Pages
+    const pagesBuffer = fs.readFileSync(bookPath);
+    BOOK_TEXT = await extractTextFromPages(pagesBuffer);
+    
+    // Parse metadata
+    BOOK_METADATA = parseBookMetadata(BOOK_TEXT, 'txt', bookPath);
+    (global as any).BOOK_METADATA = BOOK_METADATA;
+    
+    // Detect chapters
+    const chaptersArray = detectTextChapters(BOOK_TEXT);
+    BOOK_CHAPTERS = [];
+    for (let i = 0; i < chaptersArray.length; i++) {
+      const chapterNum = i + 1;
+      BOOK_CHAPTERS[chapterNum] = { ...chaptersArray[i], index: chapterNum };
+    }
+    console.log(`✓ Extracted text from Pages, detected ${chaptersArray.length} chapters`);
+    
+  } else if (ext === '.wps') {
+    BOOK_FORMAT = 'wps';
+    console.log(`📋 Loading WPS Writer: ${filename}`);
+    
+    // Load and extract text from WPS
+    const wpsBuffer = fs.readFileSync(bookPath);
+    BOOK_TEXT = await extractTextFromWps(wpsBuffer);
+    
+    // Parse metadata
+    BOOK_METADATA = parseBookMetadata(BOOK_TEXT, 'txt', bookPath);
+    (global as any).BOOK_METADATA = BOOK_METADATA;
+    
+    // Detect chapters
+    const chaptersArray = detectTextChapters(BOOK_TEXT);
+    BOOK_CHAPTERS = [];
+    for (let i = 0; i < chaptersArray.length; i++) {
+      const chapterNum = i + 1;
+      BOOK_CHAPTERS[chapterNum] = { ...chaptersArray[i], index: chapterNum };
+    }
+    console.log(`✓ Extracted text from WPS, detected ${chaptersArray.length} chapters`);
+    
   } else if (ext === '.pdf') {
     BOOK_FORMAT = 'pdf';
     console.log(`📕 Loading PDF: ${filename}`);
     
-    // TODO: Implement PDF loading
-    throw new Error('PDF format not yet supported');
+    // Load and extract text from PDF with quality check
+    // Only clean digital PDFs are accepted (not scanned/OCR)
+    const pdfBuffer = fs.readFileSync(bookPath);
+    BOOK_TEXT = await extractTextFromPdf(pdfBuffer);
+    
+    // Parse metadata
+    BOOK_METADATA = parseBookMetadata(BOOK_TEXT, 'txt', bookPath);
+    (global as any).BOOK_METADATA = BOOK_METADATA;
+    
+    // Detect chapters
+    const chaptersArray = detectTextChapters(BOOK_TEXT);
+    BOOK_CHAPTERS = [];
+    for (let i = 0; i < chaptersArray.length; i++) {
+      const chapterNum = i + 1;
+      BOOK_CHAPTERS[chapterNum] = { ...chaptersArray[i], index: chapterNum };
+    }
+    console.log(`✓ Extracted text from PDF, detected ${chaptersArray.length} chapters`);
     
   } else {
-    throw new Error(`Unsupported book format: ${ext}`);
+    throw new Error(`Unsupported book format: ${ext}. Supported formats: EPUB, TXT, HTML, MOBI, DOCX, DOC, ODT, RTF, MD, Pages, WPS, PDF.`);
   }
   
   // Check for voice tags (existing or from dramatization) - new format: SPEAKER: text
@@ -877,8 +1076,9 @@ async function startBackgroundDramatization(
           // AUTO-CONSOLIDATE immediately after all sub-chunks generated
           try {
             const chapterTitle = BOOK_CHAPTERS[chapterNum]?.title;
-            // PHASE 2 cleanup: consolidateChapterFromSubChunks removed. Implement new consolidation logic if needed.
-            console.log(`   📦 Chapter ${chapterNum} consolidated (logic refactored)`);
+            const bookTitle = sanitizeBookTitle(BOOK_METADATA?.title || CURRENT_BOOK_FILE || 'Unknown');
+            await consolidateChapterFromSubChunks(bookTitle, chapterNum, chapterTitle);
+            console.log(`   📦 Chapter ${chapterNum} consolidated successfully`);
             // NOTE: Sub-chunks are NOT deleted here - they are kept for playback
             // Cleanup happens via trackSubChunkPlayed() after chapter is fully played
           } catch (consErr) {
@@ -939,8 +1139,9 @@ async function startBackgroundDramatization(
           // AUTO-CONSOLIDATE immediately after all sub-chunks generated
           try {
             const chapterTitle = BOOK_CHAPTERS[chapterNum]?.title;
-            // PHASE 2 cleanup: consolidateChapterFromSubChunks removed. Implement new consolidation logic if needed.
-            console.log(`   📦 Chapter ${chapterNum} consolidated (fallback, logic refactored)`);
+            const bookTitle = sanitizeBookTitle(BOOK_METADATA?.title || CURRENT_BOOK_FILE || 'Unknown');
+            await consolidateChapterFromSubChunks(bookTitle, chapterNum, chapterTitle);
+            console.log(`   📦 Chapter ${chapterNum} consolidated (fallback) successfully`);
             // NOTE: Sub-chunks are NOT deleted here - they are kept for playback
             // Cleanup happens via trackSubChunkPlayed() after chapter is fully played
           } catch (consErr) {
@@ -1035,8 +1236,8 @@ async function checkAndConsolidateReadyChapters(bookTitle: string): Promise<void
       console.log(`📦 Chapter ${chapterNum}/${chapterCount} ready: "${chapter.title}" (${subChunks.length} sub-chunks)`);
       
       try {
-        // PHASE 2 cleanup: consolidateChapterFromSubChunks removed. Implement new consolidation logic if needed.
-        console.log(`  ✅ Consolidated: (logic refactored)`);
+        await consolidateChapterFromSubChunks(bookTitle, chapterNum, chapter.title);
+        console.log(`  ✅ Consolidated successfully`);
         
         // NOTE: Sub-chunks are kept for individual chunk playback
         // They can be cleaned up later when user deletes audiobook
@@ -1335,15 +1536,19 @@ app.post('/api/book/select', async (req: Request, res: Response) => {
  * Supports two modes:
  * - Single chapter: treats entire text as one chapter
  * - Chapter detection: automatically detects chapter markers in text
+ * - Base64 EPUB: decodes and processes EPUB file from mobile device
  */
 app.post('/api/book/from-text', async (req: Request, res: Response) => {
   try {
-    const { text, title, detectChapters, narratorVoice, targetLanguage } = req.body;
+    const { text, title, detectChapters, narratorVoice, targetLanguage, isBase64Epub, isBase64File, fileExtension } = req.body;
     
     console.log(`📝 /api/book/from-text called`);
     console.log(`   Title: "${title || 'Untitled'}"`);
     console.log(`   Text length: ${text?.length || 0} chars`);
     console.log(`   Detect chapters: ${detectChapters}`);
+    console.log(`   Is Base64 EPUB: ${isBase64Epub || false}`);
+    console.log(`   Is Base64 File: ${isBase64File || false}`);
+    console.log(`   File Extension: ${fileExtension || 'none'}`);
     
     if (!text || typeof text !== 'string' || text.trim().length === 0) {
       return res.status(400).json({
@@ -1352,14 +1557,37 @@ app.post('/api/book/from-text', async (req: Request, res: Response) => {
       });
     }
     
-    // Generate filename based on title or timestamp
-    const safeTitle = title?.replace(/[^a-zA-Z0-9\s]/g, '').trim() || `pasted_${Date.now()}`;
-    const filename = `${safeTitle.substring(0, 50).replace(/\s+/g, '_')}.txt`;
-    const filePath = path.join(ASSETS_DIR, filename);
+    // Handle base64 binary files from mobile device (EPUB, DOCX, PDF, ODT, RTF, etc.)
+    let filename: string;
+    let filePath: string;
+    const safeTitle = title?.replace(/[^a-zA-Z0-9\s]/g, '').trim() || `mobile_file_${Date.now()}`;
+    const baseFilename = safeTitle.substring(0, 50).replace(/\s+/g, '_');
     
-    // Write text to temp file in assets folder
-    fs.writeFileSync(filePath, text.trim(), 'utf8');
-    console.log(`   Saved as: ${filename}`);
+    // Determine file extension for binary formats
+    const ext = fileExtension?.toLowerCase() || 'txt';
+    const BINARY_EXTENSIONS = ['epub', 'docx', 'doc', 'odt', 'rtf', 'pdf', 'mobi', 'azw', 'azw3', 'kf8', 'pages', 'wps'];
+    const isBinaryFormat = isBase64Epub || isBase64File || BINARY_EXTENSIONS.includes(ext);
+    
+    if (isBinaryFormat) {
+      // Decode base64 and save as binary file with correct extension
+      const actualExt = isBase64Epub ? 'epub' : ext;
+      filename = `${baseFilename}.${actualExt}`;
+      filePath = path.join(ASSETS_DIR, filename);
+      
+      // Decode base64 to binary buffer
+      const binaryBuffer = Buffer.from(text, 'base64');
+      fs.writeFileSync(filePath, binaryBuffer);
+      console.log(`   Decoded ${actualExt.toUpperCase()} (${binaryBuffer.length} bytes) saved as: ${filename}`);
+    } else {
+      // Regular text content (TXT, MD, HTML) or text with extension hint
+      const textExt = ['txt', 'md', 'markdown', 'html', 'htm'].includes(ext) ? ext : 'txt';
+      filename = `${baseFilename}.${textExt}`;
+      filePath = path.join(ASSETS_DIR, filename);
+      
+      // Write text to temp file in assets folder
+      fs.writeFileSync(filePath, text.trim(), 'utf8');
+      console.log(`   Saved as: ${filename}`);
+    }
     
     // Update narrator voice if provided
     if (narratorVoice && typeof narratorVoice === 'string') {
@@ -1461,12 +1689,13 @@ app.post('/api/book/from-url', async (req: Request, res: Response) => {
     const urlFilename = path.basename(urlPath) || `download_${Date.now()}`;
     const ext = path.extname(urlFilename).toLowerCase();
     
-    // Check for supported formats
-    const supportedFormats = ['.txt', '.epub'];
-    if (!supportedFormats.includes(ext) && ext !== '') {
+    // Check for supported formats using centralized config
+    // Supports: EPUB, TXT, HTML, MOBI/KF8
+    const supportedFormats = [...SUPPORTED_EXTENSIONS, '.zip']; // .zip often contains EPUB
+    if (ext && !supportedFormats.includes(ext)) {
       return res.status(400).json({
         error: 'Unsupported format',
-        message: `Only ${supportedFormats.join(', ')} files are supported. For HTML pages, please copy and paste the text instead.`,
+        message: `Format '${ext}' is not supported. Supported formats: EPUB, TXT, HTML, MOBI.`,
       });
     }
     
@@ -1487,26 +1716,26 @@ app.post('/api/book/from-url', async (req: Request, res: Response) => {
       });
     }
     
-    // Check content type to detect HTML/multi-doc pages
+    // Determine format from content-type header
     const contentType = response.headers.get('content-type') || '';
-    if (contentType.includes('text/html')) {
-      return res.status(400).json({
-        error: 'HTML page detected',
-        message: 'This URL points to an HTML page, not a direct ebook file. Please provide a direct link to a .txt or .epub file, or copy and paste the text instead.',
-      });
-    }
+    const detectedFormat = detectFormat(contentType, urlFilename);
     
-    // Determine actual extension from content type if not in URL
+    // Determine actual extension - HTML is now supported!
     let actualExt = ext;
-    if (!ext || ext === '') {
-      if (contentType.includes('epub')) {
+    if (!ext || ext === '' || ext === '.zip') {
+      if (contentType.includes('epub') || contentType.includes('application/zip') || ext === '.zip') {
         actualExt = '.epub';
       } else if (contentType.includes('text/plain')) {
         actualExt = '.txt';
-      } else {
+      } else if (contentType.includes('text/html')) {
+        // HTML is supported! Gutenberg provides HTML versions of books
+        actualExt = '.html';
+      } else if (contentType.includes('mobipocket') || contentType.includes('x-mobi')) {
+        actualExt = '.mobi';
+      } else if (!ext) {
         return res.status(400).json({
           error: 'Unknown format',
-          message: 'Could not determine file format. Please use direct links to .txt or .epub files.',
+          message: 'Could not determine file format. Supported formats: EPUB, TXT, HTML, MOBI.',
         });
       }
     }
@@ -2870,13 +3099,17 @@ app.get('/api/dramatize/voice-map', async (req: Request, res: Response) => {
 });
 
 // Start server
-app.listen(PORT, () => {
+// Bind to 0.0.0.0 to accept connections from all network interfaces
+// This allows mobile devices on the same network to connect
+// Per Express.js docs: https://expressjs.com/en/api.html#app.listen
+app.listen(PORT, '0.0.0.0', () => {
   console.log('');
   console.log('╔════════════════════════════════════════╗');
   console.log('║   VoiceLibri Backend v1.0             ║');
   console.log('╚════════════════════════════════════════╝');
   console.log('');
   console.log(`🚀 Server running on http://localhost:${PORT}`);
+  console.log(`   Network: http://192.168.1.20:${PORT}`);
   console.log('');
   
   if (BOOK_METADATA && BOOK_INFO) {

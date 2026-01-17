@@ -1,15 +1,23 @@
 /**
  * Root Layout - App entry point with providers
+ * Initializes audio service for background playback and lock screen controls
  */
+import { useEffect } from "react";
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "../src/theme/ThemeContext";
+import { initializeAudioService } from "../src/services/audioService";
 
 const queryClient = new QueryClient();
 
 export default function RootLayout() {
+  // Initialize audio service for background playback
+  useEffect(() => {
+    initializeAudioService().catch(console.error);
+  }, []);
+
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <QueryClientProvider client={queryClient}>

@@ -1,15 +1,17 @@
 /**
  * Full Player Screen
  * Immersive audio player with controls and chapter navigation
+ * Integrates with expo-audio via audioService
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Image,
   StyleSheet,
   Dimensions,
   Pressable,
+  ScrollView,
 } from 'react-native';
 import { useRouter, Stack } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -32,6 +34,15 @@ import { usePlayerStore, useSettingsStore } from '../src/stores';
 import { Text, Button } from '../src/components/ui';
 import { useTheme } from '../src/theme/ThemeContext';
 import { spacing, borderRadius, colors } from '../src/theme';
+import {
+  togglePlayPause,
+  seekTo,
+  skipForward as audioSkipForward,
+  skipBackward as audioSkipBackward,
+  nextChapter as audioNextChapter,
+  previousChapter as audioPreviousChapter,
+  setPlaybackRate as audioSetPlaybackRate,
+} from '../src/services/audioService';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const COVER_SIZE = SCREEN_WIDTH * 0.7;
@@ -98,32 +109,28 @@ export default function PlayerScreen() {
     playButtonScale.value = withSpring(0.9, {}, () => {
       playButtonScale.value = withSpring(1);
     });
-    setIsPlaying(!isPlaying);
-    // TODO: Actually control track player
+    // Toggle playback via audio service
+    togglePlayPause();
   };
   
   const handleSkipForward = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    skipForward(30);
-    // TODO: Seek track player
+    audioSkipForward(30);
   };
   
   const handleSkipBackward = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    skipBackward(30);
-    // TODO: Seek track player
+    audioSkipBackward(15);
   };
   
   const handleNextChapter = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    nextChapter();
-    // TODO: Skip to next chapter
+    audioNextChapter();
   };
   
   const handlePreviousChapter = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    previousChapter();
-    // TODO: Skip to previous chapter
+    audioPreviousChapter();
   };
   
   const handleSeekStart = () => {
@@ -133,7 +140,7 @@ export default function PlayerScreen() {
   const handleSeekEnd = (value: number) => {
     setIsSeeking(false);
     setPosition(value);
-    // TODO: Seek track player
+    seekTo(value);
   };
   
   const handlePlaybackRateCycle = () => {
@@ -141,8 +148,9 @@ export default function PlayerScreen() {
     const rates = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
     const currentIndex = rates.indexOf(playbackRate);
     const nextIndex = (currentIndex + 1) % rates.length;
-    setPlaybackRate(rates[nextIndex]);
-    // TODO: Update track player rate
+    const newRate = rates[nextIndex];
+    setPlaybackRate(newRate);
+    audioSetPlaybackRate(newRate);
   };
   
   const playButtonStyle = useAnimatedStyle(() => ({

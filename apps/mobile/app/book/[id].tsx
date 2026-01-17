@@ -11,9 +11,10 @@ import {
   StyleSheet,
   Dimensions,
   Pressable,
+  Alert,
 } from 'react-native';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Animated, {
   FadeInDown,
@@ -28,13 +29,16 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
 import { getBookDetails, CatalogBook } from '../../src/services/catalogService';
-import { useBookStore, usePlayerStore } from '../../src/stores';
+import { createFromUrl } from '../../src/services/voiceLibriApi';
+import { useBookStore, usePlayerStore, LibraryBook } from '../../src/stores';
 import { Text, Button } from '../../src/components/ui';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { spacing, borderRadius, shadows } from '../../src/theme';
+import { startBook, playFromLocalStorage } from '../../src/services/audioService';
+import { loadAudiobookMetadata, getDownloadedChapters } from '../../src/services/audioStorageService';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-const COVER_WIDTH = SCREEN_WIDTH * 0.45;
+const COVER_WIDTH = SCREEN_WIDTH * 0.54;
 const COVER_HEIGHT = COVER_WIDTH * 1.5;
 
 export default function BookDetailsScreen() {
@@ -44,6 +48,7 @@ export default function BookDetailsScreen() {
   const {
     library,
     addToLibrary,
+    addBook,
     removeFromLibrary,
     updateBookStatus,
     getBookById,
@@ -51,17 +56,48 @@ export default function BookDetailsScreen() {
   const { setNowPlaying, setShowMiniPlayer } = usePlayerStore();
   
   const [isGenerating, setIsGenerating] = useState(false);
+  const [generationStatus, setGenerationStatus] = useState('');
   
-  // Fetch book details
-  const { data: book, isLoading, error } = useQuery({
+  // Determine if this is a catalog book (g_* or ol_*) or a generated audiobook
+  const isCatalogBook = id?.startsWith('g_') || id?.startsWith('ol_');
+  
+  // First, check if this book exists in our library (for generated audiobooks)
+  const libraryBook = id ? getBookById(id) : null;
+  
+  // Fetch catalog book details (only for catalog books, skip for generated audiobooks)
+  const { data: catalogBook, isLoading: catalogLoading, error: catalogError } = useQuery({
     queryKey: ['book', id],
     queryFn: () => getBookDetails(id!),
-    enabled: !!id,
+    enabled: !!id && isCatalogBook, // Only fetch for catalog books
   });
   
-  const libraryBook = book ? getBookById(book.id) : null;
+  // For generated audiobooks, convert library book to display format
+  const book: CatalogBook | null = isCatalogBook 
+    ? (catalogBook ?? null)
+    : libraryBook 
+      ? {
+          id: libraryBook.id,
+          title: libraryBook.title,
+          authors: libraryBook.authors || ['Unknown Author'],
+          coverUrl: libraryBook.coverUrl ?? null,
+          description: libraryBook.description || 'Generated audiobook',
+          subjects: libraryBook.subjects || [],
+          languages: libraryBook.languages || ['en'],
+          hasFullText: true,
+          _source: 'gutendex' as const, // Placeholder
+          _sourceId: libraryBook.id,
+        }
+      : null;
+  
+  // Loading state - only for catalog books
+  const isLoading = isCatalogBook ? catalogLoading : false;
+  const error = isCatalogBook ? catalogError : (!libraryBook ? new Error('Book not in library') : null);
+  
+  // Check if this is a generated audiobook with local files
+  const isGenerated = libraryBook?.isGenerated || false;
+  const hasLocalFiles = id ? getDownloadedChapters(id).length > 0 : false;
+  const hasAudiobook = isGenerated || hasLocalFiles;
   const isInLibrary = !!libraryBook;
-  const hasAudiobook = libraryBook?.isGenerated;
   
   const handleBack = () => {
     Haptics.selectionAsync();
@@ -83,41 +119,165 @@ export default function BookDetailsScreen() {
     if (!book) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     
-    setIsGenerating(true);
+    // Get best available download URL (EPUB > TXT > HTML > MOBI)
+    const downloadUrl = book.epubUrl || book.textUrl || book.htmlUrl || book.mobiUrl;
     
-    // Add to library if not already
-    if (!isInLibrary) {
-      addToLibrary(book, 'listening');
-    } else {
-      updateBookStatus(book.id, 'listening');
+    if (!downloadUrl) {
+      Alert.alert(
+        'No Text Available',
+        'This book does not have a supported format for audiobook generation.\n\nSupported formats:\n• EPUB (.epub)\n• Plain Text (.txt)\n• HTML (.html, .htm)\n• MOBI (.mobi)\n• PDF (.pdf)\n• DOCX (.docx)',
+        [{ text: 'OK' }]
+      );
+      return;
     }
     
-    // TODO: Integrate with VoiceLibri backend API
-    // This would call generateAudiobook() from voiceLibriApi
+    setIsGenerating(true);
+    setGenerationStatus('Downloading book...');
     
-    // For now, simulate generation
-    setTimeout(() => {
+    try {
+      console.log(`📥 Downloading book from: ${downloadUrl}`);
+      
+      // Step 1: Send URL to backend - it will download and process the ebook
+      // NOTE: createFromUrl already triggers background dramatization and TTS
+      // generation via loadBookFile(). No need to call generateAudiobook separately.
+      setGenerationStatus('Processing ebook...');
+      const result = await createFromUrl({
+        url: downloadUrl,
+        narratorVoice: 'Algieba', // Default voice
+        targetLanguage: 'original',
+      });
+      
+      console.log('📚 Book processed and generation started:', result.title);
+      
+      // Step 2: Create book entry for library
+      const bookTitle = result.audiobookTitle || result.title;
+      const hasChapters = result.chapters && result.chapters.length > 0;
+      
+      const libraryEntry = {
+        id: bookTitle,
+        title: result.title,
+        authors: book.authors,
+        coverUrl: book.coverUrl,
+        totalDuration: result._internal?.durationSeconds || 0,
+        chapters: hasChapters ? result.chapters!.map((ch, i) => ({
+          id: `ch-${i}`,
+          title: ch.title,
+          index: i,
+          duration: 0,
+          url: '',
+        })) : [{
+          id: 'ch-0',
+          title: 'Full Text',
+          index: 0,
+          duration: 0,
+          url: '',
+        }],
+        isGenerated: false,
+        generationProgress: 0,
+        status: 'listening' as const,
+      };
+      
+      // Add to library
+      addBook(libraryEntry);
+      
+      // Step 3: Set up player
+      setGenerationStatus('Starting playback...');
+      const nowPlaying = {
+        bookId: libraryEntry.id,
+        bookTitle: libraryEntry.title,
+        author: book.authors.join(', '),
+        coverUrl: book.coverUrl,
+        chapters: libraryEntry.chapters,
+        totalDuration: libraryEntry.totalDuration,
+      };
+      
+      setNowPlaying(nowPlaying);
+      setShowMiniPlayer(true);
+      
+      // Start playback (will play first available chunk)
+      try {
+        await startBook(nowPlaying);
+      } catch (playError) {
+        console.warn('Could not start playback yet, audio may still be generating:', playError);
+      }
+      
+      // Navigate to library to see progress
+      router.push('/(tabs)/library');
+      
+    } catch (err) {
+      console.error('Failed to create audiobook:', err);
+      Alert.alert(
+        'Generation Failed',
+        err instanceof Error ? err.message : 'Failed to create audiobook. Please check your connection and try again.',
+        [{ text: 'OK' }]
+      );
+    } finally {
       setIsGenerating(false);
-      // Navigate to player or show success
-    }, 2000);
+      setGenerationStatus('');
+    }
   };
   
-  const handlePlay = () => {
-    if (!book || !libraryBook) return;
+  const handlePlay = async () => {
+    if (!book) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     
-    // Set now playing
-    setNowPlaying({
+    // Check if we have local files to play
+    const downloadedChapters = getDownloadedChapters(book.id);
+    console.log(`🎵 Playing book "${book.title}", downloaded chapters:`, downloadedChapters);
+    
+    if (downloadedChapters.length === 0) {
+      // No local files - check if generation is still in progress
+      if (libraryBook?.generationProgress && libraryBook.generationProgress < 100) {
+        Alert.alert(
+          'Audiobook Generating',
+          `This audiobook is still being generated (${libraryBook.generationProgress}% complete). Please wait for generation to complete.`,
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+      
+      Alert.alert(
+        'No Audio Available',
+        'This audiobook has not been downloaded to your device yet. Please wait for the download to complete.',
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+    
+    // Set now playing with library book data
+    // Build chapters array from downloaded chapters (LibraryBook doesn't have chapters field)
+    const chaptersForPlayer = downloadedChapters.map((idx) => ({
+      id: `ch-${idx}`,
+      title: `Chapter ${idx + 1}`,
+      index: idx,
+      duration: 0,
+      url: '',
+    }));
+    
+    const nowPlaying = {
       bookId: book.id,
       bookTitle: book.title,
       author: book.authors.join(', '),
       coverUrl: book.coverUrl,
-      chapters: [], // TODO: Load from audiobook data
-      totalDuration: 0,
-    });
+      chapters: chaptersForPlayer,
+      totalDuration: libraryBook?.totalDuration || 0,
+    };
+    
+    setNowPlaying(nowPlaying);
     setShowMiniPlayer(true);
     
-    router.push('/player');
+    // Start playback from local storage
+    try {
+      await playFromLocalStorage(book.id, downloadedChapters[0]);
+      router.push('/player');
+    } catch (playError) {
+      console.error('Failed to start playback:', playError);
+      Alert.alert(
+        'Playback Error',
+        playError instanceof Error ? playError.message : 'Failed to start playback. Please try again.',
+        [{ text: 'OK' }]
+      );
+    }
   };
   
   const styles = StyleSheet.create({
@@ -144,10 +304,11 @@ export default function BookDetailsScreen() {
       justifyContent: 'center',
     },
     heroContainer: {
-      height: SCREEN_HEIGHT * 0.5,
+      height: SCREEN_HEIGHT * 0.52,
       alignItems: 'center',
       justifyContent: 'flex-end',
       paddingBottom: spacing.xl,
+      overflow: 'visible',
     },
     heroBackground: {
       position: 'absolute',
@@ -155,6 +316,7 @@ export default function BookDetailsScreen() {
       left: 0,
       right: 0,
       bottom: 0,
+      overflow: 'hidden',
     },
     heroImage: {
       width: '100%',
@@ -170,12 +332,23 @@ export default function BookDetailsScreen() {
     },
     coverContainer: {
       ...shadows.xl,
+      shadowColor: '#000',
+      shadowOffset: { width: 10, height: 12 },
+      shadowOpacity: 0.4,
+      shadowRadius: 16,
+      elevation: 15,
+      overflow: 'visible',
+      transform: [
+        { perspective: 1200 },
+        { rotateY: '-8deg' },
+      ],
     },
     cover: {
       width: COVER_WIDTH,
       height: COVER_HEIGHT,
       borderRadius: borderRadius.lg,
       backgroundColor: theme.colors.cardElevated,
+      resizeMode: 'cover',
     },
     coverPlaceholder: {
       width: COVER_WIDTH,
@@ -367,7 +540,7 @@ export default function BookDetailsScreen() {
               />
             ) : (
               <Button
-                title={isGenerating ? 'Generating...' : 'Generate AI Audiobook'}
+                title={isGenerating ? (generationStatus || 'Generating...') : 'Create Audiobook'}
                 onPress={handleGenerateAudiobook}
                 size="large"
                 loading={isGenerating}

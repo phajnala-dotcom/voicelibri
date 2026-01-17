@@ -270,6 +270,7 @@ export default function ExploreScreen() {
             title="Featured Books"
             books={featuredBooks || []}
             emptyMessage={loadingFeatured ? 'Loading...' : 'No featured books'}
+            nestedInScrollView
           />
         </Animated.View>
         
@@ -279,6 +280,7 @@ export default function ExploreScreen() {
             title="Popular Classics"
             books={popularBooks}
             emptyMessage={loadingPopular ? 'Loading...' : 'No popular books'}
+            nestedInScrollView
           />
         </Animated.View>
         

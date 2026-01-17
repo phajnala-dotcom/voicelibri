@@ -3,7 +3,7 @@
  */
 
 import React from 'react';
-import { Text as RNText, TextProps, StyleSheet } from 'react-native';
+import { Text as RNText, TextProps, StyleSheet, TextStyle } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useTheme } from '../../theme/ThemeContext';
 import { typography } from '../../theme';
@@ -28,22 +28,27 @@ export default function Text({
 }: CustomTextProps) {
   const { theme } = useTheme();
   
-  const fontSize = typeof size === 'number' ? size : typography[size];
-  const fontWeight = typography[weight];
+  // Get font size - ensure it's a number
+  const fontSize = typeof size === 'number' ? size : (
+    typeof typography[size] === 'number' ? typography[size] : 16
+  );
   
-  const textStyle = StyleSheet.flatten([
+  // Get font weight - typography stores weights as string literals
+  const fontWeight = typography[weight] as TextStyle['fontWeight'];
+  
+  const textStyle: TextStyle = StyleSheet.flatten([
     {
-      fontSize,
+      fontSize: fontSize as number,
       fontWeight,
       color: color || theme.colors.text,
       textAlign: center ? 'center' : undefined,
     },
-    style,
-  ]);
+    style as TextStyle,
+  ]) as TextStyle;
   
   if (animated) {
     return (
-      <Animated.Text style={textStyle} {...props}>
+      <Animated.Text style={textStyle as any} {...props}>
         {children}
       </Animated.Text>
     );

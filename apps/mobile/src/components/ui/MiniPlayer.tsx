@@ -1,6 +1,7 @@
 /**
  * MiniPlayer Component - Persistent bottom player bar
  * Shows when audio is playing, tappable to expand to full player
+ * Integrates with expo-audio via audioService
  */
 
 import React from 'react';
@@ -19,6 +20,7 @@ import { usePlayerStore } from '../../stores';
 import { useTheme } from '../../theme/ThemeContext';
 import { borderRadius, spacing } from '../../theme';
 import Text from './Text';
+import { togglePlayPause } from '../../services/audioService';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MINI_PLAYER_HEIGHT = 64;
@@ -50,8 +52,7 @@ export default function MiniPlayer() {
   
   const handlePlayPause = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setIsPlaying(!isPlaying);
-    // TODO: Actually control track player
+    togglePlayPause();
   };
   
   const handlePressIn = () => {

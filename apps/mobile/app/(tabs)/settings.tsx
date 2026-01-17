@@ -4,12 +4,12 @@
  */
 
 import React from 'react';
-import { View, ScrollView, StyleSheet, Pressable, Switch, Linking } from 'react-native';
+import { View, ScrollView, StyleSheet, Pressable, Switch, Linking, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { useSettingsStore } from '../../src/stores';
+import { useSettingsStore, useBookStore } from '../../src/stores';
 import { Text } from '../../src/components/ui';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { spacing, borderRadius } from '../../src/theme';
@@ -112,6 +112,7 @@ function SettingRow({
 
 export default function SettingsScreen() {
   const { theme, isDark, toggleTheme } = useTheme();
+  const { clearLibrary, library } = useBookStore();
   const {
     themeMode,
     setThemeMode,
@@ -140,6 +141,26 @@ export default function SettingsScreen() {
     const nextIndex = (currentIndex + 1) % modes.length;
     setThemeMode(modes[nextIndex]);
     Haptics.selectionAsync();
+  };
+  
+  const handleClearLibrary = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    Alert.alert(
+      'Clear Library',
+      `Are you sure you want to remove all ${library.length} books from your library? This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Clear All', 
+          style: 'destructive',
+          onPress: () => {
+            clearLibrary();
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+            Alert.alert('Library Cleared', 'All books have been removed from your library.');
+          }
+        },
+      ]
+    );
   };
   
   const styles = StyleSheet.create({
@@ -296,6 +317,21 @@ export default function SettingsScreen() {
               icon="shield-checkmark-outline"
               title="Privacy Policy"
               onPress={() => Linking.openURL('https://voicelibri.app/privacy')}
+            />
+          </View>
+        </Animated.View>
+        
+        {/* Storage/Debug Section */}
+        <Animated.View entering={FadeInDown.delay(400)} style={styles.section}>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Storage</Text>
+          </View>
+          <View style={styles.sectionContent}>
+            <SettingRow
+              icon="trash-outline"
+              title="Clear Library"
+              subtitle={`Remove all ${library.length} books from library`}
+              onPress={handleClearLibrary}
             />
           </View>
         </Animated.View>

@@ -1,0 +1,2 @@
+# 🔄 FRESH EXPO START:
+taskkill /F /IM node.exe; Remove-Item -Recurse -Force "$env:TEMP\metro-*" -EA 0; cd c:\Users\hajna\ebook-reader\apps\mobile; npx expo start --tunnel --clear

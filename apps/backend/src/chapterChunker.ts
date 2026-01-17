@@ -41,6 +41,50 @@ export const SAFE_CHUNK_TARGET = 3500;
 export const SAFE_CHUNK_MAX = 3500; // (unchanged, but now matches target)
 
 // ========================================
+// Ramp-Up Chunking Strategy
+// ========================================
+
+/**
+ * Ramp-up chunk sizes for faster time-to-first-audio
+ * 
+ * Strategy: Start with tiny chunks that generate quickly,
+ * then gradually increase to max size as buffer builds.
+ * 
+ * Math:
+ * - 300 bytes ≈ 50 words ≈ 20s audio ≈ 3-5s TTS generation
+ * - While user listens to 20s, next (larger) chunk generates
+ * - Buffer grows continuously, preventing interruptions
+ */
+export const RAMP_UP_SIZES = [
+  300,   // Chunk 0: ~20s audio, ~3s TTS → User hears audio at t=3s!
+  500,   // Chunk 1: ~35s audio, ~4s TTS → Ready before chunk 0 finishes
+  800,   // Chunk 2: ~55s audio, ~6s TTS → Buffer growing
+  1200,  // Chunk 3: ~80s audio, ~8s TTS
+  1800,  // Chunk 4: ~120s audio, ~12s TTS
+  2500,  // Chunk 5: ~170s audio, ~15s TTS
+  3500,  // Chunk 6+: Max size, steady state
+];
+
+/**
+ * Get the target chunk size for a given chunk index (ramp-up strategy)
+ * 
+ * @param chunkIndex - Global chunk index (0 = first chunk of book)
+ * @param useRampUp - Whether to use ramp-up strategy (default: true)
+ * @returns Target bytes for this chunk
+ */
+export function getRampUpChunkSize(chunkIndex: number, useRampUp: boolean = true): number {
+  if (!useRampUp) {
+    return SAFE_CHUNK_TARGET;
+  }
+  
+  if (chunkIndex < RAMP_UP_SIZES.length) {
+    return RAMP_UP_SIZES[chunkIndex];
+  }
+  
+  return SAFE_CHUNK_TARGET; // Max size after ramp-up
+}
+
+// ========================================
 // Chunk Metadata
 // ========================================
 
@@ -206,35 +250,49 @@ function buildChunkFromSegments(segments: VoiceSegment[]): string {
  * @param chapter - Chapter to chunk
  * @param targetBytes - Target chunk size in bytes (default: 2500)
  * @param maxBytes - Maximum chunk size in bytes (default: 3500)
+ * @param globalChunkOffset - Starting global chunk index for ramp-up calculation
+ * @param useRampUp - Whether to use ramp-up chunk sizing (default: true for chapter 0)
  * @returns Array of chunk texts
  */
 export function chunkChapter(
   chapter: Chapter,
   targetBytes: number = SAFE_CHUNK_TARGET,
-  maxBytes: number = SAFE_CHUNK_MAX
+  maxBytes: number = SAFE_CHUNK_MAX,
+  globalChunkOffset: number = 0,
+  useRampUp: boolean = false
 ): string[] {
   const chunks: string[] = [];
   const words = chapter.text.split(/\s+/).filter(w => w.length > 0);
   
   let currentChunk = '';
+  let currentChunkIndex = 0;
   
   for (const word of words) {
     const testChunk = currentChunk ? `${currentChunk} ${word}` : word;
     const byteLength = Buffer.byteLength(testChunk, 'utf8');
     
+    // Use ramp-up size for early chunks, or fixed target for later chunks
+    const globalIndex = globalChunkOffset + currentChunkIndex;
+    const effectiveTarget = useRampUp 
+      ? getRampUpChunkSize(globalIndex, true)
+      : targetBytes;
+    const effectiveMax = Math.min(effectiveTarget + 500, maxBytes); // Small buffer above target
+    
     // Once we reach target size, look for sentence ending
-    if (byteLength >= targetBytes) {
+    if (byteLength >= effectiveTarget) {
       if (isSentenceEnding(word)) {
         // End chunk at sentence boundary
         chunks.push(testChunk);
         currentChunk = '';
+        currentChunkIndex++;
         continue;
       }
       
       // Safety: if we exceed max size, break anyway (even mid-sentence)
-      if (byteLength >= maxBytes) {
+      if (byteLength >= effectiveMax) {
         chunks.push(currentChunk);
         currentChunk = word; // Start new chunk with current word
+        currentChunkIndex++;
         continue;
       }
     }
@@ -247,7 +305,18 @@ export function chunkChapter(
     chunks.push(currentChunk);
   }
   
-  console.log(`  Chapter ${chapter.index} chunked: ${chunks.length} chunks`);
+  // Log ramp-up info for first chapter
+  if (useRampUp && globalChunkOffset === 0) {
+    console.log(`  Chapter ${chapter.index} chunked with RAMP-UP: ${chunks.length} chunks`);
+    chunks.forEach((c, i) => {
+      const bytes = Buffer.byteLength(c, 'utf8');
+      const target = getRampUpChunkSize(i, true);
+      console.log(`    Chunk ${i}: ${bytes} bytes (target: ${target})`);
+    });
+  } else {
+    console.log(`  Chapter ${chapter.index} chunked: ${chunks.length} chunks`);
+  }
+  
   return chunks;
 }
 
@@ -260,20 +329,31 @@ export function chunkChapter(
  * 3. Chunks are formatted in SPEAKER: format for TTS processing
  * 
  * @param chapter - Chapter with SPEAKER: format tags
+ * @param globalChunkOffset - Starting global chunk index for ramp-up calculation
+ * @param useRampUp - Whether to use ramp-up chunk sizing
  * @returns Array of chunk texts with voice tags preserved
  */
-export function chunkDramatizedChapter(chapter: Chapter): string[] {
+export function chunkDramatizedChapter(
+  chapter: Chapter,
+  globalChunkOffset: number = 0,
+  useRampUp: boolean = false
+): string[] {
   const rawSegments = extractVoiceSegments(chapter.text);
   
   if (rawSegments.length === 0) {
     // No voice tags found - fallback to regular chunking
     console.warn(`  Chapter ${chapter.index}: Expected voice tags but none found, using regular chunking`);
-    return chunkChapter(chapter);
+    return chunkChapter(chapter, SAFE_CHUNK_TARGET, SAFE_CHUNK_MAX, globalChunkOffset, useRampUp);
   }
+  
+  // Calculate effective max bytes based on ramp-up position
+  const effectiveMaxBytes = useRampUp 
+    ? getRampUpChunkSize(globalChunkOffset, true)
+    : SAFE_CHUNK_MAX;
   
   // Use twoSpeakerChunker to ensure max 2 speakers per chunk
   const twoSpeakerChunks = chunkForTwoSpeakers(chapter.text, {
-    maxBytes: SAFE_CHUNK_MAX,
+    maxBytes: effectiveMaxBytes,
     minBytes: 0,  // Allow small chunks when 3rd speaker forces a split
   }, chapter.index);
   
@@ -283,7 +363,17 @@ export function chunkDramatizedChapter(chapter: Chapter): string[] {
     return chunk.segments.map(seg => `${seg.speaker}: ${seg.text}`).join('\n');
   });
   
-  console.log(`  Chapter ${chapter.index} (dramatized) chunked: ${chunks.length} chunks from ${rawSegments.length} voice segments`);
+  if (useRampUp && globalChunkOffset < RAMP_UP_SIZES.length) {
+    console.log(`  Chapter ${chapter.index} (dramatized) chunked with RAMP-UP: ${chunks.length} chunks`);
+    chunks.forEach((c, i) => {
+      const bytes = Buffer.byteLength(c, 'utf8');
+      const target = getRampUpChunkSize(globalChunkOffset + i, true);
+      console.log(`    Chunk ${globalChunkOffset + i}: ${bytes} bytes (target: ${target})`);
+    });
+  } else {
+    console.log(`  Chapter ${chapter.index} (dramatized) chunked: ${chunks.length} chunks from ${rawSegments.length} voice segments`);
+  }
+  
   return chunks;
 }
 
@@ -297,26 +387,37 @@ export function chunkDramatizedChapter(chapter: Chapter): string[] {
  * - Respects voice tags in dramatized text
  * - Validates all segments against Gemini TTS limits
  * - Returns metadata for each chunk
+ * - Uses RAMP-UP strategy for first chunks (fast time-to-first-audio)
  * 
  * @param chapters - Array of chapters from book
  * @param isDramatized - Whether book contains voice tags
+ * @param useRampUp - Whether to use ramp-up sizing for first chunks (default: true)
  * @returns Chunking result with metadata
  */
 export function chunkBookByChapters(
   chapters: Chapter[],
-  isDramatized: boolean = false
+  isDramatized: boolean = false,
+  useRampUp: boolean = true
 ): ChunkingResult {
   const allChunks: ChunkInfo[] = [];
   const chapterChunkCounts: number[] = [];
   let globalChunkIndex = 0;
   
-  console.log(`\n📚 Chunking ${chapters.length} chapters (dramatized: ${isDramatized})...`);
+  console.log(`\n📚 Chunking ${chapters.length} chapters (dramatized: ${isDramatized}, ramp-up: ${useRampUp})...`);
+  
+  if (useRampUp) {
+    console.log(`  🚀 Ramp-up enabled: first ${RAMP_UP_SIZES.length} chunks use progressive sizing`);
+    console.log(`     Sizes: ${RAMP_UP_SIZES.join(' → ')} → ${SAFE_CHUNK_TARGET} bytes`);
+  }
   
   for (const chapter of chapters) {
+    // Use ramp-up for early global chunks (not per-chapter)
+    const chapterUseRampUp = useRampUp && globalChunkIndex < RAMP_UP_SIZES.length;
+    
     // Choose chunking strategy based on content
     const chunkTexts = isDramatized 
-      ? chunkDramatizedChapter(chapter)
-      : chunkChapter(chapter);
+      ? chunkDramatizedChapter(chapter, globalChunkIndex, chapterUseRampUp)
+      : chunkChapter(chapter, SAFE_CHUNK_TARGET, SAFE_CHUNK_MAX, globalChunkIndex, chapterUseRampUp);
     
     chapterChunkCounts.push(chunkTexts.length);
     

@@ -1,0 +1,100 @@
+My Template: 
+
+Rehabilitačné cvičenie
+
+Exercises: 25
+
+Spinning / Stationary Biking
+1: 1 km x BW
+
+Wall Sit
+1: 01:00 x BW
+2: 01:00 x BW
+
+Machine Leg Press (Moving Chair)
+1: 25 reps x 50 kg
+2: 20 reps x 50 kg
+
+Machine Leg Curl Prone
+1: 17 reps x 25 kg
+2: 14 reps x 25 kg
+
+Machine Hip Adduction
+1: 17 reps x 30 kg
+2: 14 reps x 30 kg
+
+Machine Hip Abduction
+1: 17 reps x 30 kg
+2: 14 reps x 38 kg
+
+Machine Hammer-Grip Seated Chest Press
+1: 17 reps x 25 kg
+2: 15 reps x 25 kg
+3: 13 reps x 25 kg
+
+Machine Seated Chest Press
+1: 17 reps x 25 kg
+2: 14 reps x 25 kg
+
+Back Extension (Hyperextension)
+1: 25 reps x BW
+2: 22 reps x BW
+
+Stability Ball Hyperextension
+1: 22 reps x BW
+2: 19 reps x BW
+
+Cable Reverse-Grip Pull Down
+1: 11 reps x 50 kg
+2: 8 reps x 50 kg
+
+Cable V-Handle Seated Row
+1: 14 reps x 45 kg
+
+Dead Bug
+1: 8 reps x BW
+
+McGill Curl-up
+1: 01:00 x BW
+
+Stability Ball Crunch
+1: 8 reps x 10 kg
+
+Kettlebell Glute Bridge / Hip Thruster
+1: 8 reps x 12,5 kg
+
+Cable Pallof Hold
+1: 01:00 x 10 kg
+
+Cable Pallof Press
+1: 8 reps x 10 kg
+
+Dumbbell Hammer Curl
+1: 16 reps x 10 kg
+2: 13 reps x 10 kg
+
+Cable Rope Bicep Curl
+1: 15 reps x 12,5 kg
+2: 13 reps x 12,5 kg
+
+Cable Rope Tricep Pushdown / Extension
+1: 16 reps x 20 kg
+2: 13 reps x 20 kg
+
+Machine Seated Calf Raise
+1: 17 reps x 45 kg
+2: 14 reps x 45 kg
+
+Leg Press Calf Raise
+1: 12 reps x 50 kg
+2: 12 reps x 50 kg
+
+Cable Face Pull
+1: 16 reps x 20 kg
+2: 13 reps x 20 kg
+
+Machine Rear Delt (Reverse) Fly
+1: 16 reps x 20 kg
+2: 13 reps x 20 kg
+
+Built with Train Fitness.

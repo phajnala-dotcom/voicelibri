@@ -36,17 +36,21 @@ export interface BookState {
   
   // Actions
   addToLibrary: (book: CatalogBook, status: ReadingStatus) => void;
+  addBook: (book: Partial<LibraryBook> & { id: string; title: string }) => void;
   removeFromLibrary: (bookId: string) => void;
   updateBookStatus: (bookId: string, status: ReadingStatus) => void;
   updateBookProgress: (bookId: string, progress: number, position?: number, chapter?: number) => void;
+  updateGenerationProgress: (bookId: string, progress: number) => void;
   markAsGenerated: (bookId: string, totalDuration: number) => void;
   setSelectedBook: (book: CatalogBook | null) => void;
+  clearLibrary: () => void; // Clear all books from library
   
   // Getters
   getBookById: (bookId: string) => LibraryBook | undefined;
   getBooksByStatus: (status: ReadingStatus) => LibraryBook[];
   isInLibrary: (bookId: string) => boolean;
   getLastPlayed: () => LibraryBook | undefined;
+  getGeneratingBooks: () => LibraryBook[];
 }
 
 // ============================================================================
@@ -76,6 +80,41 @@ export const useBookStore = create<BookState>()(
             status,
             addedAt: Date.now(),
             progress: 0,
+          };
+          return { library: [libraryBook, ...state.library] };
+        });
+      },
+      
+      // Add book from backend API response (used by Create screen and Library sync)
+      addBook: (book: Partial<LibraryBook> & { id: string; title: string }) => {
+        set((state) => {
+          const existingIndex = state.library.findIndex(b => b.id === book.id);
+          if (existingIndex >= 0) {
+            // Update existing book
+            const updated = [...state.library];
+            updated[existingIndex] = { ...updated[existingIndex], ...book };
+            return { library: updated };
+          }
+          
+          // Add new book with defaults
+          const libraryBook: LibraryBook = {
+            id: book.id,
+            title: book.title,
+            authors: book.authors || ['Unknown Author'],
+            description: book.description || '',
+            coverUrl: book.coverUrl ?? null,
+            status: book.status || 'listening',
+            addedAt: Date.now(),
+            progress: book.progress || 0,
+            isGenerated: book.isGenerated || false,
+            generationProgress: book.generationProgress || 0,
+            totalDuration: book.totalDuration || 0,
+            // Required CatalogBook fields
+            subjects: book.subjects || [],
+            languages: book.languages || [],
+            hasFullText: book.hasFullText ?? false,
+            _source: book._source || 'gutendex',
+            _sourceId: book._sourceId || book.id,
           };
           return { library: [libraryBook, ...state.library] };
         });
@@ -111,6 +150,16 @@ export const useBookStore = create<BookState>()(
         }));
       },
       
+      updateGenerationProgress: (bookId: string, progress: number) => {
+        set((state) => ({
+          library: state.library.map(b =>
+            b.id === bookId
+              ? { ...b, generationProgress: progress }
+              : b
+          ),
+        }));
+      },
+      
       markAsGenerated: (bookId: string, totalDuration: number) => {
         set((state) => ({
           library: state.library.map(b =>
@@ -141,6 +190,18 @@ export const useBookStore = create<BookState>()(
         const listening = get().library.filter(b => b.status === 'listening' && b.lastPlayedAt);
         if (listening.length === 0) return undefined;
         return listening.sort((a, b) => (b.lastPlayedAt || 0) - (a.lastPlayedAt || 0))[0];
+      },
+      
+      getGeneratingBooks: () => {
+        return get().library.filter(b => 
+          b.generationProgress !== undefined && 
+          b.generationProgress > 0 && 
+          b.generationProgress < 100
+        );
+      },
+      
+      clearLibrary: () => {
+        set({ library: [] });
       },
     }),
     {

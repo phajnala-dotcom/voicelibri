@@ -76,7 +76,11 @@ export default function BookCard({
   };
   
   const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
+    transform: [
+      { scale: scale.value },
+      { perspective: 1000 },
+      { rotateY: '-15deg' },
+    ],
   }));
   
   const styles = StyleSheet.create({
@@ -90,6 +94,11 @@ export default function BookCard({
       backgroundColor: theme.colors.card,
       overflow: 'hidden',
       ...shadows.lg,
+      shadowColor: '#000',
+      shadowOffset: { width: 8, height: 8 },
+      shadowOpacity: 0.3,
+      shadowRadius: 12,
+      elevation: 10,
     },
     image: {
       width: '100%',

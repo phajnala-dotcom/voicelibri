@@ -10,9 +10,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { MiniPlayer } from '../../src/components/ui';
+import { usePlayerStore } from '../../src/stores';
 
 export default function TabsLayout() {
   const { theme, isDark } = useTheme();
+  const { showMiniPlayer } = usePlayerStore();
   
   return (
     <View style={{ flex: 1, backgroundColor: theme.colors.background }}>
@@ -77,7 +79,7 @@ export default function TabsLayout() {
       </Tabs>
       
       {/* Mini Player - Shows above tab bar when audio is playing */}
-      <MiniPlayer />
+      {showMiniPlayer && <MiniPlayer />}
     </View>
   );
 }

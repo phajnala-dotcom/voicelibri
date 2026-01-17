@@ -9,6 +9,8 @@ import * as openLibrary from './openLibraryApi';
 
 // ============================================================================
 // UNIFIED BOOK TYPE - Single format for all books regardless of source
+// Only books with SUPPORTED FORMATS are shown (EPUB, TXT, HTML, MOBI)
+// PDF is excluded due to OCR quality issues that result in poor audiobooks
 // ============================================================================
 
 export type BookSource = 'gutendex' | 'openlibrary';
@@ -25,10 +27,12 @@ export interface CatalogBook {
   rating?: number;
   downloadCount?: number;
   
-  // For audiobook generation
+  // For audiobook generation - supported formats: EPUB, TXT, HTML, MOBI
   hasFullText: boolean;
-  textUrl?: string;
-  epubUrl?: string;
+  textUrl?: string;   // Plain text (.txt)
+  epubUrl?: string;   // EPUB format (preferred)
+  htmlUrl?: string;   // HTML format
+  mobiUrl?: string;   // MOBI/KF8 format
   
   // Internal - hidden from UI
   _source: BookSource;
@@ -70,9 +74,19 @@ export const GENRES: Genre[] = [
 
 // ============================================================================
 // CONVERTERS - Transform API responses to unified format
+// Only books with SUPPORTED FORMATS are included (EPUB, TXT, HTML, MOBI)
+// PDF is excluded due to OCR quality issues
 // ============================================================================
 
-function gutendexToCatalogBook(book: gutendex.GutendexBook): CatalogBook {
+function gutendexToCatalogBook(book: gutendex.GutendexBook): CatalogBook | null {
+  // Get best available download URL - only show books we can convert to audiobooks
+  const downloadInfo = gutendex.getBestDownloadUrl(book);
+  
+  // Filter out books without supported formats
+  if (!downloadInfo) {
+    return null;
+  }
+  
   return {
     id: `g_${book.id}`,
     title: book.title,
@@ -83,9 +97,11 @@ function gutendexToCatalogBook(book: gutendex.GutendexBook): CatalogBook {
     languages: book.languages,
     publishYear: book.authors[0]?.birth_year ? book.authors[0].birth_year + 30 : undefined,
     downloadCount: book.download_count,
-    hasFullText: true, // Gutenberg always has full text
+    hasFullText: true, // We only include books with downloadable text
     textUrl: gutendex.getTextUrl(book) || undefined,
     epubUrl: gutendex.getEpubUrl(book) || undefined,
+    htmlUrl: gutendex.getHtmlUrl(book) || undefined,
+    mobiUrl: gutendex.getMobiUrl(book) || undefined,
     _source: 'gutendex',
     _sourceId: book.id,
   };
@@ -141,6 +157,7 @@ function deduplicateBooks(books: CatalogBook[]): CatalogBook[] {
 
 /**
  * Search the unified VoiceLibri catalog
+ * Only returns books with supported formats (EPUB, TXT, HTML, MOBI)
  */
 export async function searchCatalog(
   query: string,
@@ -158,18 +175,22 @@ export async function searchCatalog(
     const books: CatalogBook[] = [];
     let totalCount = 0;
     
-    // Process Gutendex results
+    // Process Gutendex results - filter out books without supported formats
     if (gutendexResults.status === 'fulfilled') {
-      const gBooks = gutendexResults.value.results.map(gutendexToCatalogBook);
+      const gBooks = gutendexResults.value.results
+        .map(gutendexToCatalogBook)
+        .filter((b): b is CatalogBook => b !== null); // Filter nulls (unsupported formats)
       books.push(...gBooks);
-      totalCount += gutendexResults.value.count;
+      totalCount += gBooks.length; // Count only books we can use
     }
     
-    // Process OpenLibrary results
+    // Process OpenLibrary results - only include books with full text
     if (olResults.status === 'fulfilled') {
-      const olBooks = olResults.value.docs.map(openLibraryToCatalogBook);
+      const olBooks = olResults.value.docs
+        .filter(doc => doc.has_fulltext) // Only books with downloadable text
+        .map(openLibraryToCatalogBook);
       books.push(...olBooks);
-      totalCount += olResults.value.numFound;
+      totalCount += olBooks.length;
     }
     
     // Deduplicate and sort by relevance (prefer books with covers and full text)
@@ -199,6 +220,7 @@ export async function searchCatalog(
 
 /**
  * Get popular/trending books
+ * Only returns books with supported formats (EPUB, TXT, HTML, MOBI)
  */
 export async function getPopularBooks(
   options: { page?: number; limit?: number } = {}
@@ -208,11 +230,13 @@ export async function getPopularBooks(
   try {
     // Gutendex returns popular by default
     const gutendexResults = await gutendex.getPopularBooks('en', page);
-    const books = gutendexResults.results.map(gutendexToCatalogBook);
+    const books = gutendexResults.results
+      .map(gutendexToCatalogBook)
+      .filter((b): b is CatalogBook => b !== null); // Filter unsupported formats
     
     return {
       books: books.slice(0, limit),
-      totalCount: gutendexResults.count,
+      totalCount: books.length,
       hasMore: !!gutendexResults.next,
       nextPage: page + 1,
     };
@@ -224,6 +248,7 @@ export async function getPopularBooks(
 
 /**
  * Get books by genre
+ * Only returns books with supported formats (EPUB, TXT, HTML, MOBI)
  */
 export async function getBooksByGenre(
   genreId: string,
@@ -241,14 +266,22 @@ export async function getBooksByGenre(
     const books: CatalogBook[] = [];
     let totalCount = 0;
     
+    // Process Gutendex - filter out unsupported formats
     if (gutendexResults.status === 'fulfilled') {
-      books.push(...gutendexResults.value.results.map(gutendexToCatalogBook));
-      totalCount += gutendexResults.value.count;
+      const gBooks = gutendexResults.value.results
+        .map(gutendexToCatalogBook)
+        .filter((b): b is CatalogBook => b !== null);
+      books.push(...gBooks);
+      totalCount += gBooks.length;
     }
     
+    // Process OpenLibrary - only books with full text
     if (olResults.status === 'fulfilled') {
-      books.push(...olResults.value.docs.map(openLibraryToCatalogBook));
-      totalCount += olResults.value.numFound;
+      const olBooks = olResults.value.docs
+        .filter(doc => doc.has_fulltext)
+        .map(openLibraryToCatalogBook);
+      books.push(...olBooks);
+      totalCount += olBooks.length;
     }
     
     const dedupedBooks = deduplicateBooks(books);
@@ -323,19 +356,29 @@ export async function getBookDetails(id: string): Promise<CatalogBook | null> {
 }
 
 /**
- * Get text content URL for audiobook generation
+ * Get the best text content URL for audiobook generation
+ * Priority: EPUB > TXT > HTML > MOBI
  */
 export function getTextContentUrl(book: CatalogBook): string | null {
-  if (book.textUrl) return book.textUrl;
+  // Priority order - EPUB is best for chapters, then TXT for clean text
   if (book.epubUrl) return book.epubUrl;
+  if (book.textUrl) return book.textUrl;
+  if (book.htmlUrl) return book.htmlUrl;
+  if (book.mobiUrl) return book.mobiUrl;
   return null;
 }
 
 /**
  * Check if book can be converted to audiobook
+ * Must have at least one supported format (EPUB, TXT, HTML, MOBI)
  */
 export function canGenerateAudiobook(book: CatalogBook): boolean {
-  return book.hasFullText && (!!book.textUrl || !!book.epubUrl);
+  return book.hasFullText && (
+    !!book.epubUrl || 
+    !!book.textUrl || 
+    !!book.htmlUrl || 
+    !!book.mobiUrl
+  );
 }
 
 export default {

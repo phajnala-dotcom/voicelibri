@@ -71,11 +71,13 @@ export default function Button({
     primary: {
       backgroundColor: disabled ? colors.gray[400] : colors.primary[500],
       borderWidth: 0,
+      borderColor: 'transparent',
       textColor: '#ffffff',
     },
     secondary: {
       backgroundColor: theme.colors.cardElevated,
       borderWidth: 0,
+      borderColor: 'transparent',
       textColor: theme.colors.text,
     },
     outline: {
@@ -87,6 +89,7 @@ export default function Button({
     ghost: {
       backgroundColor: 'transparent',
       borderWidth: 0,
+      borderColor: 'transparent',
       textColor: theme.colors.primary,
     },
   };
