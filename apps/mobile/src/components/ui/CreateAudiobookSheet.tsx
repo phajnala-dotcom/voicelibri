@@ -182,6 +182,78 @@ const CreateAudiobookSheet = forwardRef<CreateAudiobookSheetRef, CreateAudiobook
       return voice?.geminiName || 'Aoede';
     };
     
+    // Poll for first subchunk in background, then auto-start playback
+    const startBackgroundPlaybackPolling = async (
+      bookTitle: string,
+      chapters: Array<{ id: string; title: string; index: number; duration: number; url: string }>,
+      author: string
+    ) => {
+      const { getSubChunkAudioUrl } = await import('../../services/voiceLibriApi');
+      const { playChapter } = await import('../../services/audioService');
+      
+      const maxWaitMs = 120000; // 2 minutes max wait
+      const pollIntervalMs = 2000; // Check every 2 seconds
+      const startTime = Date.now();
+      
+      console.log(`⏳ [BackgroundPoll] Waiting for first subchunk of "${bookTitle}"...`);
+      
+      while (Date.now() - startTime < maxWaitMs) {
+        try {
+          const url = getSubChunkAudioUrl(bookTitle, 0, 0);
+          const response = await fetch(url, { method: 'HEAD' });
+          
+          if (response.ok) {
+            console.log(`✅ [BackgroundPoll] First subchunk ready after ${Date.now() - startTime}ms`);
+            
+            // Update book state: no longer generating, now generated
+            addBook({
+              id: bookTitle,
+              title: bookTitle,
+              isGenerating: false,
+              isGenerated: true,
+            });
+            
+            // Set up now playing for mini player
+            const nowPlayingData = {
+              bookId: bookTitle,
+              bookTitle: bookTitle,
+              author: author,
+              coverUrl: null,
+              chapters: chapters,
+              totalDuration: 0,
+            };
+            
+            // Show mini player and start playback
+            setNowPlaying(nowPlayingData);
+            setShowMiniPlayer(true);
+            
+            // Start playing
+            try {
+              await playChapter(bookTitle, chapters[0], 0);
+              console.log('🎵 [BackgroundPoll] Auto-playback started!');
+            } catch (playError) {
+              console.error('❌ [BackgroundPoll] Failed to start playback:', playError);
+            }
+            
+            return; // Success - exit polling
+          }
+        } catch (error) {
+          // Continue polling
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+      }
+      
+      console.log(`⚠️ [BackgroundPoll] Timeout waiting for first subchunk of "${bookTitle}"`);
+      // Mark as no longer generating but keep in library
+      addBook({
+        id: bookTitle,
+        title: bookTitle,
+        isGenerating: false,
+        isGenerated: false,
+      });
+    };
+    
     // Supported file extensions for audiobook generation
     const SUPPORTED_EXTENSIONS = ['epub', 'txt', 'md', 'markdown', 'html', 'htm', 'docx', 'doc', 'odt', 'rtf', 'pdf', 'mobi', 'azw', 'azw3', 'kf8', 'pages', 'wps'];
     
@@ -424,7 +496,7 @@ const CreateAudiobookSheet = forwardRef<CreateAudiobookSheetRef, CreateAudiobook
         // The backend will automatically process the book and generate audio.
         console.log(`✅ Book loaded and generation started: ${bookTitle}`);
         
-        // Create book object for library with generation started
+        // Create book object for library with generation in progress
         const hasChapters = result.chapters && result.chapters.length > 0;
         const chaptersForBook = hasChapters ? result.chapters!.map((ch, i) => ({
           id: `ch-${i}`,
@@ -447,55 +519,29 @@ const CreateAudiobookSheet = forwardRef<CreateAudiobookSheetRef, CreateAudiobook
           coverUrl: null,
           totalDuration: result._internal?.durationSeconds || 0,
           chapters: chaptersForBook,
-          isGenerated: true, // Mark as generated - playback will start immediately
+          isGenerated: false, // Not yet generated
+          isGenerating: true, // Currently generating
           generationProgress: 0,
         };
         
-        // Add to library immediately
-        console.log('📖 [CreateAudiobookSheet] Adding book to library:', {
+        // Add to library - will show with generating indicator
+        console.log('📖 [CreateAudiobookSheet] Adding book to library (generating):', {
           id: book.id,
           title: book.title,
-          isGenerated: book.isGenerated,
+          isGenerating: book.isGenerating,
         });
         addBook(book);
         
-        // Set up now playing for mini player (matching PWA pattern)
-        const nowPlayingData = {
-          bookId: bookTitle,
-          bookTitle: result.title,
-          author: result.author || 'Unknown Author',
-          coverUrl: null,
-          chapters: chaptersForBook,
-          totalDuration: result._internal?.durationSeconds || 0,
-        };
-        
-        // Show mini player and set now playing
-        console.log('🚀 Starting progressive playback for new audiobook:', bookTitle);
-        setNowPlaying(nowPlayingData);
-        setShowMiniPlayer(true);
-        
-        // Close sheet and navigate to player
+        // Close sheet - DO NOT navigate to player or show MiniPlayer yet
         bottomSheetRef.current?.close();
         resetForm();
         setIsGenerating(false);
         
-        // Navigate to player screen
-        router.push('/player');
-        
-        // Start progressive playback - import dynamically to avoid circular deps
-        const { playChapter } = await import('../../services/audioService');
-        
-        // Start playing from chapter 0 - playChapter will handle progressive subchunk fallback
-        try {
-          await playChapter(bookTitle, chaptersForBook[0], 0);
-          console.log('✅ Progressive playback started!');
-        } catch (playError) {
-          console.log('⏳ Playback will start when first subchunk is ready:', playError);
-          // Don't throw - player is open and will retry when content is ready
-        }
+        // Poll for first subchunk in background, then start playback automatically
+        startBackgroundPlaybackPolling(bookTitle, chaptersForBook, result.author || 'Unknown Author');
         
         onCreated?.(bookTitle);
-        console.log(`✅ Audiobook "${bookTitle}" generation started!`);
+        console.log(`✅ Audiobook "${bookTitle}" generation started! Will auto-play when ready.`);
       } catch (err) {
         console.error('Generation error:', err);
         setError(err instanceof Error ? err.message : 'Failed to generate audiobook');

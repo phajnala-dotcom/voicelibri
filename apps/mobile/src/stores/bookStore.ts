@@ -24,6 +24,7 @@ export interface LibraryBook extends CatalogBook {
   totalDuration?: number;
   isGenerated?: boolean; // Has audiobook been generated
   hasGeneratedAudiobook?: boolean; // Alias for isGenerated
+  isGenerating?: boolean; // Currently generating audio
   generationProgress?: number;
   chapters?: Array<{ id: string; title: string; index: number; duration: number; url: string }>;
 }
@@ -108,6 +109,7 @@ export const useBookStore = create<BookState>()(
             addedAt: Date.now(),
             progress: book.progress || 0,
             isGenerated: book.isGenerated || false,
+            isGenerating: book.isGenerating || false,
             generationProgress: book.generationProgress || 0,
             totalDuration: book.totalDuration || 0,
             chapters: book.chapters || undefined,

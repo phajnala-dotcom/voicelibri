@@ -260,21 +260,28 @@ export default function LibraryScreen() {
       color: theme.colors.textSecondary,
       marginTop: 4,
     },
-    fab: {
+    createButton: {
       position: 'absolute',
-      bottom: 100,
+      bottom: 140, // Higher to avoid MiniPlayer overlap
       right: spacing.lg,
-      width: 56,
-      height: 56,
-      borderRadius: 28,
+      left: spacing.lg,
+      paddingVertical: spacing.md,
+      borderRadius: borderRadius.lg,
       backgroundColor: colors.primary[500],
+      flexDirection: 'row',
       justifyContent: 'center',
       alignItems: 'center',
+      gap: spacing.sm,
       shadowColor: '#000',
       shadowOffset: { width: 0, height: 4 },
       shadowOpacity: 0.3,
       shadowRadius: 8,
       elevation: 8,
+    },
+    createButtonText: {
+      color: '#fff',
+      fontSize: 16,
+      fontWeight: '600',
     },
   });
 
@@ -390,12 +397,13 @@ export default function LibraryScreen() {
         )}
 
         {/* Bottom spacing */}
-        <View style={{ height: 150 }} />
+        <View style={{ height: 200 }} />
       </ScrollView>
 
-      {/* FAB for Create Audiobook */}
-      <Pressable style={styles.fab} onPress={handleCreateAudiobook}>
-        <Ionicons name="add" size={28} color="#fff" />
+      {/* Create Audiobook Button */}
+      <Pressable style={styles.createButton} onPress={handleCreateAudiobook}>
+        <Ionicons name="add-circle-outline" size={24} color="#fff" />
+        <Text style={styles.createButtonText}>Create Audiobook</Text>
       </Pressable>
 
       <CreateAudiobookSheet ref={createSheetRef} />

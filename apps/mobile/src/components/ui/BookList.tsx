@@ -205,16 +205,20 @@ export default function BookList({
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={styles.listContainer}
         >
-          {books.map((item, index) => (
-            <BookCard
-              key={item.id ? `${item.id}-${index}` : `book-${index}`}
-              book={item}
-              size="medium"
-              onPress={() => handleBookPress(item)}
-              showProgress={showProgress}
-              progress={'progress' in item ? item.progress : 0}
-            />
-          ))}
+          {books.map((item, index) => {
+            const isGenerating = 'isGenerating' in item && (item as LibraryBook).isGenerating;
+            return (
+              <BookCard
+                key={item.id ? `${item.id}-${index}` : `book-${index}`}
+                book={item}
+                size="medium"
+                onPress={() => handleBookPress(item)}
+                showProgress={showProgress}
+                progress={'progress' in item ? item.progress : 0}
+                isGenerating={isGenerating}
+              />
+            );
+          })}
         </ScrollView>
       ) : (
         <Animated.FlatList
@@ -225,15 +229,19 @@ export default function BookList({
           contentContainerStyle={styles.listContainer}
           onScroll={scrollHandler}
           scrollEventThrottle={16}
-          renderItem={({ item }) => (
-            <BookCard
-              book={item}
-              size="medium"
-              onPress={() => handleBookPress(item)}
-              showProgress={showProgress}
-              progress={'progress' in item ? item.progress : 0}
-            />
-          )}
+          renderItem={({ item }) => {
+            const isGenerating = 'isGenerating' in item && (item as LibraryBook).isGenerating;
+            return (
+              <BookCard
+                book={item}
+                size="medium"
+                onPress={() => handleBookPress(item)}
+                showProgress={showProgress}
+                progress={'progress' in item ? item.progress : 0}
+                isGenerating={isGenerating}
+              />
+            );
+          }}
         />
       )}
     </View>

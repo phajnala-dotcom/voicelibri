@@ -4,25 +4,32 @@
  * Inspired by himanchau/react-native-book-app Book.jsx
  */
 
-import React from 'react';
+import React, { useEffect } from 'react';
 import {
   View,
   Image,
   Pressable,
   StyleSheet,
   Dimensions,
+  ActivityIndicator,
 } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
   withSpring,
+  withRepeat,
+  withSequence,
+  withTiming,
   interpolate,
 } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { CatalogBook } from '../../services/catalogService';
 import { useTheme } from '../../theme/ThemeContext';
-import { shadows, borderRadius } from '../../theme';
+import { shadows, borderRadius, colors } from '../../theme';
 import Text from './Text';
+
+// Default cover image
+const DEFAULT_COVER = require('../../../assets/default-cover.png');
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -34,6 +41,7 @@ interface BookCardProps {
   showAuthor?: boolean;
   showProgress?: boolean;
   progress?: number;
+  isGenerating?: boolean;
 }
 
 const SIZES = {
@@ -52,10 +60,32 @@ export default function BookCard({
   showAuthor = true,
   showProgress = false,
   progress = 0,
+  isGenerating = false,
 }: BookCardProps) {
   const { theme } = useTheme();
   const scale = useSharedValue(1);
+  const pulseOpacity = useSharedValue(0.3);
   const dimensions = SIZES[size];
+  
+  // Pulse animation for generating state
+  useEffect(() => {
+    if (isGenerating) {
+      pulseOpacity.value = withRepeat(
+        withSequence(
+          withTiming(0.7, { duration: 800 }),
+          withTiming(0.3, { duration: 800 })
+        ),
+        -1, // Infinite
+        false
+      );
+    } else {
+      pulseOpacity.value = 0.3;
+    }
+  }, [isGenerating]);
+  
+  const pulseStyle = useAnimatedStyle(() => ({
+    opacity: pulseOpacity.value,
+  }));
   
   const handlePressIn = () => {
     scale.value = withSpring(0.95, { damping: 15 });
@@ -143,6 +173,25 @@ export default function BookCard({
       backgroundColor: theme.colors.progressFill,
       borderRadius: 2,
     },
+    generatingOverlay: {
+      ...StyleSheet.absoluteFillObject,
+      backgroundColor: colors.primary[500],
+      alignItems: 'center',
+      justifyContent: 'center',
+      borderRadius: borderRadius.lg,
+    },
+    generatingText: {
+      color: '#fff',
+      fontSize: 10,
+      fontWeight: '600',
+      marginTop: 4,
+      textAlign: 'center',
+    },
+    defaultCover: {
+      width: '70%',
+      height: '70%',
+      opacity: 0.8,
+    },
   });
   
   return (
@@ -162,10 +211,20 @@ export default function BookCard({
           />
         ) : (
           <View style={styles.placeholder}>
-            <Text style={styles.placeholderText} numberOfLines={3}>
-              {book.title}
-            </Text>
+            <Image
+              source={DEFAULT_COVER}
+              style={styles.defaultCover}
+              resizeMode="contain"
+            />
           </View>
+        )}
+        
+        {/* Generation indicator overlay */}
+        {isGenerating && (
+          <Animated.View style={[styles.generatingOverlay, pulseStyle]}>
+            <ActivityIndicator size="small" color="#fff" />
+            <Text style={styles.generatingText}>Creating...</Text>
+          </Animated.View>
         )}
       </View>
       
@@ -174,7 +233,7 @@ export default function BookCard({
           <Text style={styles.title} numberOfLines={1}>
             {book.title}
           </Text>
-          {book.authors.length > 0 && (
+          {book.authors && book.authors.length > 0 && (
             <Text style={styles.author} numberOfLines={1}>
               {book.authors[0]}
             </Text>
