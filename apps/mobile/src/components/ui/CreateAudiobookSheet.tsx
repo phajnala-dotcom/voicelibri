@@ -185,11 +185,12 @@ const CreateAudiobookSheet = forwardRef<CreateAudiobookSheetRef, CreateAudiobook
     // Poll for first subchunk in background, then auto-start playback
     const startBackgroundPlaybackPolling = async (
       bookTitle: string,
-      chapters: Array<{ id: string; title: string; index: number; duration: number; url: string }>,
+      chapters: Array<{ id: string; title: string; index: number; duration: number; url: string; subChunkCount?: number }>,
       author: string
     ) => {
-      const { getSubChunkAudioUrl } = await import('../../services/voiceLibriApi');
       const { playChapter } = await import('../../services/audioService');
+      const { downloadSubChunk } = await import('../../services/audioStorageService');
+      const { getSubChunkAudioUrl } = await import('../../services/voiceLibriApi');
       
       const maxWaitMs = 120000; // 2 minutes max wait
       const pollIntervalMs = 2000; // Check every 2 seconds
@@ -197,12 +198,15 @@ const CreateAudiobookSheet = forwardRef<CreateAudiobookSheetRef, CreateAudiobook
       
       console.log(`⏳ [BackgroundPoll] Waiting for first subchunk of "${bookTitle}"...`);
       
+      const firstChapterIndex = chapters[0]?.index ?? 1;
+
       while (Date.now() - startTime < maxWaitMs) {
         try {
-          const url = getSubChunkAudioUrl(bookTitle, 0, 0);
+          const url = getSubChunkAudioUrl(bookTitle, firstChapterIndex, 0);
           const response = await fetch(url, { method: 'HEAD' });
-          
+
           if (response.ok) {
+            await downloadSubChunk(bookTitle, firstChapterIndex, 0);
             console.log(`✅ [BackgroundPoll] First subchunk ready after ${Date.now() - startTime}ms`);
             
             // Update book state: no longer generating, now generated
@@ -501,13 +505,14 @@ const CreateAudiobookSheet = forwardRef<CreateAudiobookSheetRef, CreateAudiobook
         const chaptersForBook = hasChapters ? result.chapters!.map((ch, i) => ({
           id: `ch-${i}`,
           title: ch.title,
-          index: i,
+          index: ch.index,
           duration: 0,
           url: '',
+          subChunkCount: ch.subChunkCount,
         })) : [{
           id: 'ch-0',
           title: 'Full Text',
-          index: 0,
+          index: 1,
           duration: 0,
           url: '',
         }];

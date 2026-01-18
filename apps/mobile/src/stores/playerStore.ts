@@ -15,8 +15,10 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 export interface Chapter {
   id: string;
   title: string;
+  index?: number;
   duration: number;
   url: string;
+  subChunkCount?: number;
 }
 
 export interface NowPlaying {

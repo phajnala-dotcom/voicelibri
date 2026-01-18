@@ -18,8 +18,15 @@ import {
 } from 'expo-audio';
 import { usePlayerStore } from '../stores/playerStore';
 import type { NowPlaying, Chapter } from '../stores/playerStore';
-import { getChapterAudioUrl, getSubChunkAudioUrl, updatePlaybackPosition as apiUpdatePlaybackPosition } from './voiceLibriApi';
-import { getLocalChapterUri, isChapterDownloaded } from './audioStorageService';
+import { getSubChunkAudioUrl, updatePlaybackPosition as apiUpdatePlaybackPosition } from './voiceLibriApi';
+import {
+  consolidateChapterFromSubChunks,
+  downloadSubChunk,
+  getDownloadedSubChunks,
+  getLocalChapterUri,
+  getLocalSubChunkUri,
+  isChapterDownloaded,
+} from './audioStorageService';
 
 // ============================================================================
 // TYPES
@@ -137,6 +144,8 @@ export async function cleanupPlayer(): Promise<void> {
  */
 async function isSubChunkAvailable(bookTitle: string, chapterIndex: number, subChunkIndex: number): Promise<boolean> {
   try {
+    const localUri = getLocalSubChunkUri(bookTitle, chapterIndex, subChunkIndex);
+    if (localUri) return true;
     const url = getSubChunkAudioUrl(bookTitle, chapterIndex, subChunkIndex);
     const response = await fetch(url, { method: 'HEAD' });
     return response.ok;
@@ -181,22 +190,32 @@ async function playSubChunk(
 ): Promise<void> {
   const player = createPlayer();
   const store = usePlayerStore.getState();
+  const storageChapterIndex = chapter.index ?? chapterIndex;
+  const localUri = getLocalSubChunkUri(bookTitle, storageChapterIndex, subChunkIndex);
+
+  if (!localUri) {
+    console.log(`📥 Downloading subchunk ${chapterIndex}:${subChunkIndex} for local playback...`);
+    await downloadSubChunk(bookTitle, storageChapterIndex, subChunkIndex);
+  }
+
+  const resolvedUri = getLocalSubChunkUri(bookTitle, storageChapterIndex, subChunkIndex);
+  if (!resolvedUri) {
+    throw new Error(`Subchunk ${storageChapterIndex}:${subChunkIndex} not available locally`);
+  }
   
-  const audioUri = getSubChunkAudioUrl(bookTitle, chapterIndex, subChunkIndex);
-  
-  console.log(`🎵 Playing subchunk ${chapterIndex}:${subChunkIndex}`);
-  console.log(`   URI: ${audioUri}`);
+  console.log(`🎵 Playing subchunk ${chapterIndex}:${subChunkIndex} (LOCAL)`);
+  console.log(`   URI: ${resolvedUri}`);
   
   try {
     store.setIsBuffering(true);
     
     // Replace the current source
-    await player.replace({ uri: audioUri });
+    await player.replace({ uri: resolvedUri });
     
     // Start playback
     await player.play();
     
-    // Update store state
+    // Update store state (UI index)
     store.setCurrentChapter(chapterIndex);
     store.setIsPlaying(true);
     store.setIsBuffering(false);
@@ -204,11 +223,24 @@ async function playSubChunk(
     // Track progressive state
     isProgressiveMode = true;
     progressiveBookTitle = bookTitle;
-    progressiveChapterIndex = chapterIndex;
+    progressiveChapterIndex = storageChapterIndex;
     currentSubChunkIndex = subChunkIndex;
     
     // Set up onEnd handler for next subchunk
     setupSubChunkEndHandler(bookTitle, chapterIndex, chapter);
+    
+    // If we have all subchunks for this chapter, consolidate into a chapter file
+    if (typeof chapter.subChunkCount === 'number') {
+      const downloaded = getDownloadedSubChunks(bookTitle, storageChapterIndex);
+      if (downloaded.length >= chapter.subChunkCount) {
+        try {
+          await consolidateChapterFromSubChunks(bookTitle, storageChapterIndex);
+          console.log(`✅ Chapter ${storageChapterIndex} consolidated locally`);
+        } catch (error) {
+          console.warn('⚠ Failed to consolidate chapter:', error);
+        }
+      }
+    }
     
     console.log(`✓ Playing subchunk ${chapterIndex}:${subChunkIndex}`);
   } catch (error) {
@@ -224,6 +256,7 @@ async function playSubChunk(
 function setupSubChunkEndHandler(bookTitle: string, chapterIndex: number, chapter: Chapter): void {
   const player = getPlayer();
   if (!player) return;
+  const storageChapterIndex = chapter.index ?? chapterIndex;
   
   // Add listener for playback status updates to detect when audio finishes
   const handlePlaybackStatus = async (status: { didJustFinish?: boolean }) => {
@@ -234,26 +267,13 @@ function setupSubChunkEndHandler(bookTitle: string, chapterIndex: number, chapte
     console.log(`🎵 Subchunk ${chapterIndex}:${currentSubChunkIndex} ended, checking next...`);
     
     // Check if next subchunk is available
-    if (await isSubChunkAvailable(bookTitle, chapterIndex, nextSubChunkIndex)) {
+    if (await isSubChunkAvailable(bookTitle, storageChapterIndex, nextSubChunkIndex)) {
       await playSubChunk(bookTitle, chapterIndex, nextSubChunkIndex, chapter);
     } else {
-      // Check if chapter file is now ready (consolidated)
-      try {
-        const chapterUrl = getChapterAudioUrl(bookTitle, chapterIndex);
-        const response = await fetch(chapterUrl, { method: 'HEAD' });
-        
-        if (response.ok) {
-          console.log(`✅ Chapter ${chapterIndex} is now consolidated, but we've been playing subchunks`);
-          // Continue waiting for more subchunks or end
-        }
-      } catch {
-        // Chapter not ready yet
-      }
-      
       // Wait a bit and try again
       console.log(`⏳ Waiting for next subchunk ${chapterIndex}:${nextSubChunkIndex}...`);
       setTimeout(async () => {
-        if (await isSubChunkAvailable(bookTitle, chapterIndex, nextSubChunkIndex)) {
+        if (await isSubChunkAvailable(bookTitle, storageChapterIndex, nextSubChunkIndex)) {
           await playSubChunk(bookTitle, chapterIndex, nextSubChunkIndex, chapter);
         } else {
           // Check if we should move to next chapter
@@ -292,33 +312,21 @@ export async function playChapter(
 ): Promise<void> {
   const player = createPlayer();
   const store = usePlayerStore.getState();
+  const storageChapterIndex = chapter.index ?? chapterIndex;
   
   // Check for local file first
-  const localUri = getLocalChapterUri(bookTitle, chapterIndex);
+  const localUri = getLocalChapterUri(bookTitle, storageChapterIndex);
   if (localUri) {
-    console.log(`🎵 Loading chapter ${chapterIndex} from LOCAL: ${chapter.title}`);
+    console.log(`🎵 Loading chapter ${storageChapterIndex} from LOCAL: ${chapter.title}`);
     await playFromUri(player, store, localUri, chapter, chapterIndex, startPosition, bookTitle);
     return;
-  }
-  
-  // Try chapter URL (consolidated chapter file)
-  const chapterUri = getChapterAudioUrl(bookTitle, chapterIndex);
-  try {
-    const response = await fetch(chapterUri, { method: 'HEAD' });
-    if (response.ok) {
-      console.log(`🎵 Loading chapter ${chapterIndex} from STREAMING: ${chapter.title}`);
-      await playFromUri(player, store, chapterUri, chapter, chapterIndex, startPosition, bookTitle);
-      return;
-    }
-  } catch {
-    // Chapter file not available, try progressive mode
   }
   
   // Fall back to progressive subchunk playback
   console.log(`🎵 Chapter ${chapterIndex} not ready, trying progressive subchunk playback...`);
   
   // Wait for first subchunk
-  const firstSubChunkReady = await waitForFirstSubChunk(bookTitle, chapterIndex);
+  const firstSubChunkReady = await waitForFirstSubChunk(bookTitle, storageChapterIndex);
   
   if (firstSubChunkReady) {
     await playSubChunk(bookTitle, chapterIndex, 0, chapter);
@@ -573,6 +581,8 @@ export async function playFromLocalStorage(
 ): Promise<void> {
   const player = createPlayer();
   const store = usePlayerStore.getState();
+  const nowPlaying = store.nowPlaying;
+  const uiChapterIndex = nowPlaying?.chapters.findIndex((ch) => ch.index === chapterIndex) ?? 0;
   
   // Get local chapter file URI
   const localUri = getLocalChapterUri(bookTitle, chapterIndex);
@@ -599,7 +609,7 @@ export async function playFromLocalStorage(
     await player.play();
     
     // Update store state
-    store.setCurrentChapter(chapterIndex);
+    store.setCurrentChapter(uiChapterIndex);
     store.setIsPlaying(true);
     store.setIsBuffering(false);
     

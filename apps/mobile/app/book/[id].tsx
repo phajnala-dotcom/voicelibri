@@ -256,7 +256,7 @@ export default function BookDetailsScreen() {
     
     const nowPlaying = {
       bookId: book.id,
-      bookTitle: book.title,
+      bookTitle: book.id,
       author: book.authors.join(', '),
       coverUrl: book.coverUrl,
       chapters: chaptersForPlayer,

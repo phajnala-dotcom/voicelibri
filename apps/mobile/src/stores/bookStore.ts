@@ -26,7 +26,7 @@ export interface LibraryBook extends CatalogBook {
   hasGeneratedAudiobook?: boolean; // Alias for isGenerated
   isGenerating?: boolean; // Currently generating audio
   generationProgress?: number;
-  chapters?: Array<{ id: string; title: string; index: number; duration: number; url: string }>;
+  chapters?: Array<{ id: string; title: string; index: number; duration: number; url: string; subChunkCount?: number }>;
 }
 
 export interface BookState {

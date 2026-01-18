@@ -303,6 +303,123 @@ export function isChapterDownloaded(bookTitle: string, chapterIndex: number): bo
 }
 
 /**
+ * Get local file URI for a subchunk (for progressive playback)
+ * Returns null if subchunk is not downloaded
+ */
+export function getLocalSubChunkUri(
+  bookTitle: string,
+  chapterIndex: number,
+  subChunkIndex: number
+): string | null {
+  const bookDir = getBookDirectory(bookTitle);
+  const chapterDir = new Directory(bookDir, `chapter_${chapterIndex}`);
+  const subChunkFile = new File(chapterDir, `subchunk_${subChunkIndex}.wav`);
+  return subChunkFile.exists ? subChunkFile.uri : null;
+}
+
+/**
+ * List downloaded subchunks for a chapter
+ */
+export function getDownloadedSubChunks(bookTitle: string, chapterIndex: number): number[] {
+  const bookDir = getBookDirectory(bookTitle);
+  const chapterDir = new Directory(bookDir, `chapter_${chapterIndex}`);
+  if (!chapterDir.exists) return [];
+
+  const subChunks: number[] = [];
+  const contents = chapterDir.list();
+  for (const item of contents) {
+    if (item instanceof File && item.name.startsWith('subchunk_') && item.name.endsWith('.wav')) {
+      const match = item.name.match(/subchunk_(\d+)\.wav/);
+      if (match) {
+        subChunks.push(parseInt(match[1], 10));
+      }
+    }
+  }
+
+  return subChunks.sort((a, b) => a - b);
+}
+
+/**
+ * Consolidate downloaded subchunks into a single chapter WAV file
+ * Uses WAV header from first subchunk and concatenates PCM data
+ */
+export async function consolidateChapterFromSubChunks(
+  bookTitle: string,
+  chapterIndex: number
+): Promise<string> {
+  const bookDir = getBookDirectory(bookTitle);
+  const chapterDir = new Directory(bookDir, `chapter_${chapterIndex}`);
+  if (!chapterDir.exists) {
+    throw new Error(`Chapter directory not found for ${bookTitle} chapter ${chapterIndex}`);
+  }
+
+  const subChunkFiles = chapterDir
+    .list()
+    .filter((item): item is File => item instanceof File)
+    .filter((file) => file.name.startsWith('subchunk_') && file.name.endsWith('.wav'))
+    .sort((a, b) => {
+      const aMatch = a.name.match(/subchunk_(\d+)\.wav/);
+      const bMatch = b.name.match(/subchunk_(\d+)\.wav/);
+      const aIndex = aMatch ? parseInt(aMatch[1], 10) : 0;
+      const bIndex = bMatch ? parseInt(bMatch[1], 10) : 0;
+      return aIndex - bIndex;
+    });
+
+  if (subChunkFiles.length === 0) {
+    throw new Error(`No subchunks found for ${bookTitle} chapter ${chapterIndex}`);
+  }
+
+  // Read all subchunk bytes
+  const dataChunks: Uint8Array[] = [];
+  let totalPcmBytes = 0;
+  let header: Uint8Array | null = null;
+
+  for (const file of subChunkFiles) {
+    const bytes = await file.bytes();
+    if (bytes.length <= 44) {
+      continue;
+    }
+
+    if (!header) {
+      header = bytes.slice(0, 44);
+    }
+
+    const pcm = bytes.slice(44);
+    totalPcmBytes += pcm.length;
+    dataChunks.push(pcm);
+  }
+
+  if (!header) {
+    throw new Error(`Unable to read WAV header for ${bookTitle} chapter ${chapterIndex}`);
+  }
+
+  // Build output buffer: header + concatenated PCM data
+  const output = new Uint8Array(44 + totalPcmBytes);
+  output.set(header, 0);
+
+  // Update WAV header sizes (little-endian)
+  const view = new DataView(output.buffer);
+  // ChunkSize at offset 4 = 36 + data size
+  view.setUint32(4, 36 + totalPcmBytes, true);
+  // Subchunk2Size at offset 40 = data size
+  view.setUint32(40, totalPcmBytes, true);
+
+  let offset = 44;
+  for (const chunk of dataChunks) {
+    output.set(chunk, offset);
+    offset += chunk.length;
+  }
+
+  // Write consolidated chapter file
+  const chapterFile = new File(bookDir, `chapter_${chapterIndex}.wav`);
+  chapterFile.create({ intermediates: true, overwrite: true });
+  chapterFile.write(output);
+
+  console.log(`✅ Consolidated chapter ${chapterIndex} (${totalPcmBytes} PCM bytes)`);
+  return chapterFile.uri;
+}
+
+/**
  * Get all downloaded chapters for a book
  */
 export function getDownloadedChapters(bookTitle: string): number[] {

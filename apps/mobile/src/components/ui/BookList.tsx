@@ -18,8 +18,8 @@ import { useTheme } from '../../theme/ThemeContext';
 import { spacing } from '../../theme';
 import BookCard from './BookCard';
 import Text from './Text';
-import { getDownloadedChapters } from '../../services/audioStorageService';
-import { playFromLocalStorage } from '../../services/audioService';
+import { getDownloadedChapters, getDownloadedSubChunks } from '../../services/audioStorageService';
+import { playChapter } from '../../services/audioService';
 
 interface BookListProps {
   title: string;
@@ -57,6 +57,7 @@ export default function BookList({
     // Check if this is a generated audiobook
     const isLibraryBook = 'isGenerated' in book;
     const isGeneratedAudiobook = isLibraryBook && (book as LibraryBook).isGenerated;
+    const isGeneratingAudiobook = isLibraryBook && (book as LibraryBook).isGenerating;
     
     // DEBUG: Trace audiobook detection
     console.log('📚 [BookList.handleBookPress] Book pressed:', {
@@ -64,22 +65,26 @@ export default function BookList({
       title: book.title,
       isLibraryBook,
       isGeneratedAudiobook,
+      isGeneratingAudiobook,
       isGeneratedFlag: isLibraryBook ? (book as LibraryBook).isGenerated : 'N/A',
     });
     
-    if (isGeneratedAudiobook) {
+    if (isGeneratedAudiobook || isGeneratingAudiobook) {
       // For generated audiobooks, check if we have local files
+      const libBook = book as LibraryBook;
       const downloadedChapters = getDownloadedChapters(book.id);
+      const firstChapterIndex = libBook.chapters?.[0]?.index ?? 1;
+      const downloadedSubChunks = getDownloadedSubChunks(book.id, firstChapterIndex);
       console.log('📚 [BookList.handleBookPress] Downloaded chapters:', downloadedChapters);
+      console.log('📚 [BookList.handleBookPress] Downloaded subchunks (chapter 0):', downloadedSubChunks);
       
       // Get chapters from book or create default
-      const libBook = book as LibraryBook;
-      const bookChapters = libBook.chapters || [{ id: 'ch-0', title: 'Full Text', index: 0, duration: 0, url: '' }];
+      const bookChapters = libBook.chapters || [{ id: 'ch-0', title: 'Full Text', index: 1, duration: 0, url: '' }];
       
       // Prepare now playing data
       const nowPlayingData = {
         bookId: book.id,
-        bookTitle: book.title,
+        bookTitle: book.id,
         author: 'authors' in book ? (book as CatalogBook).authors?.join(', ') || 'Unknown' : libBook.authors?.join(', ') || 'Unknown',
         coverUrl: book.coverUrl || null,
         chapters: bookChapters,
@@ -94,32 +99,29 @@ export default function BookList({
         setShowMiniPlayer(true);
         
         try {
-          await playFromLocalStorage(book.id, downloadedChapters[0]);
+          await playChapter(book.id, bookChapters[0], 0);
           router.push('/player');
         } catch (error) {
           console.error('Failed to start local playback:', error);
           router.push({ pathname: '/book/[id]', params: { id: book.id } });
         }
         return;
-      } else {
-        // No local files yet - start progressive playback (streaming from backend)
-        console.log(`🎵 Starting progressive playback (streaming): ${book.title}`);
-        
-        setNowPlaying(nowPlayingData);
-        setShowMiniPlayer(true);
-        router.push('/player');
-        
-        // Start progressive playback - playChapter handles subchunk fallback
-        try {
-          const { playChapter } = await import('../../services/audioService');
-          await playChapter(book.id, bookChapters[0], 0);
-          console.log('✅ Progressive playback started!');
-        } catch (error) {
-          console.log('⏳ Playback will start when audio is ready:', error);
-          // Player is open - it will show buffering state
-        }
-        return;
       }
+
+      // No local chapter yet - start progressive playback from local subchunks
+      console.log(`🎵 Starting progressive playback (local subchunks): ${book.title}`);
+      
+      setNowPlaying(nowPlayingData);
+      setShowMiniPlayer(true);
+      router.push('/player');
+      
+      try {
+        await playChapter(book.id, bookChapters[0], 0);
+        console.log('✅ Progressive playback started!');
+      } catch (error) {
+        console.log('⏳ Playback will start when audio is ready:', error);
+      }
+      return;
     }
     
     // For catalog books or non-generated audiobooks, go to book details
