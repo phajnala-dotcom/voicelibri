@@ -936,8 +936,8 @@ async function startBackgroundDramatization(
           const characters: CharacterProfile[] = registeredChars.map(rc => ({
             name: rc.primaryName,
             gender: rc.gender,
-            traits: [rc.speechStyle], // Use speechStyle as single trait for compatibility
-            role: 'unknown' as const,
+            traits: [rc.role], // Use role as single trait for compatibility
+            role: rc.role,
             aliases: rc.aliases.filter(a => a !== rc.primaryName), // Exclude primary name from aliases
           }));
           
@@ -1009,11 +1009,12 @@ async function startBackgroundDramatization(
               }
               return undefined;
             };
-            
-            // Helper: count words (excluding punctuation)
-            const countWords = (text: string): number => {
-              const clean = text.replace(/["„"'«»‹›,\.!?;:—–-]/g, '').trim();
-              return clean.split(/\s+/).filter(w => w.length > 0).length;
+
+            const buildFallbackSpeechStyle = (speaker: string): string | undefined => {
+              if (speaker === 'NARRATOR') {
+                return registry?.getNarratorInstruction?.();
+              }
+              return undefined;
             };
             
             // Format EXACTLY as TTS will receive it per Gemini multi-speaker docs:
@@ -1021,14 +1022,12 @@ async function startBackgroundDramatization(
             // SPEAKER: Text to speak
             const ttsLines: string[] = [];
             for (const seg of segments) {
-              const speechStyle = getSpeechStyle(seg.speaker);
-              const wordCount = countWords(seg.text);
-              
+              const speechStyle = seg.speechStyle || buildFallbackSpeechStyle(seg.speaker);
               // Build the EXACT text TTS will receive
-              if (speechStyle && wordCount > 3) {
+              if (speechStyle) {
                 // Speech style directive (remove trailing period)
                 const directive = speechStyle.replace(/\.$/, '').trim();
-                ttsLines.push(`${directive}:`);
+                ttsLines.push(`${directive}`);
               }
               // SPEAKER: text format (Gemini multi-speaker format)
               ttsLines.push(`${seg.speaker}: ${seg.text}`);
@@ -1050,13 +1049,14 @@ async function startBackgroundDramatization(
           dramatizationStatus.currentOperation = `Generating audio for chapter ${chapterNum}`;
           dramatizationStatus.lastActivityAt = Date.now();
           
+          const chapterParallelism = chapterNum === 1 ? 1 : 3;
           await generateSubChunksParallel(
             bookTitle,
             chapterNum,
             newSubChunks,
             VOICE_MAP,
             NARRATOR_VOICE,
-            3 // TTS parallelism within chapter
+            chapterParallelism // TTS parallelism within chapter
           );
           
           // Track audio generation cost (TTS: input = text, output = ~10x for audio tokens)
@@ -1120,13 +1120,14 @@ async function startBackgroundDramatization(
           // Generate TTS even for fallback
           const bookTitle = sanitizeBookTitle(BOOK_METADATA?.title || CURRENT_BOOK_FILE || 'Unknown');
           console.log(`   🎤 Generating TTS for chapter ${chapterNum} (fallback)...`);
+          const chapterParallelism = chapterNum === 1 ? 1 : 3;
           await generateSubChunksParallel(
             bookTitle,
             chapterNum,
             newSubChunks,
             VOICE_MAP,
             NARRATOR_VOICE,
-            3 // TTS parallelism within chapter
+            chapterParallelism // TTS parallelism within chapter
           );
           
           // Track audio generation cost for fallback path

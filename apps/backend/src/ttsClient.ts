@@ -116,16 +116,15 @@ export class TTSClient {
     let styledText = text;
     
     // Check word count (after removing punctuation)
-    // NO speech style for 3 or fewer words - let TTS auto-detect language
     const cleanText = text.replace(/["„"'«»‹›,\.!?;:—–-]/g, '').trim();
     const wordCount = cleanText.split(/\s+/).filter(w => w.length > 0).length;
     const isShortText = wordCount <= 3;
     
-    if (speechStyle && !isShortText) {
+    if (speechStyle) {
       // Use speech style directive directly (already has action verb like "Read", "Narrate", "Speak")
       // Remove trailing period, ensure ends with colon
       const directive = speechStyle.replace(/\.$/, '').trim();
-      styledText = `${directive}:\n${text}`;
+      styledText = `${directive}\n${text}`;
     } else if (!speechStyle && !isShortText) {
       // Apply basic style presets (only for >3 words)
       switch (style) {

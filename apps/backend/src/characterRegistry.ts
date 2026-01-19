@@ -1,11 +1,11 @@
 /**
- * Character Registry - Per-Chapter Character Extraction with Speech Style
+ * Character Registry - Per-Chapter Character Extraction with Role
  * 
  * Universal approach for both translated and non-translated books:
- * - Extracts characters per-chapter with LLM-selected voices and speech styles
+ * - Extracts characters per-chapter with LLM-selected voices and roles
  * - Detects aliases (same character, different names)
- * - Maintains cumulative registry with locked voice/speechStyle assignments
- * - Provides flat character→voice→speechStyle mapping for TTS
+ * - Maintains cumulative registry with locked voice/role assignments
+ * - Provides flat character→voice→role mapping for TTS
  * - Extracts book info for narrator TTS instruction (chapters 1-2, then locked)
  */
 
@@ -32,16 +32,16 @@ export interface BookInfo {
   
   /** Tone: atmospheric, suspenseful, humorous, dramatic, etc. (MAX 10 WORDS) */
   tone: string;
-  
-  /** Setting/era: Victorian England, 19th century, etc. (MAX 10 WORDS) */
-  setting: string;
+
+  /** Voice tone: EXACTLY two concise adjectives, "adj1, adj2" (MAX 10 WORDS) */
+  voiceTone: string;
   
   /** Whether bookInfo is locked (after chapter 2) */
   locked?: boolean;
 }
 
 /**
- * Character with alias support and speech style
+ * Character with alias support and role
  */
 export interface RegisteredCharacter {
   /** Unique ID for this character */
@@ -59,11 +59,11 @@ export interface RegisteredCharacter {
   /** Assigned Gemini voice name (LOCKED after first assignment) */
   voice: string;
   
-  /** Current speech style instruction for TTS (max 10 words, can evolve gradually) */
-  speechStyle: string;
+  /** Role describing who they are (2-3 words, can evolve gradually) */
+  role: string;
   
-  /** History of speech style changes: [chapterNum, speechStyle][] */
-  speechStyleHistory: Array<[number, string]>;
+  /** History of role changes: [chapterNum, role][] */
+  roleHistory: Array<[number, string]>;
   
   /** Gender */
   gender: 'male' | 'female' | 'neutral' | 'unknown';
@@ -91,8 +91,8 @@ export interface ChapterCharacterInfo {
   /** LLM-selected Gemini voice name */
   voiceName: string;
   
-  /** Speech style instruction for TTS (max 10 words) */
-  speechStyle: string;
+  /** Role describing who they are (2-3 words) */
+  role: string;
 }
 
 /**
@@ -322,7 +322,7 @@ FEMALE VOICES: ${femaleVoices}`;
   }
   
   /**
-   * Get narrator TTS instruction (speechStyle format - natural sentence with action verb)
+  * Get narrator TTS instruction (speechStyle format - natural sentence with action verb)
    */
   getNarratorInstruction(): string {
     if (!this.narratorInstruction) {
@@ -364,35 +364,25 @@ FEMALE VOICES: ${femaleVoices}`;
   }
   
   /**
-   * Process a single character from extraction
-   * Voice is LOCKED, but speechStyle can evolve gradually
+  * Process a single character from extraction
+  * Voice is LOCKED, but role can evolve gradually
    */
   private processCharacter(charInfo: ChapterCharacterInfo, chapterNum: number): void {
     const normalizedName = charInfo.name.trim();
     
     // Check if this name is already known
     if (this.nameToId.has(normalizedName)) {
-      // Already registered - update speechStyle if significantly different (evolution)
+      // Already registered - update role if different (evolution)
       const existingId = this.nameToId.get(normalizedName)!;
       const existing = this.characters.get(existingId)!;
       existing.lastSeenChapter = chapterNum;
       
-      // Allow speechStyle evolution for character development (e.g., child → elderly)
-      // Only update if LLM provided a new style AND it's meaningfully different
-      if (charInfo.speechStyle && charInfo.speechStyle !== existing.speechStyle) {
-        const newStyle = charInfo.speechStyle.split(/\s+/).slice(0, 12).join(' '); // MAX 12 WORDS (complete sentence)
-        // Check if at least 30% different (gradual change, not sudden)
-        const oldWords = new Set(existing.speechStyle.toLowerCase().split(/\s+/));
-        const newWords = newStyle.toLowerCase().split(/\s+/);
-        const overlap = newWords.filter(w => oldWords.has(w)).length;
-        const overlapRatio = overlap / Math.max(oldWords.size, newWords.length);
-        
-        // Only update if moderately different (30-80% overlap = gradual evolution)
-        if (overlapRatio < 0.8 && overlapRatio > 0.2) {
-          existing.speechStyleHistory.push([chapterNum, newStyle]);
-          existing.speechStyle = newStyle;
-          console.log(`   🔄 Speech style evolved: "${existing.primaryName}" → "${newStyle}"`);
-        }
+      // Allow role evolution for character development (e.g., child → elderly)
+      if (charInfo.role && charInfo.role !== existing.role) {
+        const newRole = charInfo.role.toLowerCase().split(/\s+/).slice(0, 3).join(' '); // MAX 3 WORDS
+        existing.roleHistory.push([chapterNum, newRole]);
+        existing.role = newRole;
+        console.log(`   🔄 Role evolved: "${existing.primaryName}" → "${newRole}"`);
       }
       return;
     }
@@ -405,7 +395,7 @@ FEMALE VOICES: ${femaleVoices}`;
       if (existingId) {
         const existing = this.characters.get(existingId)!;
         
-        // Add as alias (inherits voice/speechStyle from original)
+        // Add as alias (inherits voice/role from original)
         if (!existing.aliases.includes(normalizedName)) {
           existing.aliases.push(normalizedName);
           this.nameToId.set(normalizedName, existingId);
@@ -424,7 +414,7 @@ FEMALE VOICES: ${femaleVoices}`;
       // sameAs target not found - treat as new character
     }
     
-    // New character - use LLM-selected voice (with validation) and speechStyle
+    // New character - use LLM-selected voice (with validation) and role
     const id = `char_${this.nextId++}`;
     
     // Generate TTS alias (ALL CAPS, alphanumeric only)
@@ -434,10 +424,10 @@ FEMALE VOICES: ${femaleVoices}`;
     const voice = this.validateVoiceName(charInfo.voiceName, charInfo.gender);
     this.usedVoices.add(voice);
     
-    // Ensure speechStyle is MAX 12 WORDS (complete natural sentence)
-    const speechStyle = charInfo.speechStyle
-      ? charInfo.speechStyle.split(/\s+/).slice(0, 12).join(' ')
-      : 'Speak naturally with clear, expressive delivery.';
+    // Ensure role is MAX 3 WORDS
+    const role = charInfo.role
+      ? charInfo.role.toLowerCase().split(/\s+/).slice(0, 3).join(' ')
+      : 'unknown person';
     
     const newChar: RegisteredCharacter = {
       id,
@@ -445,8 +435,8 @@ FEMALE VOICES: ${femaleVoices}`;
       ttsAlias,
       aliases: [normalizedName, ttsAlias],
       voice,
-      speechStyle,
-      speechStyleHistory: [[chapterNum, speechStyle]],
+      role,
+      roleHistory: [[chapterNum, role]],
       gender: charInfo.gender,
       firstSeenChapter: chapterNum,
       lastSeenChapter: chapterNum,
@@ -456,7 +446,7 @@ FEMALE VOICES: ${femaleVoices}`;
     this.nameToId.set(normalizedName, id);
     this.nameToId.set(ttsAlias, id);
     
-    console.log(`   👤 New: "${normalizedName}" (${charInfo.gender}) → ${voice} [${speechStyle}]`);
+    console.log(`   👤 New: "${normalizedName}" (${charInfo.gender}) → ${voice} [${role}]`);
   }
   
   /**
@@ -472,7 +462,7 @@ FEMALE VOICES: ${femaleVoices}`;
       const aliases = char.aliases.length > 1 
         ? ` (also: ${char.aliases.filter(a => a !== char.primaryName).join(', ')})`
         : '';
-      lines.push(`- ${char.primaryName}${aliases}: ${char.gender}, voice=${char.voice}, speechStyle="${char.speechStyle}"`);
+      lines.push(`- ${char.primaryName}${aliases}: ${char.gender}, voice=${char.voice}, role="${char.role}"`);
     }
     return lines.join('\n');
   }
@@ -525,24 +515,23 @@ FEMALE VOICES: ${femaleVoices}`;
   }
   
   /**
-   * Look up speech style for any character name (including aliases)
-   * Returns complete TTS instruction as natural sentence (LLM-generated)
+   * Look up role for any character name (including aliases)
+   * Returns role text (2-3 words)
    */
   getSpeechStyleForName(name: string): string | undefined {
     const id = this.nameToId.get(name.trim());
     if (!id) return undefined;
-    const speechStyle = this.characters.get(id)?.speechStyle;
-    // Return LLM-generated TTS instruction directly (complete natural sentence)
-    return speechStyle ? `${speechStyle}\n` : undefined;
+    const role = this.characters.get(id)?.role;
+    return role;
   }
   
   /**
-   * Get raw speech style text for any character name (without brackets)
+   * Get raw role text for any character name
    */
   getRawSpeechStyleForName(name: string): string | undefined {
     const id = this.nameToId.get(name.trim());
     if (!id) return undefined;
-    return this.characters.get(id)?.speechStyle;
+    return this.characters.get(id)?.role;
   }
   
   /**
@@ -596,8 +585,8 @@ FEMALE VOICES: ${femaleVoices}`;
         aliases: char.aliases,
         voice: char.voice,
         gender: char.gender,
-        speechStyle: char.speechStyle,
-        speechStyleHistory: char.speechStyleHistory,
+        role: char.role,
+        roleHistory: char.roleHistory,
         firstSeenChapter: char.firstSeenChapter,
         lastSeenChapter: char.lastSeenChapter,
       })),

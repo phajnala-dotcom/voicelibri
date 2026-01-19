@@ -4,7 +4,7 @@
  * Gemini TTS multiSpeakerVoiceConfig supports maximum 2 speakers per API call.
  * This module chunks dramatized text into segments that:
  * 1. Contain at most 2 unique speakers (NARRATOR + 1 character, or 2 characters)
- * 2. Stay within 3600 bytes limit (Gemini TTS hard limit is 4000 bytes, leaving 400 bytes allowance for finishing sentences)
+ * 2. Stay within 2500 bytes limit (Gemini TTS hard limit is 4000 bytes, leaving allowance for sentence completion and directives)
  * 3. Don't break mid-sentence
  * 4. Stay within chapter boundaries
  * 5. Format text as "Speaker: text" for the TTS API
@@ -34,14 +34,14 @@ export interface TwoSpeakerChunk {
  * Configuration for two-speaker chunking
  */
 export interface TwoSpeakerChunkConfig {
-  /** Maximum bytes per chunk (Gemini TTS hard limit is 4000 bytes, use 3600 to leave 400 byte allowance for sentence completion) */
+  /** Maximum bytes per chunk (Gemini TTS hard limit is 4000 bytes) */
   maxBytes: number;
   /** Preferred minimum bytes per chunk (avoid tiny chunks) */
   minBytes: number;
 }
 
 const DEFAULT_CONFIG: TwoSpeakerChunkConfig = {
-  maxBytes: 3300,   // 4000 byte hard limit - 700 byte sentence completion allowance
+  maxBytes: 2500,   // 4000 byte hard limit - allowance for sentence completion and directives
   minBytes: 0,      // No minimum - allow small chunks when 3rd speaker forces a split
 };
 
@@ -53,25 +53,32 @@ const DEFAULT_CONFIG: TwoSpeakerChunkConfig = {
  * @param segments - Voice segments to format (only speaker and text required)
  * @returns Formatted text for TTS API
  */
-export function formatForMultiSpeakerTTS(segments: Array<{ speaker: string; text: string }>): string {
+export function formatForMultiSpeakerTTS(segments: Array<{ speaker: string; text: string; speechStyle?: string }>): string {
   // CRITICAL FIX: Merge consecutive segments from same speaker to avoid very short segments
   // Short segments (especially narrator interruptions) cause TTS voice errors 80%+ of the time
-  const mergedSegments: Array<{ speaker: string; text: string }> = [];
+  const mergedSegments: Array<{ speaker: string; text: string; speechStyle?: string }> = [];
   
   for (const seg of segments) {
     const lastSeg = mergedSegments[mergedSegments.length - 1];
     
-    if (lastSeg && lastSeg.speaker === seg.speaker) {
+    if (lastSeg && lastSeg.speaker === seg.speaker && lastSeg.speechStyle === seg.speechStyle) {
       // Same speaker - merge text with a space
       lastSeg.text += ' ' + seg.text;
     } else {
       // Different speaker or first segment - add new entry
-      mergedSegments.push({ speaker: seg.speaker, text: seg.text });
+      mergedSegments.push({ speaker: seg.speaker, text: seg.text, speechStyle: seg.speechStyle });
     }
   }
   
   // Format: "Speaker: text" on each line (Gemini TTS official format)
-  return mergedSegments.map(seg => `${seg.speaker}: ${seg.text}`).join('\n');
+  const lines: string[] = [];
+  for (const seg of mergedSegments) {
+    if (seg.speechStyle) {
+      lines.push(`${seg.speechStyle.replace(/\.$/, '').trim()}`);
+    }
+    lines.push(`${seg.speaker}: ${seg.text}`);
+  }
+  return lines.join('\n');
 }
 
 /**
@@ -217,7 +224,8 @@ export function chunkForTwoSpeakers(
   while (pendingSegments.length > 0) {
     const segment = pendingSegments.shift()!;
     const segmentText = `${segment.speaker}: ${segment.text}`;
-    const segmentBytes = Buffer.byteLength(segmentText, 'utf8') + 1; // +1 for newline
+    const directiveText = segment.speechStyle ? `${segment.speechStyle.replace(/\.$/, '').trim()}:\n` : '';
+    const segmentBytes = Buffer.byteLength(directiveText + segmentText, 'utf8') + 1; // +1 for newline
 
     // If the segment is too large to fit in a chunk, split it at sentence boundary only
     if (segmentBytes > config.maxBytes) {

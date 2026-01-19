@@ -70,7 +70,7 @@ export const LLM_GENERATION_CONFIG = {
 
 /**
  * Book info extraction prompt template
- * Extracts genre, tone, and setting for narrator TTS instruction
+ * Extracts genre, tone, and voiceTone for narrator TTS instruction
  * Used in: characterRegistry.ts (chapters 1-2 only)
  * 
  * @param needsBookInfo - Whether to include bookInfo in extraction
@@ -85,12 +85,12 @@ export function getBookInfoExtractionPrompt(needsBookInfo: boolean): string {
 - MUST AVOID OXYMORONS AND SYNONYMY, INCLUDING SEMANTICALLY EQUIVALENT FORMS ACROSS WORD CLASSES
 - BAD example: genre "mystery" + tone "mysterious" = wasted word (mystery already implies mysterious)
 - BAD example: tone "mundane, mysterious" = oxymoron (contradictory)
-- GOOD example: genre "young adult fantasy" + tone "ominous, wondrous" + setting "1990s suburban britain"
+- GOOD example: genre "young adult fantasy" + tone "ominous, wondrous" + voiceTone "ominous, wondrous"
 
 Fields:
 - genre: Primary genre (e.g., "gothic horror", "young adult fantasy")
 - tone: Mood/atmosphere - NO words derivable from genre (e.g., "tense, melancholic")
-- setting: Era and place only (e.g., "victorian london", "1990s suburban britain")
+- voiceTone: EXACTLY two concise adjectives derived from genre + tone, format "adj1, adj2" (e.g., "ironic, witty")
 
 `;
 }
@@ -101,7 +101,7 @@ Fields:
 
 /**
  * Per-chapter character extraction prompt
- * Extracts characters with LLM-selected voices and speech styles
+ * Extracts characters with LLM-selected voices and roles
  * Used in: characterRegistry.ts
  * 
  * @param voiceList - Formatted list of available Gemini TTS voices
@@ -123,7 +123,7 @@ export function getCharacterExtractionPrompt(
   "bookInfo": {
     "genre": "concise genre (few words)",
     "tone": "unique mood descriptors (few words)",
-    "setting": "era and place (few words)"
+    "voiceTone": "adj1, adj2"
   },` : '';
 
   return `You are an expert literary analyst and voice casting director for audiobook production.
@@ -142,8 +142,8 @@ ${chapterText.substring(0, 30000)}
 TASK: Extract ALL characters who speak dialogue and cast them with the perfect voice.
 
 For EACH character, analyze their:
-- Age, personality, social class, nationality/accent, occupation, health/habits
-- Craft a complete TTS voice direction as a natural sentence (MAX 12 WORDS)
+- Age, personality, social class, nationality/ethnicity, occupation, health/habits
+- Extract ROLE as 2-3 lowercase words that represent WHO THEY ARE (NOT how they feel)
 - Select the BEST matching Gemini voice from the available list
 
 ${bookInfoSection}Return JSON only:
@@ -154,7 +154,7 @@ ${bookInfoSection}Return JSON only:
       "sameAs": "known character name if same person (optional)",
       "gender": "male|female|neutral|unknown",
       "voiceName": "ExactGeminiVoiceName",
-      "speechStyle": "Complete TTS direction as natural sentence (max 12 words)"
+      "role": "2-3 words describing who they are"
     }
   ]
 }
@@ -164,15 +164,14 @@ RULES:
 2. Use the EXACT name as it appears in the text
 3. If a character is the SAME PERSON as a known character (different name/alias):
    - Set "sameAs" to the known character's primary name
-   - Do NOT assign new voice/speechStyle (they inherit from the original)
-4. For NEW characters: select voice matching gender, and craft unique speechStyle
-5. speechStyle MUST be a complete, natural TTS direction sentence ready to use directly
-   Examples: "Speak slowly with a gravelly, menacing Eastern European accent."
-            "Say nervously with quick stammering and high pitch."
-            "Read warmly with a gentle maternal tone and slight rural accent."
+  - Do NOT assign new voice/role (they inherit from the original)
+4. For NEW characters: select voice matching gender and role (age/nationality/identity/function)
+5. role MUST be 2-3 words describing who they are (NOT how they feel)
+  - Use age modifiers only for minors or seniors (e.g., "little boy", "old woman", "teenage girl")
+  - Avoid age modifiers for general adults
+  - If characters are not all the same nationality/ethnicity, include it when detectable (e.g., "Russian soldier")
 6. Do NOT include NARRATOR - that is handled separately
-7. Voice selection: Match voice characteristics to character (e.g., elderly → low pitch, child → high pitch)
-8. speechStyle is a direct TTS command - phrase it as natural spoken instruction
+7. Voice selection: Match voice characteristics to character role and gender (e.g., elderly → low pitch, child → high pitch)
 
 Return ONLY valid JSON, no markdown or explanation.`;
 }
@@ -281,16 +280,27 @@ ${chapterText}`;
 /**
  * Chapter voice tagging prompt for Gemini TTS format
  * Used in: llmCharacterAnalyzer.ts
- * 
  * @param characterAliases - Formatted list of character TTS aliases
  * @param chapterText - Chapter text to tag
  * @returns Complete tagging prompt
  */
-export function getVoiceTaggingPrompt(characterAliases: string, chapterText: string): string {
-  return `You are tagging text for Gemini TTS multi-speaker synthesis. Format: SPEAKER: text on same line.
+export function getVoiceTaggingPrompt(characterAliases: string, characterRoles: string, chapterText: string): string {
+  return `You are tagging text for Gemini TTS multi-speaker synthesis.
 
   SPEAKER ALIASES (use EXACTLY as shown):
   ${characterAliases}
+
+  ROLES (fixed per character in this chapter):
+  ${characterRoles}
+
+  SPEECHSTYLE DIRECTIVE:
+  - Output ONE directive line immediately BEFORE each dialogue SPEAKER line
+  - Do NOT add a trailing colon to the directive line
+  - Format exactly: Action verb + "as" + emotion/state adjective + role
+  - Example: "Shout as angry Roman emperor"
+  - Avoid generic "Say" unless the quote is neutral/flat
+  - Role MUST remain unchanged for the character within this chapter and be lowercase
+  - Use correct English article "a" vs "an" when you include an article; do NOT change any other words in the directive
 
   CRITICAL RULES - DIALOGUE VS NARRATOR:
   1. CHARACTER voice = ONLY the quoted speech itself (text inside „..." or "..." quotes)
@@ -307,8 +317,6 @@ export function getVoiceTaggingPrompt(characterAliases: string, chapterText: str
   - ALL CAPS, alphanumeric only (A-Z, 0-9)
   - NO spaces, underscores, or diacritics
   - Use aliases from list above EXACTLY
-
-  OUTPUT: Each line = SPEAKER: text (one speaker per line)
 
   EXAMPLES - English:
 
@@ -359,7 +367,7 @@ export function getVoiceTaggingPrompt(characterAliases: string, chapterText: str
   NARRATOR: řekl John.
   JOHN: „Druhá věta!"
 
-  Now tag this chapter. Output ONLY SPEAKER: text lines. CRITICAL: Split dialogue from attribution - character voice gets ONLY quoted text, NARRATOR gets attribution.
+  Now tag this chapter. Output ONLY speechStyle directive lines (for dialogue) and SPEAKER: text lines. CRITICAL: Split dialogue from attribution - character voice gets ONLY quoted text, NARRATOR gets attribution.
 
   ${chapterText}`;
 }
@@ -370,31 +378,27 @@ export function getVoiceTaggingPrompt(characterAliases: string, chapterText: str
 
 /**
  * Narrator TTS instruction template
- * Format: "Narrate this audiobook as a top voice artist with immersive and expressive style, 
- *          perfectly capturing its genre and reality - {bookInfo lowercase, max 10 words}."
+ * Format: "Narrate as a {VoiceTone} storyteller, with immersive, nuanced delivery and dynamic pacing."
  * 
- * @param bookInfo - Book info object with genre, tone, setting
+ * @param bookInfo - Book info object with genre, tone, voiceTone
  * @returns Formatted narrator instruction string
  */
 export function buildNarratorInstruction(bookInfo: {
   genre?: string;
   tone?: string;
-  setting?: string;
+  voiceTone?: string;
 } | null): string {
-  // Build variable part from bookInfo (lowercase, MAX 10 WORDS total)
-  let variablePart = 'atmospheric fiction in an evocative setting';
-  
-  if (bookInfo) {
-    const { genre, tone, setting } = bookInfo;
-    const parts = [genre, tone, setting].filter(Boolean);
-    if (parts.length > 0) {
-      // Combine, lowercase, and limit to 10 words
-      variablePart = parts.join(', ').toLowerCase().split(/\s+/).slice(0, 10).join(' ');
-    }
-  }
-  
-  // Natural sentence format - bookInfo at the end for cleaner structure
-  return `Narrate this audiobook as a top voice artist with immersive and expressive style, perfectly capturing its genre and reality - ${variablePart}.\n`;
+  const fallbackFromTone = (tone?: string): string | null => {
+    if (!tone) return null;
+    const parts = tone.split(',').map(p => p.trim()).filter(Boolean);
+    if (parts.length === 0) return null;
+    if (parts.length === 1) return parts[0];
+    return `${parts[0]}, ${parts[1]}`;
+  };
+
+  const voiceTone = bookInfo?.voiceTone || fallbackFromTone(bookInfo?.tone) || 'immersive, nuanced';
+  const normalizedVoiceTone = voiceTone.toLowerCase().trim();
+  return `Narrate as a ${normalizedVoiceTone} storyteller, with immersive, nuanced delivery and dynamic pacing.\n`;
 }
 
 // =============================================================================

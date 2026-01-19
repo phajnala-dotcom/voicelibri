@@ -168,6 +168,7 @@ function splitIntoDialogueNarration(content: string): Array<{ type: 'dialogue' |
   // Pattern matches various quote styles BUT NOT ASCII apostrophe (') which is used in contractions
   // Includes: „ (Czech), " (ASCII), "" (curly double), '' (curly single U+2018/U+2019), «» (guillemets)
   const quotePattern = /([„"\u201C\u201D\u2018\u2019«»])([^„"\u201C\u201D\u2018\u2019«»]*?)([„"\u201C\u201D\u2018\u2019«»])/g;
+  const hasPhoneticContent = (text: string): boolean => /[\p{L}\p{N}]/u.test(text);
   
   let lastIndex = 0;
   let match;
@@ -179,8 +180,11 @@ function splitIntoDialogueNarration(content: string): Array<{ type: 'dialogue' |
       segments.push({ type: 'narration', text: beforeQuote });
     }
     
-    // The quote itself is dialogue
-    segments.push({ type: 'dialogue', text: match[0] });
+    // The quote itself is dialogue (discard if it has no phonetic content)
+    const quotedInner = match[2] || '';
+    if (hasPhoneticContent(quotedInner)) {
+      segments.push({ type: 'dialogue', text: match[0] });
+    }
     
     lastIndex = match.index + match[0].length;
   }
@@ -197,6 +201,52 @@ function splitIntoDialogueNarration(content: string): Array<{ type: 'dialogue' |
   }
   
   return segments;
+}
+
+/**
+ * Remove quoted spans that contain no phonetic content.
+ */
+function stripNonPhoneticQuotedText(text: string): string {
+  const quotePattern = /([„"\u201C\u201D\u2018\u2019«»])([^„"\u201C\u201D\u2018\u2019«»]*?)([„"\u201C\u201D\u2018\u2019«»])/g;
+  const hasPhoneticContent = (value: string): boolean => /[\p{L}\p{N}]/u.test(value);
+  return text.replace(quotePattern, (full, _open, inner, _close) => {
+    return hasPhoneticContent(inner) ? full : '';
+  });
+}
+
+/**
+ * Remove speaker lines that only contain non-phonetic quoted text.
+ */
+function removeNonPhoneticQuotedSpeakerLines(taggedDialogues: string): string {
+  const speakerLinePattern = /^([A-Z][A-Z0-9]*):\s*(.*)$/;
+  const hasPhoneticContent = (value: string): boolean => /[\p{L}\p{N}]/u.test(value);
+  const lines = taggedDialogues.split('\n');
+  const cleaned: string[] = [];
+
+  for (const line of lines) {
+    const match = line.match(speakerLinePattern);
+    if (!match) {
+      cleaned.push(line);
+      continue;
+    }
+
+    const speaker = match[1];
+    const rawText = match[2] || '';
+    const strippedText = stripNonPhoneticQuotedText(rawText).trim();
+
+    if (!hasPhoneticContent(strippedText)) {
+      // Drop any preceding directive line for this speaker
+      const prev = cleaned[cleaned.length - 1];
+      if (prev && !speakerLinePattern.test(prev.trim()) && prev.trim().length > 0) {
+        cleaned.pop();
+      }
+      continue;
+    }
+
+    cleaned.push(`${speaker}: ${strippedText}`);
+  }
+
+  return cleaned.join('\n');
 }
 
 /**
@@ -243,6 +293,7 @@ export function applyRuleBasedTagging(
     const mainName = aliasToMainName.get(name.toUpperCase()) || name.toUpperCase();
     return mainNameToTTSAlias.get(mainName) || toTTSSpeakerAlias(name);
   };
+
   
   // Speech verbs (English + Czech)
   const speechVerbs = 'said|asked|replied|answered|shouted|whispered|muttered|exclaimed|thought|wondered|pondered|mused|realized|called|cried|yelled|screamed|murmured|demanded|inquired|responded|suggested|added|continued|began|started|finished|concluded|agreed|disagreed|argued|explained|announced|declared|stated|mentioned|noted|observed|remarked|commented|repeated|echoed|insisted|urged|warned|promised|admitted|confessed|denied|lied|joked|laughed|sighed|groaned|moaned|gasped|breathed|hissed|growled|snarled|snapped|barked|roared|bellowed|boomed|thundered|smiled|grinned|frowned|nodded|shrugged|cleared|řekl|řekla|zvolal|zvolala|poznamenal|poznamenala|odpověděl|odpověděla|prohlásil|prohlásila|dodal|dodala|podotkl|podotkla|zeptal|zeptala|pomyslel|pomyslela|uvažoval|uvažovala|přemýšlel|přemýšlela|zavolal|zavolala|křikl|křikla|zašeptal|zašeptala|zabručel|zabručela|zasmál|zasmála|povzdechl|povzdechla|zasténal|zasténala|zaúpěl|zaúpěla';
@@ -567,7 +618,7 @@ export function mergeWithNarration(
   if (speakerLineCount > 1) {
     // Properly tagged with multiple speakers
     console.log(`  [mergeWithNarration] LLM returned ${speakerLineCount} SPEAKER: lines - returning as-is`);
-    return taggedDialogues.trim();
+    return removeNonPhoneticQuotedSpeakerLines(taggedDialogues.trim());
   }
   
   // Fallback: wrap everything in NARRATOR

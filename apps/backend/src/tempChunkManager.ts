@@ -434,11 +434,11 @@ function getLanguageForSingleWord(text: string): string | undefined {
 */
 
 /**
- * Look up speech style for a speaker from the global CharacterRegistry
- * Returns TTS instruction as natural sentence (same format for narrator and characters)
+ * Look up role for a speaker from the global CharacterRegistry
+ * Returns role text (same format for narrator and characters)
  * 
  * @param speaker - Speaker name from voice tag (e.g., "JOSEPH_RAGOWSKI" or "NARRATOR")
- * @returns Speech style instruction as natural sentence with action verb, or undefined
+ * @returns Role text, or undefined
  */
 function lookupSpeechStyle(speaker: string): string | undefined {
   const registry = (global as any).CHARACTER_REGISTRY;
@@ -476,6 +476,14 @@ function lookupSpeechStyle(speaker: string): string | undefined {
     if (surnameStyle) return surnameStyle;
   }
   
+  return undefined;
+}
+
+function buildFallbackSpeechStyle(speaker: string): string | undefined {
+  const registry = (global as any).CHARACTER_REGISTRY;
+  if (speaker === 'NARRATOR') {
+    return registry?.getNarratorInstruction?.();
+  }
   return undefined;
 }
 
@@ -549,16 +557,27 @@ export async function generateAndSaveTempChunk(
     taggedTextToPersist = chunkText;
     // CRITICAL: Gemini TTS multi-speaker requires EXACTLY 2 speakers
     if (uniqueSpeakers.length === 1) {
-      // Only 1 speaker - use single-voice synthesis
+      // Only 1 speaker - preserve per-segment speechStyle when present
       const speaker = uniqueSpeakers[0];
       const voice = lookupVoice(speaker, voiceMap, defaultVoice);
       console.log(`  📢 Single speaker chunk: ${speaker} → ${voice}`);
-      
-      // Concatenate all segment texts (they're all from the same speaker)
-      const combinedText = voiceSegments.map(s => s.text).join(' ');
-      const speechStyle = lookupSpeechStyle(speaker);
-      // Language forcing disabled - TTS auto-detects (no speech style for short texts)
-      audioBuffer = await synthesizeText(combinedText, voice, 'normal', speechStyle, undefined);
+
+      const hasSegmentStyles = voiceSegments.some(s => s.speechStyle);
+      if (hasSegmentStyles) {
+        const audioBuffers: Buffer[] = [];
+        for (const seg of voiceSegments) {
+          const speechStyle = seg.speechStyle || buildFallbackSpeechStyle(seg.speaker);
+          const segAudio = await synthesizeText(seg.text, voice, 'normal', speechStyle, undefined);
+          audioBuffers.push(segAudio);
+        }
+        audioBuffer = concatenateWavBuffers(audioBuffers);
+        console.log(`  ✓ Generated and concatenated ${audioBuffers.length} single-speaker segments`);
+      } else {
+        // Concatenate all segment texts (they're all from the same speaker)
+        const combinedText = voiceSegments.map(s => s.text).join(' ');
+        const speechStyle = buildFallbackSpeechStyle(speaker);
+        audioBuffer = await synthesizeText(combinedText, voice, 'normal', speechStyle, undefined);
+      }
       
     } else {
       // BYPASS TEST: Force single-speaker TTS for all segments (PART 1: pre-tagged chunks)
@@ -567,7 +586,7 @@ export async function generateAndSaveTempChunk(
       
       for (const seg of voiceSegments) {
         const voice = lookupVoice(seg.speaker, voiceMap, defaultVoice);
-        const speechStyle = lookupSpeechStyle(seg.speaker);
+        const speechStyle = seg.speechStyle || buildFallbackSpeechStyle(seg.speaker);
         // Language forcing disabled - TTS auto-detects (no speech style for short texts)
         const segAudio = await synthesizeText(seg.text, voice, 'normal', speechStyle, undefined);
         audioBuffers.push(segAudio);
@@ -669,7 +688,7 @@ export async function generateAndSaveTempChunk(
         
         for (const seg of dramatizedSegments) {
           const voice = lookupVoice(seg.speaker, voiceMap, defaultVoice);
-          const speechStyle = lookupSpeechStyle(seg.speaker);
+          const speechStyle = seg.speechStyle || buildFallbackSpeechStyle(seg.speaker);
           // Language forcing disabled - TTS auto-detects (no speech style for short texts)
           const segAudio = await synthesizeText(seg.text, voice, 'normal', speechStyle, undefined);
           audioBuffers.push(segAudio);

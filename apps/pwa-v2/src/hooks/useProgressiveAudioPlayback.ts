@@ -106,7 +106,7 @@ export function useProgressiveAudioPlayback() {
       const newSubChunk = usePlayerStore.getState().currentSubChunk;
       if (newSubChunk) {
         console.log(`▶️ Playing next subchunk: ${newSubChunk.chapterIndex}:${newSubChunk.subChunkIndex}`);
-        await loadSubChunkAudio(newSubChunk.chapterIndex, newSubChunk.subChunkIndex);
+        await loadSubChunkAudio(newSubChunk.chapterIndex, newSubChunk.subChunkIndex, { autoPlay: true });
       }
     } else {
       // No more subchunks, check if next chapter is ready
@@ -120,7 +120,7 @@ export function useProgressiveAudioPlayback() {
           console.log(`⏳ Waiting for chapter ${nextChapterIndex} to be ready...`);
           // Wait and try playing first subchunk of next chapter
           setCurrentSubChunk({ chapterIndex: nextChapterIndex, subChunkIndex: 0 });
-          await loadSubChunkAudio(nextChapterIndex, 0);
+          await loadSubChunkAudio(nextChapterIndex, 0, { autoPlay: true });
         }
       } else {
         console.log('📚 Audiobook finished!');
@@ -146,16 +146,24 @@ export function useProgressiveAudioPlayback() {
   }, [currentBook, currentChapter, setPlaybackState]);
 
   // Load subchunk audio with real-time streaming
-  const loadSubChunkAudio = useCallback(async (chapterIndex: number, subChunkIndex: number) => {
+  const loadSubChunkAudio = useCallback(async (
+    chapterIndex: number,
+    subChunkIndex: number,
+    options: { autoPlay?: boolean } = {}
+  ) => {
     if (!currentBook || !audioRef.current) return;
+    const autoPlay = options.autoPlay ?? (playbackState === 'playing');
     
     const cacheKey = `${currentBook.title}-subchunk-${chapterIndex}-${subChunkIndex}`;
     
     // Check cache first
     if (audioCacheRef.current[cacheKey]) {
       audioRef.current.src = audioCacheRef.current[cacheKey];
-      if (playbackState === 'playing') {
-        audioRef.current.play();
+      if (autoPlay) {
+        audioRef.current.play().catch(err => {
+          console.error('Failed to play cached subchunk:', err);
+          setPlaybackState('error');
+        });
       }
       return;
     }
@@ -181,9 +189,14 @@ export function useProgressiveAudioPlayback() {
       // Load and play
       audioRef.current.src = blobUrl;
       
-      if (playbackState === 'loading') {
+      if (autoPlay) {
         setPlaybackState('playing');
-        audioRef.current.play();
+        audioRef.current.play().catch(err => {
+          console.error('Failed to play subchunk:', err);
+          setPlaybackState('error');
+        });
+      } else {
+        setPlaybackState('paused');
       }
       
     } catch (error) {
@@ -276,7 +289,7 @@ export function useProgressiveAudioPlayback() {
       } else {
         // No source loaded, start playback
         if (playbackMode === 'progressive' && currentSubChunk) {
-          loadSubChunkAudio(currentSubChunk.chapterIndex, currentSubChunk.subChunkIndex);
+          loadSubChunkAudio(currentSubChunk.chapterIndex, currentSubChunk.subChunkIndex, { autoPlay: true });
         } else if (playbackMode === 'chapters' && currentChapter) {
           loadChapterAudio(currentChapter.index);
         }
@@ -302,7 +315,7 @@ export function useProgressiveAudioPlayback() {
         if (response.ok) {
           console.log('✅ First subchunk is ready, starting playback');
           setCurrentSubChunk(startSubChunk);
-          await loadSubChunkAudio(startSubChunk.chapterIndex, startSubChunk.subChunkIndex);
+          await loadSubChunkAudio(startSubChunk.chapterIndex, startSubChunk.subChunkIndex, { autoPlay: true });
           break;
         }
       } catch (error) {

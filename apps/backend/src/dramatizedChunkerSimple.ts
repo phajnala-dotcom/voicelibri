@@ -30,6 +30,7 @@ export interface VoiceSegment {
   text: string;
   startIndex: number;
   endIndex: number;
+  speechStyle?: string;
 }
 
 /**
@@ -76,10 +77,16 @@ export function extractVoiceSegments(text: string): VoiceSegment[] {
   let currentText: string[] = [];
   let startIndex = 0;
   let currentLineStart = 0;
+  let pendingSpeechStyle: string | undefined;
+  let currentSpeechStyle: string | undefined;
   
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const speakerMatch = line.match(speakerLinePattern);
+    const trimmedLine = line.trim();
+    const nextLine = i + 1 < lines.length ? lines[i + 1] : '';
+    const nextIsSpeaker = speakerLinePattern.test(nextLine);
+    const isDirectiveLine = !speakerMatch && trimmedLine.length > 0 && trimmedLine !== 'NARRATOR:' && nextIsSpeaker;
     
     if (speakerMatch) {
       // Save previous segment if exists
@@ -90,15 +97,35 @@ export function extractVoiceSegments(text: string): VoiceSegment[] {
             speaker: currentSpeaker,
             text: segmentText,
             startIndex,
-            endIndex: currentLineStart
+            endIndex: currentLineStart,
+            speechStyle: currentSpeechStyle
           });
         }
       }
-      
+
       // Start new segment with speaker from this line
       currentSpeaker = speakerMatch[1];
-      currentText = [speakerMatch[2]]; // Text after "SPEAKER: "
+      let speakerText = speakerMatch[2];
+
+      // If a directive is appended to the end of the speaker line and the next line
+      // starts with a SPEAKER tag, extract it and apply to the next segment.
+      if (nextIsSpeaker) {
+        const appendedDirectiveMatch = speakerText.match(/^(.*?)(\s+[A-Z][a-z]+\s+as\s+[^\n]+)$/);
+        if (appendedDirectiveMatch) {
+          speakerText = appendedDirectiveMatch[1].trim();
+          pendingSpeechStyle = appendedDirectiveMatch[2].trim();
+        }
+      }
+
+      currentText = [speakerText]; // Text after "SPEAKER: " (without appended directive)
       startIndex = currentLineStart;
+      currentSpeechStyle = pendingSpeechStyle;
+      pendingSpeechStyle = undefined;
+    } else if (isDirectiveLine) {
+      // Directive line before a speaker line
+      pendingSpeechStyle = trimmedLine.replace(/:\s*$/, '').trim();
+      currentLineStart += line.length + 1;
+      continue;
     } else if (currentSpeaker && line.trim()) {
       // Continuation line - append to current segment
       currentText.push(line.trim());
@@ -115,12 +142,72 @@ export function extractVoiceSegments(text: string): VoiceSegment[] {
         speaker: currentSpeaker,
         text: segmentText,
         startIndex,
-        endIndex: currentLineStart
+        endIndex: currentLineStart,
+        speechStyle: currentSpeechStyle
       });
     }
   }
-  
-  return segments;
+
+  return mergeInterruptedDialogueFragments(segments);
+}
+
+const ATTRIBUTION_VERBS = new Set([
+  'said', 'asked', 'replied', 'answered', 'whispered', 'muttered', 'exclaimed', 'thought', 'wondered',
+  'remarked', 'commented', 'added', 'continued', 'began', 'started', 'finished', 'declared', 'stated',
+  'mentioned', 'noted', 'observed', 'insisted', 'urged', 'warned', 'promised', 'admitted', 'denied',
+  'řekl', 'řekla', 'zvolal', 'zvolala', 'poznamenal', 'poznamenala', 'odpověděl', 'odpověděla',
+  'prohlásil', 'prohlásila', 'dodal', 'dodala', 'podotkl', 'podotkla', 'zeptal', 'zeptala',
+  'pomyslel', 'pomyslela', 'uvažoval', 'uvažovala', 'přemýšlel', 'přemýšlela', 'zavolal', 'zavolala',
+  'křikl', 'křikla', 'zašeptal', 'zašeptala', 'zabručel', 'zabručela'
+]);
+
+function isAttributionWordOnly(text: string): boolean {
+  const cleaned = text.replace(/[.,!?"“”„'’\-–—]+/g, ' ').trim().toLowerCase();
+  if (!cleaned) return false;
+  const tokens = cleaned.split(/\s+/).filter(Boolean);
+  return tokens.length === 1 && ATTRIBUTION_VERBS.has(tokens[0]);
+}
+
+function mergeInterruptedDialogueFragments(segments: VoiceSegment[]): VoiceSegment[] {
+  const merged: VoiceSegment[] = [];
+  let i = 0;
+
+  while (i < segments.length) {
+    const current = segments[i];
+    const next = segments[i + 1];
+    const nextNext = segments[i + 2];
+
+    if (current && next && nextNext && next.speaker === 'NARRATOR') {
+      const fragment = next.text.trim();
+      const hasSentenceEnd = /[.!?]/.test(fragment);
+      if (!hasSentenceEnd || isAttributionWordOnly(fragment)) {
+        if (current.speaker === nextNext.speaker) {
+          const combinedText = mergeSpeakerQuotes(current.text, nextNext.text);
+          merged.push({
+            speaker: current.speaker,
+            text: combinedText,
+            startIndex: current.startIndex,
+            endIndex: nextNext.endIndex,
+            speechStyle: current.speechStyle ?? nextNext.speechStyle
+          });
+        } else {
+          merged.push(current, nextNext);
+        }
+        i += 3;
+        continue;
+      }
+    }
+
+    merged.push(current);
+    i += 1;
+  }
+
+  return merged;
+}
+
+function mergeSpeakerQuotes(left: string, right: string): string {
+  const combined = `${left} ${right}`.replace(/["“”„]/g, ' ');
+  return combined.replace(/\s+/g, ' ').trim();
 }
 
 /**
@@ -148,9 +235,12 @@ export function removeVoiceTags(text: string): string {
   return text
     .split('\n')
     .map(line => {
-      const match = line.match(/^[A-Z][A-Z0-9]*: (.+)$/);
-      return match ? match[1] : line;
+      const speakerMatch = line.match(/^[A-Z][A-Z0-9]*: (.+)$/);
+      if (speakerMatch) return speakerMatch[1];
+      if (/^.+:\s*$/.test(line.trim())) return '';
+      return line;
     })
+    .filter(line => line.trim().length > 0)
     .join('\n')
     .trim();
 }

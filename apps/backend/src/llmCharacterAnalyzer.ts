@@ -402,82 +402,17 @@ ${cleanedText.substring(0, 250000)}`;
         return `- ${alias} (original: ${c.name}, ${c.gender})`;
       })
       .join('\n');
-    
-    const prompt = `You are tagging text for Gemini TTS multi-speaker synthesis. Format: SPEAKER: text on same line.
 
-  SPEAKER ALIASES (use EXACTLY as shown):
-  ${characterAliases}
+    const characterRoles = characters
+      .filter(c => c.name !== 'NARRATOR')
+      .map(c => {
+        const alias = toTTSSpeakerAlias(c.name);
+        const role = (c.role || 'unknown person').toLowerCase();
+        return `- ${alias} → ${role}`;
+      })
+      .join('\n');
 
-  CRITICAL RULES - DIALOGUE VS NARRATOR:
-  1. CHARACTER voice = ONLY the quoted speech itself (text inside „..." or "..." quotes)
-  2. NARRATOR voice = EVERYTHING ELSE including:
-     - Scene descriptions and actions
-     - Dialogue ATTRIBUTION phrases ("said", "began", "whispered", "replied", "zvolal", "řekla")
-     - Text AFTER the quote describing how it was said
-     - Parenthetical or descriptive text before/after a quote
-  3. ALWAYS SPLIT when a sentence has dialogue AND attribution - NEVER combine them!
-  4. NEVER repeat quoted text in NARRATOR lines. The quote must appear only once, as the character.
-  5. Consecutive narration sentences must be grouped into a single NARRATOR line unless interrupted by dialogue.
-
-  SPEAKER ALIAS FORMAT:
-  - ALL CAPS, alphanumeric only (A-Z, 0-9)
-  - NO spaces, underscores, or diacritics
-  - Use aliases from list above EXACTLY
-
-  OUTPUT: Each line = SPEAKER: text (one speaker per line)
-
-  EXAMPLES - English:
-
-  EXAMPLE 1 - Quote with attribution and parenthesis:
-  INPUT: Mrs. Dursley had a perfectly nice, ordinary day. Over dinner, she told her husband about the neighbour's wife's problems with her daughter, and about Dudley learning a new word ("I won't!").
-  CORRECT OUTPUT:
-  NARRATOR: Mrs. Dursley had a perfectly nice, ordinary day. Over dinner, she told her husband about the neighbour's wife's problems with her daughter, and about Dudley learning a new word (
-  DUDLEY: "I won't!"
-  NARRATOR: ).
-
-  EXAMPLE 2 - Quote with attribution MUST be split:
-  INPUT: "Well," began the second presenter, "I don't know about that."
-  CORRECT OUTPUT:
-  THESECONDPRESENTER: "Well,"
-  NARRATOR: began the second presenter,
-  THESECONDPRESENTER: "I don't know about that."
-
-  EXAMPLE 3 - Attribution before quote:
-  INPUT: John said, "Hello there!"
-  CORRECT OUTPUT:
-  NARRATOR: John said,
-  JOHN: "Hello there!"
-
-  EXAMPLE 4 - Description with speaker name:
-  INPUT: "Look at this," the presenter smiled.
-  CORRECT OUTPUT:
-  THEPRESENTER: "Look at this,"
-  NARRATOR: the presenter smiled.
-
-  EXAMPLE 5 - Grouping consecutive narration:
-  INPUT: Mr. Dursley sat frozen in his armchair. Shooting stars? Owls flying by day? Mysterious people in cloaks? And they were whispering about the Potters...
-  Mrs. Dursley came into the living room with two cups of tea. There was nothing for it. 
-  CORRECT OUTPUT:
-  NARRATOR: Mr. Dursley sat frozen in his armchair. Shooting stars all? Owls flying by day? Mysterious people in cloaks? And they were whispering about the Potters... Mrs. Dursley came into the living room with two cups of tea. There was nothing for it.
-
-  EXAMPLES - Czech:
-
-  EXAMPLE 6 - Attribution AFTER quote:
-  INPUT: „Jen se podívejte," zvolal, zatímco si prohlížel mágů.
-  OUTPUT:
-  JOSEPHRAGOWSKI: „Jen se podívejte,"
-  NARRATOR: zvolal, zatímco si prohlížel mágů.
-
-  EXAMPLE 7 - Multiple quotes:
-  INPUT: „První věta," řekl John. „Druhá věta!"
-  OUTPUT:
-  JOHN: „První věta,"
-  NARRATOR: řekl John.
-  JOHN: „Druhá věta!"
-
-  Now tag this chapter. Output ONLY SPEAKER: text lines. CRITICAL: Split dialogue from attribution - character voice gets ONLY quoted text, NARRATOR gets attribution.
-
-  ${chapterText}`;
+    const prompt = getVoiceTaggingPrompt(characterAliases, characterRoles, chapterText);
     
     try {
       const taggedText = await this.callGemini(prompt);
@@ -487,8 +422,7 @@ ${cleanedText.substring(0, 250000)}`;
       if (cleaned.startsWith('```')) {
         cleaned = cleaned.replace(/^```[a-z]*\s*/, '').replace(/\s*```$/, '');
       }
-      
-      // Debug: Log first 500 chars of tagged text to verify tagging
+
       console.log(`  📝 Tagged output preview: ${cleaned.substring(0, 500)}...`);
       console.log(`  ✅ Chapter tagged`);
       return cleaned;

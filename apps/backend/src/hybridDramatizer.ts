@@ -86,21 +86,15 @@ export async function tagChapterHybrid(
   const finalConfidence = calculateConfidence(ruleBasedTagged, characters);
   console.log(`📊 Rule-based confidence: ${(finalConfidence * 100).toFixed(1)}%`);
   
-  // High confidence → Use rule-based
+  // High confidence → Use rule-based only if speechStyle directives are not required
   if (finalConfidence >= confidenceThreshold) {
     console.log(`✅ Chapter ${chapterNumber}: Rule-based tagging successful (confidence ${(finalConfidence * 100).toFixed(1)}%)`);
-    
-    return {
-      taggedText: ruleBasedTagged,
-      method: 'rule-based',
-      confidence: finalConfidence,
-      dialogueCount,
-      cost: 0,
-    };
+    console.log(`🔁 Chapter ${chapterNumber}: Forcing LLM tagging to generate speechStyle directives`);
+  } else {
+    console.log(`🤖 Chapter ${chapterNumber}: Low confidence → LLM fallback on dialogue paragraphs`);
   }
   
   // Strategy 3: LLM fallback (dialogue paragraphs only)
-  console.log(`🤖 Chapter ${chapterNumber}: Low confidence → LLM fallback on dialogue paragraphs`);
   
   // Extract only paragraphs with dialogue
   const dialogueParagraphs = extractDialogueParagraphs(chapterText);
