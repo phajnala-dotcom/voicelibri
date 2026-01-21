@@ -61,6 +61,7 @@ import {
   deleteAudiobook,
   type AudiobookMetadata,
 } from './audiobookManager.js';
+import { resolveChapterAudioPath } from './soundscapeIntegration.js';
 import { 
   extractEpubChapters, 
   detectTextChapters, 
@@ -2772,15 +2773,16 @@ app.get('/api/audiobooks/:bookTitle/chapters/:chapterIndex', (req: Request, res:
   try {
     const { bookTitle, chapterIndex } = req.params;
     const chapterPath = getChapterPath(bookTitle, parseInt(chapterIndex));
+    const resolvedPath = resolveChapterAudioPath(chapterPath);
     
-    if (!fs.existsSync(chapterPath)) {
+    if (!fs.existsSync(resolvedPath)) {
       return res.status(404).json({
         error: 'Chapter not found',
         message: `Chapter ${chapterIndex} not yet generated`,
       });
     }
     
-    res.sendFile(path.resolve(chapterPath));
+    res.sendFile(path.resolve(resolvedPath));
   } catch (error) {
     console.error('✗ Error serving chapter:', error);
     res.status(500).json({

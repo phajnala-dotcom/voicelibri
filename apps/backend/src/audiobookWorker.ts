@@ -27,6 +27,7 @@ import {
 } from './audiobookManager.js';
 import { Chapter } from './bookChunker.js';
 import { ChunkInfo } from './chapterChunker.js';
+import { applySoundscapeToChapter } from './soundscapeIntegration.js';
 
 // ========================================
 // Worker State & Queue
@@ -257,12 +258,19 @@ class AudiobookGenerationWorker extends EventEmitter {
   ): Promise<void> {
     // Build chapter-to-chunks mapping
     const chapterChunks = new Map<number, number[]>();
+    const chapterTextMap = new Map<number, string>();
 
     for (const chunk of chunks) {
       if (!chapterChunks.has(chunk.chapterIndex)) {
         chapterChunks.set(chunk.chapterIndex, []);
       }
       chapterChunks.get(chunk.chapterIndex)!.push(chunk.globalChunkIndex);
+
+      const existingText = chapterTextMap.get(chunk.chapterIndex) ?? '';
+      chapterTextMap.set(
+        chunk.chapterIndex,
+        existingText ? `${existingText}\n${chunk.text}` : chunk.text
+      );
     }
 
     console.log(`\n📦 Consolidating ${chapterChunks.size} chapters...`);
@@ -274,7 +282,14 @@ class AudiobookGenerationWorker extends EventEmitter {
     for (const [chapterIndex, chunkIndices] of chapterChunks.entries()) {
       try {
         console.log(`  Consolidating chapter ${chapterIndex}: ${chunkIndices.length} chunks (${chunkIndices.join(', ')})`);
-        await consolidateChapterFromTemps(bookTitle, chapterIndex, chunkIndices);
+        const chapterPath = await consolidateChapterFromTemps(bookTitle, chapterIndex, chunkIndices);
+        const chapterText = chapterTextMap.get(chapterIndex) ?? '';
+        await applySoundscapeToChapter({
+          bookTitle,
+          chapterIndex,
+          chapterPath,
+          chapterText,
+        });
         consolidatedCount++;
         this.updateProgress(bookTitle, { chaptersConsolidated: consolidatedCount });
         console.log(`  ✓ Chapter ${chapterIndex} consolidated (${consolidatedCount}/${chapterChunks.size})`);
