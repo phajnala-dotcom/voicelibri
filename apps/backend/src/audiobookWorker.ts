@@ -284,11 +284,13 @@ class AudiobookGenerationWorker extends EventEmitter {
         console.log(`  Consolidating chapter ${chapterIndex}: ${chunkIndices.length} chunks (${chunkIndices.join(', ')})`);
         const chapterPath = await consolidateChapterFromTemps(bookTitle, chapterIndex, chunkIndices);
         const chapterText = chapterTextMap.get(chapterIndex) ?? '';
+        const metadata = loadAudiobookMetadata(bookTitle);
         await applySoundscapeToChapter({
           bookTitle,
           chapterIndex,
           chapterPath,
           chapterText,
+          preferences: metadata?.userPreferences,
         });
         consolidatedCount++;
         this.updateProgress(bookTitle, { chaptersConsolidated: consolidatedCount });

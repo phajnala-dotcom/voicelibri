@@ -11,7 +11,7 @@
         "calm"
       ],
       "recommendedVolumeDb": -24,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\forest_ambience_03.wav"
+      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\forest_ambience_03.mp3"
     },
     {
       "id": "forest_cicada_loop",
@@ -24,7 +24,7 @@
         "calm"
       ],
       "recommendedVolumeDb": -24,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\forest_cicada_loop.flac"
+      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\forest_cicada_loop.mp3"
     },
     {
       "id": "rain_ambience",
@@ -36,7 +36,7 @@
         "calm"
       ],
       "recommendedVolumeDb": -26,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\rain_ambience.wav"
+      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\rain_ambience.mp3"
     },
     {
       "id": "wind_in_trees",
@@ -49,7 +49,7 @@
         "calm"
       ],
       "recommendedVolumeDb": -24,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\wind_in_trees.wav"
+      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\wind_in_trees.mp3"
     },
     {
       "id": "city_ambience",
@@ -62,7 +62,7 @@
         "busy"
       ],
       "recommendedVolumeDb": -26,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\city_ambience.wav"
+      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\city_ambience.mp3"
     },
     {
       "id": "roomtone_bedroom",
@@ -86,7 +86,7 @@
         "technical"
       ],
       "recommendedVolumeDb": -26,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\sci_fi_ambient_drone.wav"
+      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\sci_fi_ambient_drone.mp3"
     },
     {
       "id": "sci_fi_drone_engine",
@@ -98,7 +98,7 @@
         "technical"
       ],
       "recommendedVolumeDb": -26,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\sci_fi_drone_engine.wav"
+      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\sci_fi_drone_engine.mp3"
     },
     {
       "id": "cretaceous_dawn",
@@ -147,7 +147,7 @@
         "tense"
       ],
       "recommendedVolumeDb": -26,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\christmas_eve_thunderstorm.wav"
+      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\christmas_eve_thunderstorm.mp3"
     },
     {
       "id": "under_an_umbrella",
@@ -159,7 +159,7 @@
         "calm"
       ],
       "recommendedVolumeDb": -26,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\under_an_umbrella.wav"
+      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\under_an_umbrella.mp3"
     },
     {
       "id": "wind_multiple_recs",
@@ -171,7 +171,7 @@
         "calm"
       ],
       "recommendedVolumeDb": -26,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\wind_multiple_recs.wav"
+      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\wind_multiple_recs.mp3"
     },
     {
       "id": "wind_loop",
@@ -183,7 +183,7 @@
         "calm"
       ],
       "recommendedVolumeDb": -26,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\wind_loop.wav"
+      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\wind_loop.mp3"
     },
     {
       "id": "sea_waves_pier",
@@ -195,7 +195,7 @@
         "calm"
       ],
       "recommendedVolumeDb": -26,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\sea_waves_pier.wav"
+      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\sea_waves_pier.mp3"
     },
     {
       "id": "heavy_seawaves",
@@ -208,7 +208,7 @@
         "tense"
       ],
       "recommendedVolumeDb": -26,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\heavy_seawaves.wav"
+      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\heavy_seawaves.mp3"
     },
     {
       "id": "distant_birds",
@@ -221,7 +221,7 @@
         "calm"
       ],
       "recommendedVolumeDb": -24,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\distant_birds.wav"
+      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\distant_birds.mp3"
     },
     {
       "id": "forest_tone",
@@ -246,7 +246,7 @@
         "busy"
       ],
       "recommendedVolumeDb": -28,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\hanoi_old_town.m4a"
+      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\hanoi_old_town.mp3"
     },
     {
       "id": "city_of_ghent",
@@ -259,7 +259,7 @@
         "busy"
       ],
       "recommendedVolumeDb": -28,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\city_of_ghent.wav"
+      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\city_of_ghent.mp3"
     },
     {
       "id": "lichfield_library",
@@ -271,7 +271,7 @@
         "neutral"
       ],
       "recommendedVolumeDb": -30,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\lichfield_library.wav"
+      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\lichfield_library.mp3"
     },
     {
       "id": "interior_wind_window",
@@ -284,7 +284,7 @@
         "neutral"
       ],
       "recommendedVolumeDb": -28,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\interior_wind_window.wav"
+      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\interior_wind_window.mp3"
     },
     {
       "id": "campfire_rockymountains",
@@ -296,7 +296,7 @@
         "calm"
       ],
       "recommendedVolumeDb": -28,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\campfire_rockymountains.wav"
+      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\campfire_rockymountains.mp3"
     },
     {
       "id": "wind_ambient_2",
@@ -309,7 +309,7 @@
         "eerie"
       ],
       "recommendedVolumeDb": -30,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\wind_ambient_2.wav"
+      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\wind_ambient_2.mp3"
     },
     {
       "id": "dark_ambient",
@@ -321,7 +321,7 @@
         "eerie"
       ],
       "recommendedVolumeDb": -30,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\dark_ambient.wav"
+      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\dark_ambient.mp3"
     },
     {
       "id": "mines_a_pint",
@@ -334,7 +334,7 @@
         "busy"
       ],
       "recommendedVolumeDb": -28,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\mines_a_pint.wav"
+      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\mines_a_pint.mp3"
     },
     {
       "id": "kazan_cathedral",
@@ -347,7 +347,7 @@
         "neutral"
       ],
       "recommendedVolumeDb": -30,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\kazan_cathedral.wav"
+      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\kazan_cathedral.mp3"
     },
     {
       "id": "dentaneosuchus_hunt",
@@ -372,18 +372,6 @@
       ],
       "recommendedVolumeDb": -14,
       "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\sergios_magic_dustbin.mp3"
-    },
-    {
-      "id": "mesmerizing_galaxy",
-      "type": "music",
-      "genre": [
-        "sciFi"
-      ],
-      "mood": [
-        "mysterious"
-      ],
-      "recommendedVolumeDb": -14,
-      "filePath": "C:\\Users\\hajna\\VoiceLibri\\soundscape\\assets\\mesmerizing_galaxy.mp3"
     },
     {
       "id": "galactic_rap",

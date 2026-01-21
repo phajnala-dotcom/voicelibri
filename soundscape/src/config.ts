@@ -9,7 +9,7 @@ export interface SoundscapeConfig {
 export const DEFAULT_SOUNDSCAPE_CONFIG: SoundscapeConfig = {
   enableAmbient: true,
   enableMusicIntro: true,
-  defaultAmbientDb: -24,
+  defaultAmbientDb: -6,
   defaultFadeInMs: 1500,
   defaultFadeOutMs: 2000,
 };

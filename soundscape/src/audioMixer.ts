@@ -14,13 +14,12 @@ export function buildMixCommand(
 ): string[] {
   const ambientDb = options.ambientDb ?? -24;
   const fadeIn = (options.fadeInMs ?? 1500) / 1000;
-  const fadeOut = (options.fadeOutMs ?? 2000) / 1000;
   return [
     '-i', speechPath,
     '-stream_loop', '-1', '-i', ambientPath,
     '-filter_complex',
-    `[1:a]volume=${ambientDb}dB,afade=t=in:st=0:d=${fadeIn}[amb];` +
-      `[0:a][amb]amix=inputs=2:duration=first:dropout_transition=2,afade=t=out:st=0:d=${fadeOut}`,
+    `[1:a]loudnorm=I=-35:TP=-2:LRA=11,volume=${ambientDb}dB,afade=t=in:st=0:d=${fadeIn}[amb];` +
+      `[0:a][amb]amix=inputs=2:duration=first:dropout_transition=2`,
     outputPath,
   ];
 }

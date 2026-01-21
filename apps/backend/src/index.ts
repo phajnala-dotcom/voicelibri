@@ -61,14 +61,14 @@ import {
   deleteAudiobook,
   type AudiobookMetadata,
 } from './audiobookManager.js';
-import { resolveChapterAudioPath } from './soundscapeIntegration.js';
+import { resolveChapterAudioPath, getSoundscapeThemeOptions, applySoundscapeToChapter } from './soundscapeIntegration.js';
 import { 
   extractEpubChapters, 
   detectTextChapters, 
   createSingleChapter,
   type Chapter 
 } from './bookChunker.js';
-import { type ChunkInfo } from './chapterChunker.js';
+import { chunkBookByChapters, type ChunkInfo } from './chapterChunker.js';
 import { chunkForTwoSpeakers, type TwoSpeakerChunk } from './twoSpeakerChunker.js';
 import { tagChapterHybrid } from './hybridDramatizer.js';
 import { GeminiConfig, CharacterProfile } from './llmCharacterAnalyzer.js';
@@ -136,6 +136,26 @@ let TOTAL_SUBCHUNKS: number = 0;
 // LOCK: Chapter dramatization - prevents duplicate dramatization calls
 // Map: chapterNum (1-based) -> Promise that resolves when dramatization completes
 const CHAPTER_DRAMATIZATION_LOCK: Map<number, Promise<TwoSpeakerChunk[]>> = new Map();
+
+async function applySoundscapeForChapter(
+  bookTitle: string,
+  chapterNum: number,
+  chapterPath: string
+): Promise<void> {
+  try {
+    const metadata = loadAudiobookMetadata(bookTitle);
+    const chapterText = CHAPTER_DRAMATIZED.get(chapterNum) ?? BOOK_CHAPTERS[chapterNum]?.text ?? '';
+    await applySoundscapeToChapter({
+      bookTitle,
+      chapterIndex: chapterNum,
+      chapterPath,
+      chapterText,
+      preferences: metadata?.userPreferences,
+    });
+  } catch (error) {
+    console.error(`  ⚠️ Soundscape mix failed for chapter ${chapterNum}:`, error);
+  }
+}
 
 // NEW: Chapter playback tracking (for cleanup)
 // Map: chapterNum (1-based) -> Set of played sub-chunk indices
@@ -1078,7 +1098,8 @@ async function startBackgroundDramatization(
           try {
             const chapterTitle = BOOK_CHAPTERS[chapterNum]?.title;
             const bookTitle = sanitizeBookTitle(BOOK_METADATA?.title || CURRENT_BOOK_FILE || 'Unknown');
-            await consolidateChapterFromSubChunks(bookTitle, chapterNum, chapterTitle);
+            const chapterPath = await consolidateChapterFromSubChunks(bookTitle, chapterNum, chapterTitle);
+            await applySoundscapeForChapter(bookTitle, chapterNum, chapterPath);
             console.log(`   📦 Chapter ${chapterNum} consolidated successfully`);
             // NOTE: Sub-chunks are NOT deleted here - they are kept for playback
             // Cleanup happens via trackSubChunkPlayed() after chapter is fully played
@@ -1142,7 +1163,8 @@ async function startBackgroundDramatization(
           try {
             const chapterTitle = BOOK_CHAPTERS[chapterNum]?.title;
             const bookTitle = sanitizeBookTitle(BOOK_METADATA?.title || CURRENT_BOOK_FILE || 'Unknown');
-            await consolidateChapterFromSubChunks(bookTitle, chapterNum, chapterTitle);
+            const chapterPath = await consolidateChapterFromSubChunks(bookTitle, chapterNum, chapterTitle);
+            await applySoundscapeForChapter(bookTitle, chapterNum, chapterPath);
             console.log(`   📦 Chapter ${chapterNum} consolidated (fallback) successfully`);
             // NOTE: Sub-chunks are NOT deleted here - they are kept for playback
             // Cleanup happens via trackSubChunkPlayed() after chapter is fully played
@@ -1238,7 +1260,8 @@ async function checkAndConsolidateReadyChapters(bookTitle: string): Promise<void
       console.log(`📦 Chapter ${chapterNum}/${chapterCount} ready: "${chapter.title}" (${subChunks.length} sub-chunks)`);
       
       try {
-        await consolidateChapterFromSubChunks(bookTitle, chapterNum, chapter.title);
+        const chapterPath = await consolidateChapterFromSubChunks(bookTitle, chapterNum, chapter.title);
+        await applySoundscapeForChapter(bookTitle, chapterNum, chapterPath);
         console.log(`  ✅ Consolidated successfully`);
         
         // NOTE: Sub-chunks are kept for individual chunk playback
@@ -2590,8 +2613,8 @@ app.post('/api/audiobooks/generate', async (req: Request, res: Response) => {
     }
     
     // Chunk the chapters
+    const chunkingResult = chunkBookByChapters(chapters, isDramatized, true);
 
-    
     // Create audiobook folder and metadata
     const bookTitle = sanitizeBookTitle(bookMetadata.title);
     createAudiobookFolder(bookTitle);
@@ -2607,7 +2630,7 @@ app.post('/api/audiobooks/generate', async (req: Request, res: Response) => {
         filename: `Chapter_${i.toString().padStart(2, '0')}.wav`,
         duration: 0,
         isGenerated: false,
-        tempChunksCount: 0,
+        tempChunksCount: chunkingResult.chapterChunkCounts[i] ?? 0,
         tempChunksGenerated: 0,
       })),
       generationStatus: 'in-progress' as const,
@@ -2622,7 +2645,7 @@ app.post('/api/audiobooks/generate', async (req: Request, res: Response) => {
     audiobookWorker.addBook(
       bookTitle,
       chapters,
-      [],
+      chunkingResult.chunks,
       voiceMap,
       defaultVoice,
       isDramatized
@@ -2634,7 +2657,7 @@ app.post('/api/audiobooks/generate', async (req: Request, res: Response) => {
       success: true,
       bookTitle,
       metadata: audiobookMetadata,
-      totalChunks: 0,
+      totalChunks: chunkingResult.totalChunks,
       message: 'Audiobook generation started in background',
     });
   } catch (error) {
@@ -2953,7 +2976,14 @@ app.get('/api/audiobooks/:bookTitle/position', (req: Request, res: Response) => 
 app.put('/api/audiobooks/:bookTitle/preferences', (req: Request, res: Response) => {
   try {
     const { bookTitle } = req.params;
-    const { narratorVoice, narratorGender, playbackSpeed } = req.body;
+    const {
+      narratorVoice,
+      narratorGender,
+      playbackSpeed,
+      soundscapeMusicEnabled,
+      soundscapeAmbientEnabled,
+      soundscapeThemeId,
+    } = req.body;
     
     const metadata = loadAudiobookMetadata(bookTitle);
     if (!metadata) {
@@ -2969,6 +2999,9 @@ app.put('/api/audiobooks/:bookTitle/preferences', (req: Request, res: Response) 
       ...(narratorVoice !== undefined && { narratorVoice }),
       ...(narratorGender !== undefined && { narratorGender }),
       ...(playbackSpeed !== undefined && { playbackSpeed }),
+      ...(soundscapeMusicEnabled !== undefined && { soundscapeMusicEnabled }),
+      ...(soundscapeAmbientEnabled !== undefined && { soundscapeAmbientEnabled }),
+      ...(soundscapeThemeId !== undefined && { soundscapeThemeId }),
     };
     
     saveAudiobookMetadata(bookTitle, metadata);
@@ -3008,6 +3041,65 @@ app.get('/api/audiobooks/:bookTitle/preferences', (req: Request, res: Response) 
     console.error('✗ Error retrieving preferences:', error);
     res.status(500).json({
       error: 'Failed to retrieve preferences',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * Get soundscape theme options for an audiobook
+ * 
+ * GET /api/audiobooks/:bookTitle/soundscape/themes
+ */
+app.get('/api/audiobooks/:bookTitle/soundscape/themes', (req: Request, res: Response) => {
+  try {
+    const { bookTitle } = req.params;
+    const metadata = loadAudiobookMetadata(bookTitle);
+
+    if (!metadata?.sourceFile) {
+      return res.status(404).json({
+        error: 'Audiobook not found',
+        message: `Audiobook "${bookTitle}" does not exist or has no source file`,
+      });
+    }
+
+    const bookPath = path.join(ASSETS_DIR, metadata.sourceFile);
+    if (!fs.existsSync(bookPath)) {
+      return res.status(404).json({
+        error: 'Book not found',
+        message: `File not found: ${metadata.sourceFile}`,
+      });
+    }
+
+    const ext = path.extname(metadata.sourceFile).toLowerCase();
+    let sampleText = '';
+
+    if (ext === '.epub') {
+      const epubBuffer = fs.readFileSync(bookPath);
+      const chapters = extractEpubChapters(epubBuffer);
+      const firstChapter = chapters[0]?.text ?? '';
+      sampleText = firstChapter.slice(0, 20000);
+    } else if (ext === '.txt') {
+      const bookText = fs.readFileSync(bookPath, 'utf-8');
+      const chapters = bookText.includes('Chapter') || bookText.includes('CHAPTER')
+        ? detectTextChapters(bookText)
+        : createSingleChapter(bookText, 'Full Text');
+      const firstChapter = chapters[0]?.text ?? '';
+      sampleText = firstChapter.slice(0, 20000);
+    }
+
+    const themes = getSoundscapeThemeOptions(sampleText, 5);
+
+    res.json({
+      themes,
+      selectedThemeId: metadata.userPreferences?.soundscapeThemeId ?? null,
+      musicEnabled: metadata.userPreferences?.soundscapeMusicEnabled ?? true,
+      ambientEnabled: metadata.userPreferences?.soundscapeAmbientEnabled ?? true,
+    });
+  } catch (error) {
+    console.error('✗ Error retrieving soundscape themes:', error);
+    res.status(500).json({
+      error: 'Failed to retrieve soundscape themes',
       message: error instanceof Error ? error.message : 'Unknown error',
     });
   }

@@ -75,6 +75,9 @@ export interface AudiobookMetadata {
     narratorVoice?: string; // Gemini voice name (e.g., "Algieba")
     narratorGender?: string; // Gender filter
     playbackSpeed?: number; // 0.75, 1.0, 1.25, etc.
+    soundscapeMusicEnabled?: boolean; // Toggle music theme layer
+    soundscapeAmbientEnabled?: boolean; // Toggle ambient layer
+    soundscapeThemeId?: string; // Selected music theme ID
   };
 }
 

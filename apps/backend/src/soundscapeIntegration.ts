@@ -16,6 +16,12 @@ interface SoundLibraryCatalog {
   assets: SoundAsset[];
 }
 
+export interface SoundscapePreferences {
+  soundscapeMusicEnabled?: boolean;
+  soundscapeAmbientEnabled?: boolean;
+  soundscapeThemeId?: string;
+}
+
 const DEFAULT_KEYWORD_MAP: Record<string, string[]> = {
   forest: ['forest', 'woods', 'trees', 'pine', 'jungle'],
   rain: ['rain', 'storm', 'thunder', 'lightning'],
@@ -34,7 +40,7 @@ const PROJECT_ROOT = path.join(__dirname, '..', '..', '..');
 const DEFAULT_CATALOG_PATH = path.join(PROJECT_ROOT, 'soundscape', 'assets', 'catalog.json');
 
 const DEFAULT_MIX_OPTIONS = {
-  ambientDb: -24,
+  ambientDb: -6,
   fadeInMs: 1500,
   fadeOutMs: 2000,
 };
@@ -72,6 +78,45 @@ function extractSceneTags(text: string): string[] {
   }
 
   return tags;
+}
+
+function scoreAsset(asset: SoundAsset, tags: string[]): number {
+  if (tags.length === 0) return 0;
+  const tagSet = new Set(tags);
+  const genreMatches = asset.genre?.filter(g => tagSet.has(g)).length ?? 0;
+  const moodMatches = asset.mood?.filter(m => tagSet.has(m)).length ?? 0;
+  return genreMatches + moodMatches;
+}
+
+function buildThemeLabel(asset: SoundAsset): string {
+  return asset.id
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+
+export function getSoundscapeThemeOptions(text: string, maxOptions: number = 5): Array<{ id: string; label: string; score: number }>{
+  const catalog = loadCatalog();
+  if (!catalog) return [];
+
+  const tags = extractSceneTags(text);
+  const themes = catalog.assets.filter(asset => asset.type === 'music');
+
+  const scored = themes.map(asset => ({
+    id: asset.id,
+    label: buildThemeLabel(asset),
+    score: scoreAsset(asset, tags),
+  }));
+
+  scored.sort((a, b) => b.score - a.score);
+
+  const limit = Math.min(Math.max(1, maxOptions), 5);
+  const filtered = scored.filter(item => item.score > 0);
+
+  if (filtered.length > 0) {
+    return filtered.slice(0, limit);
+  }
+
+  return scored.slice(0, Math.min(limit, scored.length));
 }
 
 function loadCatalog(): SoundLibraryCatalog | null {
@@ -116,13 +161,12 @@ function buildMixCommand(
   options: { ambientDb: number; fadeInMs: number; fadeOutMs: number }
 ): string[] {
   const fadeIn = options.fadeInMs / 1000;
-  const fadeOut = options.fadeOutMs / 1000;
   return [
     '-i', speechPath,
     '-stream_loop', '-1', '-i', ambientPath,
     '-filter_complex',
-    `[1:a]volume=${options.ambientDb}dB,afade=t=in:st=0:d=${fadeIn}[amb];` +
-      `[0:a][amb]amix=inputs=2:duration=first:dropout_transition=2,afade=t=out:st=0:d=${fadeOut}`,
+    `[1:a]loudnorm=I=-35:TP=-2:LRA=11,volume=${options.ambientDb}dB,afade=t=in:st=0:d=${fadeIn}[amb];` +
+      `[0:a][amb]amix=inputs=2:duration=first:dropout_transition=2`,
     outputPath,
   ];
 }
@@ -157,8 +201,13 @@ export async function applySoundscapeToChapter(options: {
   chapterIndex: number;
   chapterPath: string;
   chapterText: string;
+  preferences?: SoundscapePreferences;
 }): Promise<string> {
   if (!isSoundscapeEnabled()) {
+    return options.chapterPath;
+  }
+
+  if (options.preferences?.soundscapeAmbientEnabled === false) {
     return options.chapterPath;
   }
 
