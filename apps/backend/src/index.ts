@@ -42,6 +42,7 @@ import {
   subChunkExists,
   loadSubChunk,
   findSubChunkByGlobalIndex,
+  clearDramatizationCaches,
   type SubChunkResult
 } from './tempChunkManager.js';
 import { 
@@ -232,7 +233,14 @@ async function loadBookFile(filename: string, enableDramatization: boolean = fal
   VOICE_MAP = {};
   
   // Clear dramatization cache from previous book
-
+  clearDramatizationCaches();
+  CHAPTER_SUBCHUNKS.clear();
+  CHAPTER_DRAMATIZED.clear();
+  CHAPTER_DRAMATIZATION_LOCK.clear();
+  CHAPTER_PLAYED_SUBCHUNKS.clear();
+  CHAPTER_WAS_READY_BEFORE_PLAY.clear();
+  TOTAL_SUBCHUNKS = 0;
+  audioCache.clear();
   
   // Stop any ongoing background dramatization (includes TTS generation)
   stopBackgroundDramatization();
@@ -2576,6 +2584,9 @@ app.post('/api/audiobooks/generate', async (req: Request, res: Response) => {
       });
     }
     
+    // Clear dramatization caches for clean generation
+    clearDramatizationCaches();
+
     // Load book file
     const bookPath = path.join(ASSETS_DIR, bookFile);
     if (!fs.existsSync(bookPath)) {

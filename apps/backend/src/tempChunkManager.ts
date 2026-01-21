@@ -23,6 +23,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { synthesizeText, synthesizeMultiSpeaker, SpeakerConfig } from './ttsClient.js';
 import { extractVoiceSegments, removeVoiceTags } from './dramatizedChunkerSimple.js';
 import { concatenateWavBuffers, addSilence } from './audioUtils.js';
@@ -50,6 +51,10 @@ let preDramatizationAbort: AbortController | null = null;
  */
 const dramatizationCache = new Map<number, string>();
 const dramatizationInProgress = new Set<number>();
+
+function hashText(input: string): string {
+  return crypto.createHash('sha256').update(input, 'utf8').digest('hex');
+}
 
 // ========================================
 // Core Dramatization Logic (shared)
@@ -1373,6 +1378,12 @@ export interface SubChunkResult {
 // If a generation is in progress, other callers wait for the same promise
 const generationInProgress: Map<string, Promise<SubChunkResult>> = new Map();
 
+export function clearDramatizationCaches(): void {
+  dramatizationCache.clear();
+  dramatizationInProgress.clear();
+  generationInProgress.clear();
+}
+
 /**
  * Get lock key for a sub-chunk
  */
@@ -1403,21 +1414,33 @@ export async function generateSubChunk(
   const subChunkIndex = subChunk.index;
   const lockKey = getSubChunkLockKey(chapterIndex, subChunkIndex);
   const tempFile = getSubChunkPath(bookTitle, chapterIndex, subChunkIndex);
+  const metadataPath = tempFile.replace(/\.wav$/i, '.json');
+  const subChunkSignature = hashText(JSON.stringify(subChunk.segments));
   
   // 1. Check if sub-chunk file already exists (resume capability)
   if (fs.existsSync(tempFile)) {
-    console.log(`💾 Sub-chunk ${chapterIndex}:${subChunkIndex} exists, loading from disk`);
-    const audioBuffer = fs.readFileSync(tempFile);
-    const duration = estimateAudioDuration(audioBuffer);
-    
-    return {
-      chapterIndex,
-      subChunkIndex,
-      audioBuffer,
-      filePath: tempFile,
-      fromCache: true,
-      duration,
-    };
+    if (fs.existsSync(metadataPath)) {
+      try {
+        const metadata = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
+        if (metadata?.signature === subChunkSignature) {
+          console.log(`💾 Sub-chunk ${chapterIndex}:${subChunkIndex} exists, loading from disk`);
+          const audioBuffer = fs.readFileSync(tempFile);
+          const duration = estimateAudioDuration(audioBuffer);
+          
+          return {
+            chapterIndex,
+            subChunkIndex,
+            audioBuffer,
+            filePath: tempFile,
+            fromCache: true,
+            duration,
+          };
+        }
+      } catch (error) {
+        console.warn(`⚠️ Failed to read sub-chunk metadata for ${chapterIndex}:${subChunkIndex}:`, error);
+      }
+    }
+    console.log(`♻️ Sub-chunk ${chapterIndex}:${subChunkIndex} cache mismatch, regenerating`);
   }
   
   // 2. CHECK LOCK: If generation is in progress, wait for it
@@ -1496,6 +1519,12 @@ export async function generateSubChunk(
         fs.mkdirSync(tempDir, { recursive: true });
       }
       fs.writeFileSync(tempFile, audioBuffer);
+      fs.writeFileSync(metadataPath, JSON.stringify({
+        signature: subChunkSignature,
+        chapterIndex,
+        subChunkIndex,
+        generatedAt: new Date().toISOString(),
+      }));
       
       const elapsedMs = Date.now() - startTime;
       const duration = estimateAudioDuration(audioBuffer);

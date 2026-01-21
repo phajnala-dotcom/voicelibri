@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
+import { synthesizeText } from './ttsClient.js';
+import { loadAudiobookMetadata } from './audiobookManager.js';
 
 interface SoundAsset {
   id: string;
@@ -20,6 +22,13 @@ export interface SoundscapePreferences {
   soundscapeMusicEnabled?: boolean;
   soundscapeAmbientEnabled?: boolean;
   soundscapeThemeId?: string;
+}
+
+interface IntroSegment {
+  type: 'music' | 'voice';
+  durationMs: number;
+  volumeDb?: number;
+  text?: string;
 }
 
 const DEFAULT_KEYWORD_MAP: Record<string, string[]> = {
@@ -45,6 +54,26 @@ const DEFAULT_MIX_OPTIONS = {
   fadeOutMs: 2000,
 };
 
+function buildBookIntroSequence(bookTitle: string, author: string, chapterTitle: string): IntroSegment[] {
+  return [
+    { type: 'music', durationMs: 4000, volumeDb: -14 },
+    { type: 'music', durationMs: 2000, volumeDb: -22 },
+    { type: 'voice', durationMs: 3500, text: `${bookTitle}. ${author}. This audiobook was brought to you by VoiceLibri.` },
+    { type: 'music', durationMs: 2000, volumeDb: -18 },
+    { type: 'voice', durationMs: 2500, text: `Chapter 1. ${chapterTitle}.` },
+    { type: 'music', durationMs: 1500, volumeDb: -16 },
+  ];
+}
+
+function buildChapterIntroSequence(chapterNumber: number, chapterTitle: string): IntroSegment[] {
+  return [
+    { type: 'music', durationMs: 2000, volumeDb: -14 },
+    { type: 'music', durationMs: 1500, volumeDb: -22 },
+    { type: 'voice', durationMs: 2000, text: `Chapter ${chapterNumber}. ${chapterTitle}.` },
+    { type: 'music', durationMs: 1000, volumeDb: -16 },
+  ];
+}
+
 let catalogCache: SoundLibraryCatalog | null = null;
 
 function isSoundscapeEnabled(): boolean {
@@ -61,6 +90,14 @@ function getMixOptions() {
 
 function getSoundscapeChapterPath(chapterPath: string): string {
   return chapterPath.replace(/\.wav$/i, '_soundscape.wav');
+}
+
+function getIntroPath(chapterPath: string): string {
+  return chapterPath.replace(/\.wav$/i, '_intro.wav');
+}
+
+function getSoundscapeBasePath(chapterPath: string): string {
+  return chapterPath.replace(/\.wav$/i, '_soundscape_base.wav');
 }
 
 function stripSpeakerPrefixes(text: string): string {
@@ -119,6 +156,17 @@ export function getSoundscapeThemeOptions(text: string, maxOptions: number = 5):
   return scored.slice(0, Math.min(limit, scored.length));
 }
 
+function selectThemeAsset(catalog: SoundLibraryCatalog, options: SoundscapePreferences | undefined, chapterText: string): SoundAsset | undefined {
+  if (options?.soundscapeThemeId) {
+    return catalog.assets.find(asset => asset.type === 'music' && asset.id === options.soundscapeThemeId);
+  }
+
+  const themeOptions = getSoundscapeThemeOptions(chapterText, 5);
+  const top = themeOptions[0];
+  if (!top) return undefined;
+  return catalog.assets.find(asset => asset.type === 'music' && asset.id === top.id);
+}
+
 function loadCatalog(): SoundLibraryCatalog | null {
   if (catalogCache) return catalogCache;
   if (!fs.existsSync(DEFAULT_CATALOG_PATH)) {
@@ -171,6 +219,32 @@ function buildMixCommand(
   ];
 }
 
+function buildMusicSegmentCommand(
+  musicPath: string,
+  outputPath: string,
+  durationMs: number,
+  volumeDb: number
+): string[] {
+  const durationSec = Math.max(durationMs / 1000, 0.5);
+  return [
+    '-stream_loop', '-1', '-i', musicPath,
+    '-t', durationSec.toString(),
+    '-af', `volume=${volumeDb}dB`,
+    '-ar', '24000',
+    '-ac', '1',
+    outputPath,
+  ];
+}
+
+function buildConcatCommand(inputs: string[], outputPath: string): string[] {
+  const args: string[] = [];
+  for (const input of inputs) {
+    args.push('-i', input);
+  }
+  const filter = inputs.map((_, idx) => `[${idx}:a]`).join('') + `concat=n=${inputs.length}:v=0:a=1`;
+  return [...args, '-filter_complex', filter, outputPath];
+}
+
 async function runFfmpeg(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn('ffmpeg', ['-y', ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -207,11 +281,17 @@ export async function applySoundscapeToChapter(options: {
     return options.chapterPath;
   }
 
-  if (options.preferences?.soundscapeAmbientEnabled === false) {
+  const ambientEnabled = options.preferences?.soundscapeAmbientEnabled !== false;
+  const musicEnabled = options.preferences?.soundscapeMusicEnabled !== false;
+
+  if (!ambientEnabled && !musicEnabled) {
     return options.chapterPath;
   }
 
   const soundscapePath = getSoundscapeChapterPath(options.chapterPath);
+  const soundscapeBasePath = musicEnabled ? getSoundscapeBasePath(options.chapterPath) : soundscapePath;
+  const introPath = getIntroPath(options.chapterPath);
+
   if (fs.existsSync(soundscapePath)) {
     return soundscapePath;
   }
@@ -222,34 +302,110 @@ export async function applySoundscapeToChapter(options: {
   }
 
   const chapterText = stripSpeakerPrefixes(options.chapterText);
-  const tags = extractSceneTags(chapterText);
-  const ambient = selectAmbientAsset(catalog, tags);
 
-  if (!ambient) {
-    console.warn('⚠️ No ambient assets available for soundscape mix');
-    return options.chapterPath;
+  let basePath = options.chapterPath;
+
+  if (ambientEnabled) {
+    const tags = extractSceneTags(chapterText);
+    const ambient = selectAmbientAsset(catalog, tags);
+
+    if (!ambient) {
+      console.warn('⚠️ No ambient assets available for soundscape mix');
+    } else {
+      const ambientPath = resolveAssetPath(ambient.filePath);
+      if (!fs.existsSync(ambientPath)) {
+        console.warn(`⚠️ Ambient file missing: ${ambientPath}`);
+      } else {
+        console.log(`🌿 Soundscape mix: ${options.bookTitle} ch${options.chapterIndex} -> ${ambient.id}`);
+        const args = buildMixCommand(options.chapterPath, ambientPath, soundscapeBasePath, getMixOptions());
+        const result = await runFfmpeg(args);
+        if (result.code !== 0) {
+          console.error('✗ ffmpeg soundscape mix failed:', result.stderr);
+          return options.chapterPath;
+        }
+        basePath = soundscapeBasePath;
+      }
+    }
   }
 
-  const ambientPath = resolveAssetPath(ambient.filePath);
-  if (!fs.existsSync(ambientPath)) {
-    console.warn(`⚠️ Ambient file missing: ${ambientPath}`);
-    return options.chapterPath;
+  if (!musicEnabled) {
+    if (basePath === soundscapeBasePath && soundscapeBasePath !== soundscapePath) {
+      fs.renameSync(soundscapeBasePath, soundscapePath);
+    }
+    return basePath === options.chapterPath ? options.chapterPath : soundscapePath;
   }
 
-  console.log(`🌿 Soundscape mix: ${options.bookTitle} ch${options.chapterIndex} -> ${ambient.id}`);
+  const metadata = loadAudiobookMetadata(options.bookTitle);
+  const chapterTitle = metadata?.chapters?.[options.chapterIndex - 1]?.title
+    || `Chapter ${options.chapterIndex}`;
+  const bookTitle = metadata?.title ?? options.bookTitle;
+  const author = metadata?.author ?? 'Unknown author';
+  const narratorVoice = metadata?.userPreferences?.narratorVoice ?? 'Algieba';
 
-  try {
-    const args = buildMixCommand(options.chapterPath, ambientPath, soundscapePath, getMixOptions());
-    const result = await runFfmpeg(args);
+  if (!fs.existsSync(introPath)) {
+    const theme = selectThemeAsset(catalog, options.preferences, chapterText);
+    if (!theme) {
+      console.warn('⚠️ No music theme available for intro');
+    } else {
+      const themePath = resolveAssetPath(theme.filePath);
+      if (!fs.existsSync(themePath)) {
+        console.warn(`⚠️ Theme file missing: ${themePath}`);
+      } else {
+        const introSegments = options.chapterIndex === 1
+          ? buildBookIntroSequence(bookTitle, author, chapterTitle)
+          : buildChapterIntroSequence(options.chapterIndex, chapterTitle);
+        const segmentPaths: string[] = [];
+
+        for (let i = 0; i < introSegments.length; i++) {
+          const segment = introSegments[i];
+          const segmentPath = introPath.replace(/\.wav$/i, `_seg_${i.toString().padStart(2, '0')}.wav`);
+
+          if (segment.type === 'music') {
+            const volumeDb = segment.volumeDb ?? -14;
+            const args = buildMusicSegmentCommand(themePath, segmentPath, segment.durationMs, volumeDb);
+            const result = await runFfmpeg(args);
+            if (result.code !== 0) {
+              console.error('✗ ffmpeg intro music segment failed:', result.stderr);
+              break;
+            }
+          } else if (segment.type === 'voice' && segment.text) {
+            const voiceAudio = await synthesizeText(segment.text, narratorVoice, 'normal');
+            fs.writeFileSync(segmentPath, voiceAudio);
+          }
+
+          if (fs.existsSync(segmentPath)) {
+            segmentPaths.push(segmentPath);
+          }
+        }
+
+        if (segmentPaths.length > 0) {
+          const concatArgs = buildConcatCommand(segmentPaths, introPath);
+          const result = await runFfmpeg(concatArgs);
+          if (result.code !== 0) {
+            console.error('✗ ffmpeg intro concat failed:', result.stderr);
+          }
+        }
+
+        for (const segmentPath of segmentPaths) {
+          if (fs.existsSync(segmentPath)) {
+            fs.unlinkSync(segmentPath);
+          }
+        }
+      }
+    }
+  }
+
+  if (fs.existsSync(introPath)) {
+    const concatArgs = buildConcatCommand([introPath, basePath], soundscapePath);
+    const result = await runFfmpeg(concatArgs);
     if (result.code !== 0) {
-      console.error('✗ ffmpeg soundscape mix failed:', result.stderr);
-      return options.chapterPath;
+      console.error('✗ ffmpeg soundscape concat failed:', result.stderr);
+      return basePath;
     }
     return soundscapePath;
-  } catch (error) {
-    console.error('✗ Soundscape mix failed:', error);
-    return options.chapterPath;
   }
+
+  return basePath;
 }
 
 export function resolveChapterAudioPath(chapterPath: string): string {
