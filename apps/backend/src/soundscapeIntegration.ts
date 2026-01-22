@@ -4,6 +4,7 @@ import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { synthesizeText } from './ttsClient.js';
 import { loadAudiobookMetadata } from './audiobookManager.js';
+import { estimateAudioDuration } from './tempChunkManager.js';
 
 interface SoundAsset {
   id: string;
@@ -29,6 +30,11 @@ interface IntroSegment {
   durationMs: number;
   volumeDb?: number;
   text?: string;
+  fadeInMs?: number;
+  fadeOutMs?: number;
+  musicBedVolumeDb?: number;
+  musicBedFadeInMs?: number;
+  musicBedFadeOutMs?: number;
 }
 
 const DEFAULT_KEYWORD_MAP: Record<string, string[]> = {
@@ -54,23 +60,38 @@ const DEFAULT_MIX_OPTIONS = {
   fadeOutMs: 2000,
 };
 
+const INTRO_FADE_MS = 2000;
+const RAMP_MS = 2000;
+const MUSIC_VOLUME_BOOST_DB = 3.5;
+const MUSIC_BACKGROUND_DB = -22;
+
+function applyMusicBoost(volumeDb: number): number {
+  return volumeDb + MUSIC_VOLUME_BOOST_DB;
+}
+
 function buildBookIntroSequence(bookTitle: string, author: string, chapterTitle: string): IntroSegment[] {
   return [
-    { type: 'music', durationMs: 4000, volumeDb: -14 },
-    { type: 'music', durationMs: 2000, volumeDb: -22 },
-    { type: 'voice', durationMs: 3500, text: `${bookTitle}. ${author}. This audiobook was brought to you by VoiceLibri.` },
-    { type: 'music', durationMs: 2000, volumeDb: -18 },
-    { type: 'voice', durationMs: 2500, text: `Chapter 1. ${chapterTitle}.` },
-    { type: 'music', durationMs: 1500, volumeDb: -16 },
+    { type: 'music', durationMs: 10000, volumeDb: -14, fadeInMs: INTRO_FADE_MS },
+    { type: 'music', durationMs: RAMP_MS, volumeDb: -14, fadeOutMs: RAMP_MS },
+    { type: 'voice', durationMs: 0, text: `${bookTitle}. ${author}.`, musicBedVolumeDb: MUSIC_BACKGROUND_DB, musicBedFadeInMs: RAMP_MS },
+    { type: 'music', durationMs: 2000, volumeDb: MUSIC_BACKGROUND_DB },
+    { type: 'voice', durationMs: 0, text: `This audiobook was brought to you by VoiceLibri.`, musicBedVolumeDb: MUSIC_BACKGROUND_DB },
+    { type: 'music', durationMs: RAMP_MS, volumeDb: -14, fadeInMs: RAMP_MS },
+    { type: 'music', durationMs: 5000, volumeDb: -14 },
+    { type: 'music', durationMs: RAMP_MS, volumeDb: -14, fadeOutMs: RAMP_MS },
+    { type: 'voice', durationMs: 0, text: `Chapter 1. ${chapterTitle}.`, musicBedVolumeDb: MUSIC_BACKGROUND_DB, musicBedFadeInMs: RAMP_MS },
+    { type: 'music', durationMs: RAMP_MS, volumeDb: -14, fadeInMs: RAMP_MS },
+    { type: 'music', durationMs: 3750, volumeDb: -14, fadeOutMs: INTRO_FADE_MS },
   ];
 }
 
 function buildChapterIntroSequence(chapterNumber: number, chapterTitle: string): IntroSegment[] {
   return [
-    { type: 'music', durationMs: 2000, volumeDb: -14 },
-    { type: 'music', durationMs: 1500, volumeDb: -22 },
-    { type: 'voice', durationMs: 2000, text: `Chapter ${chapterNumber}. ${chapterTitle}.` },
-    { type: 'music', durationMs: 1000, volumeDb: -16 },
+    { type: 'music', durationMs: 5000, volumeDb: -14, fadeInMs: INTRO_FADE_MS },
+    { type: 'music', durationMs: RAMP_MS, volumeDb: -14, fadeOutMs: RAMP_MS },
+    { type: 'voice', durationMs: 0, text: `Chapter ${chapterNumber}. ${chapterTitle}.`, musicBedVolumeDb: MUSIC_BACKGROUND_DB, musicBedFadeInMs: RAMP_MS },
+    { type: 'music', durationMs: RAMP_MS, volumeDb: -14, fadeInMs: RAMP_MS },
+    { type: 'music', durationMs: 2500, volumeDb: -14, fadeOutMs: INTRO_FADE_MS },
   ];
 }
 
@@ -223,13 +244,35 @@ function buildMusicSegmentCommand(
   musicPath: string,
   outputPath: string,
   durationMs: number,
-  volumeDb: number
+  volumeDb: number,
+  fadeInMs?: number,
+  fadeOutMs?: number
 ): string[] {
   const durationSec = Math.max(durationMs / 1000, 0.5);
+  const filters: string[] = [`volume=${volumeDb}dB`];
+  if (fadeInMs && fadeInMs > 0) {
+    filters.push(`afade=t=in:st=0:d=${fadeInMs / 1000}`);
+  }
+  if (fadeOutMs && fadeOutMs > 0) {
+    const fadeOutSec = fadeOutMs / 1000;
+    const start = Math.max(durationSec - fadeOutSec, 0);
+    filters.push(`afade=t=out:st=${start}:d=${fadeOutSec}`);
+  }
   return [
     '-stream_loop', '-1', '-i', musicPath,
     '-t', durationSec.toString(),
-    '-af', `volume=${volumeDb}dB`,
+    '-af', filters.join(','),
+    '-ar', '24000',
+    '-ac', '1',
+    outputPath,
+  ];
+}
+
+function buildVoiceWithMusicCommand(voicePath: string, musicPath: string, outputPath: string): string[] {
+  return [
+    '-i', voicePath,
+    '-i', musicPath,
+    '-filter_complex', '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=2',
     '-ar', '24000',
     '-ac', '1',
     outputPath,
@@ -361,8 +404,15 @@ export async function applySoundscapeToChapter(options: {
           const segmentPath = introPath.replace(/\.wav$/i, `_seg_${i.toString().padStart(2, '0')}.wav`);
 
           if (segment.type === 'music') {
-            const volumeDb = segment.volumeDb ?? -14;
-            const args = buildMusicSegmentCommand(themePath, segmentPath, segment.durationMs, volumeDb);
+            const volumeDb = applyMusicBoost(segment.volumeDb ?? -14);
+            const args = buildMusicSegmentCommand(
+              themePath,
+              segmentPath,
+              segment.durationMs,
+              volumeDb,
+              segment.fadeInMs,
+              segment.fadeOutMs
+            );
             const result = await runFfmpeg(args);
             if (result.code !== 0) {
               console.error('✗ ffmpeg intro music segment failed:', result.stderr);
@@ -370,7 +420,40 @@ export async function applySoundscapeToChapter(options: {
             }
           } else if (segment.type === 'voice' && segment.text) {
             const voiceAudio = await synthesizeText(segment.text, narratorVoice, 'normal');
-            fs.writeFileSync(segmentPath, voiceAudio);
+            const voiceDurationMs = estimateAudioDuration(voiceAudio) * 1000;
+            const voicePath = segmentPath.replace(/_seg_(\d+)\.wav$/i, '_seg_$1_voice.wav');
+            fs.writeFileSync(voicePath, voiceAudio);
+
+            if (segment.musicBedVolumeDb !== undefined) {
+              const bedPath = segmentPath.replace(/_seg_(\d+)\.wav$/i, '_seg_$1_bed.wav');
+              const bedArgs = buildMusicSegmentCommand(
+                themePath,
+                bedPath,
+                voiceDurationMs,
+                applyMusicBoost(segment.musicBedVolumeDb),
+                segment.musicBedFadeInMs,
+                segment.musicBedFadeOutMs
+              );
+              const bedResult = await runFfmpeg(bedArgs);
+              if (bedResult.code !== 0) {
+                console.error('✗ ffmpeg intro music bed failed:', bedResult.stderr);
+              } else {
+                const mixArgs = buildVoiceWithMusicCommand(voicePath, bedPath, segmentPath);
+                const mixResult = await runFfmpeg(mixArgs);
+                if (mixResult.code !== 0) {
+                  console.error('✗ ffmpeg intro voice mix failed:', mixResult.stderr);
+                }
+              }
+              if (fs.existsSync(bedPath)) {
+                fs.unlinkSync(bedPath);
+              }
+            } else {
+              fs.copyFileSync(voicePath, segmentPath);
+            }
+
+            if (fs.existsSync(voicePath)) {
+              fs.unlinkSync(voicePath);
+            }
           }
 
           if (fs.existsSync(segmentPath)) {
