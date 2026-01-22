@@ -70,7 +70,7 @@ export const LLM_GENERATION_CONFIG = {
 
 /**
  * Book info extraction prompt template
- * Extracts genre, tone, and voiceTone for narrator TTS instruction
+ * Extracts genre, tone, voiceTone, and period for narrator TTS instruction
  * Used in: characterRegistry.ts (chapters 1-2 only)
  * 
  * @param needsBookInfo - Whether to include bookInfo in extraction
@@ -80,7 +80,7 @@ export function getBookInfoExtractionPrompt(needsBookInfo: boolean): string {
   if (!needsBookInfo) return '';
   
   return `ALSO EXTRACT BOOK/DOCUMENT INFO - CRITICAL RULES:
-- Total combined output MAX 10 WORDS across all three fields
+- Total combined output MAX 10 WORDS across all fields
 - Be EXTREMELY concise - each word must add unique semantic value
 - MUST AVOID OXYMORONS AND SYNONYMY, INCLUDING SEMANTICALLY EQUIVALENT FORMS ACROSS WORD CLASSES
 - BAD example: genre "mystery" + tone "mysterious" = wasted word (mystery already implies mysterious)
@@ -91,6 +91,8 @@ Fields:
 - genre: Primary genre (e.g., "gothic horror", "young adult fantasy")
 - tone: Mood/atmosphere - NO words derivable from genre (e.g., "tense, melancholic")
 - voiceTone: EXACTLY two concise adjectives derived from genre + tone, format "adj1, adj2" (e.g., "ironic, witty")
+- period: MUST be one of: prehistory | antiquity | middle ages | modern age | contemporary | future | undefined
+  - Use the closest match for the story setting/time. NO year numbers. If unclear, return "undefined".
 
 `;
 }
@@ -123,7 +125,8 @@ export function getCharacterExtractionPrompt(
   "bookInfo": {
     "genre": "concise genre (few words)",
     "tone": "unique mood descriptors (few words)",
-    "voiceTone": "adj1, adj2"
+    "voiceTone": "adj1, adj2",
+    "period": "prehistory|antiquity|middle ages|modern age|contemporary|future|undefined"
   },` : '';
 
   return `You are an expert literary analyst and voice casting director for audiobook production.
@@ -378,7 +381,7 @@ export function getVoiceTaggingPrompt(characterAliases: string, characterRoles: 
 
 /**
  * Narrator TTS instruction template
- * Format: "Narrate as a {VoiceTone} storyteller, with immersive, nuanced delivery and dynamic pacing."
+ * Format: "Narrate as a {VoiceTone} storyteller, with immersive, adaptive prosody and timbre:"
  * 
  * @param bookInfo - Book info object with genre, tone, voiceTone
  * @returns Formatted narrator instruction string
@@ -398,7 +401,7 @@ export function buildNarratorInstruction(bookInfo: {
 
   const voiceTone = bookInfo?.voiceTone || fallbackFromTone(bookInfo?.tone) || 'immersive, nuanced';
   const normalizedVoiceTone = voiceTone.toLowerCase().trim();
-  return `Narrate as a ${normalizedVoiceTone} storyteller, with immersive, nuanced delivery and dynamic pacing.\n`;
+  return `Narrate as a ${normalizedVoiceTone} storyteller, with immersive, nuanced delivery and dynamic pacing:\n`;
 }
 
 // =============================================================================

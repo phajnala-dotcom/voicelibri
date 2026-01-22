@@ -35,6 +35,9 @@ export interface BookInfo {
 
   /** Voice tone: EXACTLY two concise adjectives, "adj1, adj2" (MAX 10 WORDS) */
   voiceTone: string;
+
+  /** Period/era of the story (prehistory|antiquity|middle ages|modern age|contemporary|future|undefined) */
+  period?: string;
   
   /** Whether bookInfo is locked (after chapter 2) */
   locked?: boolean;
@@ -130,6 +133,20 @@ export class CharacterRegistry {
   
   // Pre-built narrator TTS instruction (built from bookInfo)
   private narratorInstruction: string | null = null;
+
+  private normalizePeriod(value?: string): string {
+    if (!value) return 'undefined';
+    const normalized = value.toLowerCase().trim();
+
+    if (['prehistory', 'prehistoric', 'primeval'].includes(normalized)) return 'prehistory';
+    if (['antiquity', 'ancient', 'classical'].includes(normalized)) return 'antiquity';
+    if (['middle ages', 'middle-age', 'medieval', 'feudal'].includes(normalized)) return 'middle ages';
+    if (['modern age', 'modern', 'industrial', 'victorian'].includes(normalized)) return 'modern age';
+    if (['contemporary', 'present', 'current', 'today'].includes(normalized)) return 'contemporary';
+    if (['future', 'futuristic', 'sci-fi', 'science fiction'].includes(normalized)) return 'future';
+
+    return 'undefined';
+  }
   
   constructor(config: GeminiConfig) {
     this.projectId = config.projectId;
@@ -280,13 +297,17 @@ FEMALE VOICES: ${femaleVoices}`;
       
       // Process bookInfo if present (chapters 1-2)
       if (result.bookInfo && !this.bookInfo?.locked) {
+        const normalizedBookInfo: BookInfo = {
+          ...result.bookInfo,
+          period: this.normalizePeriod(result.bookInfo.period),
+        };
         if (chapterNum === 1) {
           // First extraction
-          this.bookInfo = { ...result.bookInfo, locked: false };
+          this.bookInfo = { ...normalizedBookInfo, locked: false };
           console.log(`   📚 Book info extracted: ${this.bookInfo.genre}, ${this.bookInfo.tone}`);
         } else if (chapterNum === 2) {
           // Refine and lock
-          this.bookInfo = { ...result.bookInfo, locked: true };
+          this.bookInfo = { ...normalizedBookInfo, locked: true };
           this.buildNarratorInstruction();
           console.log(`   📚 Book info refined and LOCKED: ${this.bookInfo.genre}, ${this.bookInfo.tone}`);
         }

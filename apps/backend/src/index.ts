@@ -3088,7 +3088,19 @@ app.get('/api/audiobooks/:bookTitle/soundscape/themes', (req: Request, res: Resp
       sampleText = firstChapter.slice(0, 20000);
     }
 
-    const themes = getSoundscapeThemeOptions(sampleText, 5);
+    let bookInfo = undefined as { genre?: string; tone?: string; voiceTone?: string; period?: string } | undefined;
+    try {
+      const registryPath = path.join(getAudiobooksDir(), bookTitle, 'character_registry.json');
+      if (fs.existsSync(registryPath)) {
+        const registryRaw = fs.readFileSync(registryPath, 'utf-8');
+        const registry = JSON.parse(registryRaw) as { bookInfo?: typeof bookInfo };
+        bookInfo = registry.bookInfo;
+      }
+    } catch (error) {
+      console.warn(`⚠️ Failed to read character registry for ${bookTitle}:`, error);
+    }
+
+    const themes = getSoundscapeThemeOptions(sampleText, 5, bookInfo);
 
     res.json({
       themes,
