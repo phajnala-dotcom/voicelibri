@@ -378,7 +378,7 @@ export function getVoiceTaggingPrompt(characterAliases: string, characterRoles: 
 
 /**
  * Narrator TTS instruction template
- * Format: "Narrate as a {VoiceTone} storyteller, with immersive, nuanced delivery and dynamic pacing."
+ * Format: "Narrate as a {VoiceTone} storyteller, with immersive, nuanced delivery and dynamic pacing:"
  * 
  * @param bookInfo - Book info object with genre, tone, voiceTone
  * @returns Formatted narrator instruction string
@@ -398,7 +398,7 @@ export function buildNarratorInstruction(bookInfo: {
 
   const voiceTone = bookInfo?.voiceTone || fallbackFromTone(bookInfo?.tone) || 'immersive, nuanced';
   const normalizedVoiceTone = voiceTone.toLowerCase().trim();
-  return `Narrate as a ${normalizedVoiceTone} storyteller, with immersive, nuanced delivery and dynamic pacing.\n`;
+  return `Narrate as a ${normalizedVoiceTone} storyteller, with immersive, adaptive prosody and timbre:\n`;
 }
 
 // =============================================================================
