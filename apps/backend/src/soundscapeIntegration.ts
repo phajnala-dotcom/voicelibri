@@ -60,39 +60,38 @@ const DEFAULT_MIX_OPTIONS = {
   fadeOutMs: 2000,
 };
 
-const INTRO_FADE_MS = 2000;
+const INTRO_FADE_MS = 3500;
 const RAMP_MS = 2000;
-const MUSIC_VOLUME_BOOST_DB = 3.5;
-const MUSIC_BACKGROUND_DB = -22;
+const MUSIC_VOLUME_BOOST_DB = 4.5;
+const MUSIC_BACKGROUND_DB = -21.5;
 
 function applyMusicBoost(volumeDb: number): number {
   return volumeDb + MUSIC_VOLUME_BOOST_DB;
 }
 
-function buildBookIntroSequence(bookTitle: string, author: string, chapterTitle: string): IntroSegment[] {
-  return [
-    { type: 'music', durationMs: 10000, volumeDb: -14, fadeInMs: INTRO_FADE_MS },
-    { type: 'music', durationMs: RAMP_MS, volumeDb: -14, fadeOutMs: RAMP_MS },
-    { type: 'voice', durationMs: 0, text: `${bookTitle}. ${author}.`, musicBedVolumeDb: MUSIC_BACKGROUND_DB, musicBedFadeInMs: RAMP_MS },
-    { type: 'music', durationMs: 2000, volumeDb: MUSIC_BACKGROUND_DB },
-    { type: 'voice', durationMs: 0, text: `This audiobook was brought to you by VoiceLibri.`, musicBedVolumeDb: MUSIC_BACKGROUND_DB },
-    { type: 'music', durationMs: RAMP_MS, volumeDb: -14, fadeInMs: RAMP_MS },
-    { type: 'music', durationMs: 5000, volumeDb: -14 },
-    { type: 'music', durationMs: RAMP_MS, volumeDb: -14, fadeOutMs: RAMP_MS },
-    { type: 'voice', durationMs: 0, text: `Chapter 1. ${chapterTitle}.`, musicBedVolumeDb: MUSIC_BACKGROUND_DB, musicBedFadeInMs: RAMP_MS },
-    { type: 'music', durationMs: RAMP_MS, volumeDb: -14, fadeInMs: RAMP_MS },
-    { type: 'music', durationMs: 3750, volumeDb: -14, fadeOutMs: INTRO_FADE_MS },
-  ];
+interface VoiceOverlay {
+  startMs: number;
+  text: string;
 }
 
-function buildChapterIntroSequence(chapterNumber: number, chapterTitle: string): IntroSegment[] {
-  return [
-    { type: 'music', durationMs: 5000, volumeDb: -14, fadeInMs: INTRO_FADE_MS },
-    { type: 'music', durationMs: RAMP_MS, volumeDb: -14, fadeOutMs: RAMP_MS },
-    { type: 'voice', durationMs: 0, text: `Chapter ${chapterNumber}. ${chapterTitle}.`, musicBedVolumeDb: MUSIC_BACKGROUND_DB, musicBedFadeInMs: RAMP_MS },
-    { type: 'music', durationMs: RAMP_MS, volumeDb: -14, fadeInMs: RAMP_MS },
-    { type: 'music', durationMs: 2500, volumeDb: -14, fadeOutMs: INTRO_FADE_MS },
-  ];
+function buildBookIntroSequence(bookTitle: string, author: string, chapterTitle: string): { totalDurationMs: number; voiceOverlays: VoiceOverlay[] } {
+  return {
+    totalDurationMs: 35000,
+    voiceOverlays: [
+      { startMs: 12000, text: `${bookTitle}. ${author}.` },
+      { startMs: 18000, text: `This audiobook was brought to you by VoiceLibri.` },
+      { startMs: 27000, text: `Chapter 1. ${chapterTitle}.` },
+    ],
+  };
+}
+
+function buildChapterIntroSequence(chapterNumber: number, chapterTitle: string): { totalDurationMs: number; voiceOverlays: VoiceOverlay[] } {
+  return {
+    totalDurationMs: 15000,
+    voiceOverlays: [
+      { startMs: 7000, text: `Chapter ${chapterNumber}. ${chapterTitle}.` },
+    ],
+  };
 }
 
 let catalogCache: SoundLibraryCatalog | null = null;
@@ -394,84 +393,72 @@ export async function applySoundscapeToChapter(options: {
       if (!fs.existsSync(themePath)) {
         console.warn(`⚠️ Theme file missing: ${themePath}`);
       } else {
-        const introSegments = options.chapterIndex === 1
+        const introSpec = options.chapterIndex === 1
           ? buildBookIntroSequence(bookTitle, author, chapterTitle)
           : buildChapterIntroSequence(options.chapterIndex, chapterTitle);
-        const segmentPaths: string[] = [];
 
-        for (let i = 0; i < introSegments.length; i++) {
-          const segment = introSegments[i];
-          const segmentPath = introPath.replace(/\.wav$/i, `_seg_${i.toString().padStart(2, '0')}.wav`);
-
-          if (segment.type === 'music') {
-            const volumeDb = applyMusicBoost(segment.volumeDb ?? -14);
-            const args = buildMusicSegmentCommand(
-              themePath,
-              segmentPath,
-              segment.durationMs,
-              volumeDb,
-              segment.fadeInMs,
-              segment.fadeOutMs
-            );
-            const result = await runFfmpeg(args);
-            if (result.code !== 0) {
-              console.error('✗ ffmpeg intro music segment failed:', result.stderr);
-              break;
-            }
-          } else if (segment.type === 'voice' && segment.text) {
-            const voiceAudio = await synthesizeText(segment.text, narratorVoice, 'normal');
-            const voiceDurationMs = estimateAudioDuration(voiceAudio) * 1000;
-            const voicePath = segmentPath.replace(/_seg_(\d+)\.wav$/i, '_seg_$1_voice.wav');
+        const baseMusicPath = introPath.replace(/\.wav$/i, '_base_music.wav');
+        const baseVolume = applyMusicBoost(-14);
+        const baseMusicArgs = buildMusicSegmentCommand(
+          themePath,
+          baseMusicPath,
+          introSpec.totalDurationMs,
+          baseVolume,
+          INTRO_FADE_MS,
+          INTRO_FADE_MS
+        );
+        const baseMusicResult = await runFfmpeg(baseMusicArgs);
+        if (baseMusicResult.code !== 0) {
+          console.error('✗ ffmpeg intro base music failed:', baseMusicResult.stderr);
+        } else {
+          const voiceFiles: Array<{ path: string; startMs: number }> = [];
+          
+          for (let i = 0; i < introSpec.voiceOverlays.length; i++) {
+            const overlay = introSpec.voiceOverlays[i];
+            const voiceAudio = await synthesizeText(overlay.text, narratorVoice, 'normal');
+            const voicePath = introPath.replace(/\.wav$/i, `_voice_${i}.wav`);
             fs.writeFileSync(voicePath, voiceAudio);
+            voiceFiles.push({ path: voicePath, startMs: overlay.startMs });
+          }
 
-            if (segment.musicBedVolumeDb !== undefined) {
-              const bedPath = segmentPath.replace(/_seg_(\d+)\.wav$/i, '_seg_$1_bed.wav');
-              const bedArgs = buildMusicSegmentCommand(
-                themePath,
-                bedPath,
-                voiceDurationMs,
-                applyMusicBoost(segment.musicBedVolumeDb),
-                segment.musicBedFadeInMs,
-                segment.musicBedFadeOutMs
-              );
-              const bedResult = await runFfmpeg(bedArgs);
-              if (bedResult.code !== 0) {
-                console.error('✗ ffmpeg intro music bed failed:', bedResult.stderr);
-              } else {
-                const mixArgs = buildVoiceWithMusicCommand(voicePath, bedPath, segmentPath);
-                const mixResult = await runFfmpeg(mixArgs);
-                if (mixResult.code !== 0) {
-                  console.error('✗ ffmpeg intro voice mix failed:', mixResult.stderr);
-                }
-              }
-              if (fs.existsSync(bedPath)) {
-                fs.unlinkSync(bedPath);
-              }
-            } else {
-              fs.copyFileSync(voicePath, segmentPath);
+          const introTempPath = introPath.replace(/\.wav$/i, '_temp.wav');
+          const fadeInSec = RAMP_MS / 1000;
+          const fadeOutSec = RAMP_MS / 1000;
+          const backgroundVolumeDb = applyMusicBoost(MUSIC_BACKGROUND_DB);
+          
+          const filterComplex = [
+            `[0:a]asplit=${voiceFiles.length}${voiceFiles.map((_, i) => `[music${i}]`).join('')}`,
+            ...voiceFiles.map((v, i) => {
+              const delaySec = v.startMs / 1000;
+              return `[music${i}]volume=${backgroundVolumeDb}dB,afade=t=in:st=${delaySec}:d=${fadeInSec},afade=t=out:st=${delaySec + 0.1}:d=${fadeOutSec}[bgm${i}]`;
+            }),
+            ...voiceFiles.map((v, i) => `[${i + 1}:a]adelay=${v.startMs}|${v.startMs}[voice${i}]`),
+            `[0:a]${voiceFiles.map((_, i) => `[bgm${i}][voice${i}]`).join('')}amix=inputs=${1 + voiceFiles.length * 2}:duration=first`
+          ].join(';');
+
+          const mixArgs: string[] = [
+            '-i', baseMusicPath,
+            ...voiceFiles.flatMap(v => ['-i', v.path]),
+            '-filter_complex', filterComplex,
+            '-ar', '24000',
+            '-ac', '1',
+            introTempPath
+          ];
+
+          const mixResult = await runFfmpeg(mixArgs);
+          if (mixResult.code !== 0) {
+            console.error('✗ ffmpeg intro voice overlay mix failed:', mixResult.stderr);
+          } else {
+            fs.renameSync(introTempPath, introPath);
+          }
+
+          if (fs.existsSync(baseMusicPath)) {
+            fs.unlinkSync(baseMusicPath);
+          }
+          for (const v of voiceFiles) {
+            if (fs.existsSync(v.path)) {
+              fs.unlinkSync(v.path);
             }
-
-            if (fs.existsSync(voicePath)) {
-              fs.unlinkSync(voicePath);
-            }
-          }
-
-          if (fs.existsSync(segmentPath)) {
-            segmentPaths.push(segmentPath);
-          }
-        }
-
-        if (segmentPaths.length > 0) {
-          const concatArgs = buildConcatCommand(segmentPaths, introPath);
-          const result = await runFfmpeg(concatArgs);
-          if (result.code !== 0) {
-            console.error('✗ ffmpeg intro concat failed:', result.stderr);
-          }
-        }
-
-        for (const segmentPath of segmentPaths) {
-          if (fs.existsSync(segmentPath)) {
-            fs.unlinkSync(segmentPath);
           }
         }
       }
