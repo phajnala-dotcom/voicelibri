@@ -4,9 +4,11 @@ import path from 'path';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { synthesizeText } from './ttsClient.js';
-import { loadAudiobookMetadata } from './audiobookManager.js';
+import { loadAudiobookMetadata, getAudiobooksDir } from './audiobookManager.js';
 import { estimateAudioDuration } from './tempChunkManager.js';
 import { ChapterTranslator } from './chapterTranslator.js';
+import { GoogleAuth } from 'google-auth-library';
+import { LLM_MODELS, LLM_TEMPERATURES, LLM_GENERATION_CONFIG, getChapterAmbienceMapPrompt } from './promptConfig.js';
 
 interface SoundAsset {
   id: string;
@@ -19,6 +21,25 @@ interface SoundAsset {
 
 interface SoundLibraryCatalog {
   assets: SoundAsset[];
+}
+
+type BookPeriod = 'prehistory' | 'antiquity' | 'middle ages' | 'modern age' | 'contemporary' | 'future' | 'undefined';
+
+interface BookInfoSnapshot {
+  genre?: string;
+  tone?: string;
+  voiceTone?: string;
+  period?: BookPeriod;
+}
+
+interface AmbienceMapItem {
+  assetId: string;
+  start: number;
+  end: number;
+}
+
+interface AmbienceMapResult {
+  ambience: AmbienceMapItem[];
 }
 
 export interface SoundscapePreferences {
@@ -116,6 +137,7 @@ function buildChapterIntroSequence(chapterNumber: number, chapterTitle: string):
 let catalogCache: SoundLibraryCatalog | null = null;
 let introTranslator: ChapterTranslator | null = null;
 const introTranslationCache = new Map<string, string>();
+const ambienceMapCache = new Map<string, Promise<AmbienceMapResult | null>>();
 
 function getTempAudioDir(): string {
   const base = fs.mkdtempSync(path.join(os.tmpdir(), 'voicelibri-intro-'));
@@ -149,6 +171,215 @@ function normalizeTargetLanguage(raw?: string | null): string | null {
     uk: 'uk-UA',
   };
   return map[lower] ?? trimmed;
+}
+
+function normalizeBookPeriod(raw?: string | null): BookPeriod {
+  if (!raw) return 'undefined';
+  const normalized = raw.toLowerCase().trim();
+  const directMap: Record<string, BookPeriod> = {
+    prehistory: 'prehistory',
+    prehistoric: 'prehistory',
+    antiquity: 'antiquity',
+    ancient: 'antiquity',
+    classical: 'antiquity',
+    'middle ages': 'middle ages',
+    medieval: 'middle ages',
+    'modern age': 'modern age',
+    modern: 'modern age',
+    contemporary: 'contemporary',
+    present: 'contemporary',
+    current: 'contemporary',
+    future: 'future',
+    futuristic: 'future',
+    'science fiction': 'future',
+    scifi: 'future',
+    'sci-fi': 'future',
+    undefined: 'undefined',
+    unknown: 'undefined',
+  };
+  return directMap[normalized] ?? 'undefined';
+}
+
+function tokenizeBookInfo(text?: string | null): string[] {
+  if (!text) return [];
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .map(t => t.trim())
+    .filter(Boolean);
+}
+
+function getBookInfoSnapshot(bookTitle: string): BookInfoSnapshot | null {
+  try {
+    const registryPath = path.join(getAudiobooksDir(), bookTitle, 'character_registry.json');
+    if (!fs.existsSync(registryPath)) return null;
+    const raw = fs.readFileSync(registryPath, 'utf8');
+    const parsed = JSON.parse(raw) as { bookInfo?: BookInfoSnapshot };
+    if (!parsed.bookInfo) return null;
+    return {
+      genre: parsed.bookInfo.genre,
+      tone: parsed.bookInfo.tone,
+      voiceTone: parsed.bookInfo.voiceTone,
+      period: normalizeBookPeriod(parsed.bookInfo.period),
+    };
+  } catch (error) {
+    console.warn('⚠️ Failed to load character registry bookInfo:', error);
+    return null;
+  }
+}
+
+function getAmbienceCacheKey(bookTitle: string, chapterIndex: number): string {
+  return `${bookTitle}::${chapterIndex}`;
+}
+
+function buildAmbientCatalogList(catalog: SoundLibraryCatalog): string {
+  return catalog.assets
+    .filter(asset => asset.type === 'ambient')
+    .map(asset => {
+      const fileName = path.basename(asset.filePath);
+      const genres = asset.genre?.join(', ') ?? 'none';
+      const moods = asset.mood?.join(', ') ?? 'none';
+      return `- ${asset.id} | genre: ${genres} | mood: ${moods} | file: ${fileName}`;
+    })
+    .join('\n');
+}
+
+async function callGeminiForAmbience(prompt: string): Promise<string> {
+  const projectId = process.env.GOOGLE_CLOUD_PROJECT || '';
+  if (!projectId) {
+    throw new Error('GOOGLE_CLOUD_PROJECT environment variable not set');
+  }
+
+  const location = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1';
+  const model = LLM_MODELS.CHARACTER || 'gemini-2.5-flash';
+  const auth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
+  const client = await auth.getClient();
+  const token = await client.getAccessToken();
+
+  const endpoint = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${model}:generateContent`;
+  const requestBody = {
+    contents: [{ role: 'user', parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: LLM_TEMPERATURES.CHARACTER_ANALYSIS,
+      maxOutputTokens: Math.min(4096, LLM_GENERATION_CONFIG.MAX_TOKENS_SPEECH_STYLE),
+      topP: LLM_GENERATION_CONFIG.TOP_P,
+    },
+  };
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token.token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(requestBody),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Gemini API error (${response.status}): ${errorText}`);
+  }
+
+  const data = await response.json() as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  };
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) {
+    throw new Error('No text in Gemini response');
+  }
+
+  return text.trim();
+}
+
+function parseAmbienceMap(rawText: string, catalog: SoundLibraryCatalog): AmbienceMapResult | null {
+  const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) return null;
+  try {
+    const parsed = JSON.parse(jsonMatch[0]) as AmbienceMapResult;
+    if (!parsed || !Array.isArray(parsed.ambience)) {
+      return { ambience: [] };
+    }
+
+    const ambientIds = new Set(
+      catalog.assets.filter(a => a.type === 'ambient').map(a => a.id)
+    );
+
+    const sanitized = parsed.ambience
+      .filter(item => item && typeof item.assetId === 'string')
+      .filter(item => ambientIds.has(item.assetId))
+      .map(item => ({
+        assetId: item.assetId,
+        start: Number.isFinite(item.start) ? item.start : 0,
+        end: Number.isFinite(item.end) ? item.end : 0,
+      }))
+      .map(item => ({
+        ...item,
+        start: Math.min(Math.max(item.start, 0), 1),
+        end: Math.min(Math.max(item.end, 0), 1),
+      }))
+      .filter(item => item.end > item.start);
+
+    if (sanitized.length === 0) {
+      return { ambience: [] };
+    }
+
+    const sorted = sanitized.sort((a, b) => a.start - b.start || b.end - a.end);
+    const nonOverlapping: AmbienceMapItem[] = [];
+    for (const item of sorted) {
+      const last = nonOverlapping[nonOverlapping.length - 1];
+      if (!last) {
+        nonOverlapping.push(item);
+        continue;
+      }
+      if (item.start >= last.end) {
+        nonOverlapping.push(item);
+        continue;
+      }
+      const lastDuration = last.end - last.start;
+      const currentDuration = item.end - item.start;
+      if (currentDuration > lastDuration) {
+        nonOverlapping[nonOverlapping.length - 1] = item;
+      }
+    }
+
+    return { ambience: nonOverlapping };
+  } catch (error) {
+    console.warn('⚠️ Failed to parse ambience map JSON:', error);
+    return null;
+  }
+}
+
+export function queueChapterAmbienceMap(options: {
+  bookTitle: string;
+  chapterIndex: number;
+  chapterText: string;
+}): void {
+  if (!isSoundscapeEnabled()) return;
+  const cacheKey = getAmbienceCacheKey(options.bookTitle, options.chapterIndex);
+  if (ambienceMapCache.has(cacheKey)) return;
+
+  const catalog = loadCatalog();
+  if (!catalog) return;
+
+  const ambientList = buildAmbientCatalogList(catalog);
+  const prompt = getChapterAmbienceMapPrompt(options.chapterText, ambientList);
+
+  const promise = callGeminiForAmbience(prompt)
+    .then(text => parseAmbienceMap(text, catalog))
+    .catch(error => {
+      console.warn('⚠️ Ambience map LLM call failed:', error);
+      return null;
+    });
+
+  ambienceMapCache.set(cacheKey, promise);
+}
+
+async function resolveChapterAmbienceMap(bookTitle: string, chapterIndex: number): Promise<AmbienceMapResult | null> {
+  const cacheKey = getAmbienceCacheKey(bookTitle, chapterIndex);
+  const promise = ambienceMapCache.get(cacheKey);
+  if (!promise) return null;
+  return promise;
 }
 
 async function translateIntroText(text: string, targetLanguage: string | null): Promise<string> {
@@ -261,7 +492,11 @@ export function getSoundscapeThemeOptions(text: string, maxOptions: number = 5):
   return scored.slice(0, Math.min(limit, scored.length));
 }
 
-function selectThemeAsset(catalog: SoundLibraryCatalog, options: SoundscapePreferences | undefined, chapterText: string): SoundAsset | undefined {
+function selectThemeAsset(
+  catalog: SoundLibraryCatalog,
+  options: SoundscapePreferences | undefined,
+  bookInfo: BookInfoSnapshot | null
+): SoundAsset | undefined {
   const resolvePath = (filePath: string) => path.isAbsolute(filePath) ? filePath : path.join(PROJECT_ROOT, filePath);
   const musicAssets = catalog.assets.filter(asset => asset.type === 'music');
   if (musicAssets.length === 0) return undefined;
@@ -273,13 +508,61 @@ function selectThemeAsset(catalog: SoundLibraryCatalog, options: SoundscapePrefe
     }
   }
 
-  const tags = extractSceneTags(chapterText);
-  const scored = musicAssets.map(asset => ({
-    asset,
-    score: scoreAsset(asset, tags),
-  }));
+  const fallbackTheme = musicAssets.find(asset => asset.id === 'fallback_theme_1');
 
-  scored.sort((a, b) => b.score - a.score);
+  if (!bookInfo) {
+    if (fallbackTheme && fs.existsSync(resolvePath(fallbackTheme.filePath))) {
+      return fallbackTheme;
+    }
+    return musicAssets
+      .filter(asset => fs.existsSync(resolvePath(asset.filePath)))
+      .sort((a, b) => a.id.localeCompare(b.id))[0];
+  }
+
+  const genreTokens = tokenizeBookInfo(bookInfo.genre);
+  const toneTokens = tokenizeBookInfo(bookInfo.tone);
+  const voiceTokens = tokenizeBookInfo(bookInfo.voiceTone);
+  const periodToken = bookInfo.period && bookInfo.period !== 'undefined'
+    ? bookInfo.period.toLowerCase()
+    : null;
+
+  const scored = musicAssets.map(asset => {
+    const assetTokens = new Set<string>([
+      ...(asset.genre ?? []),
+      ...(asset.mood ?? []),
+      asset.id.replace(/[_-]+/g, ' '),
+    ].flatMap(tokenizeBookInfo));
+
+    const genreScore = genreTokens.filter(t => assetTokens.has(t)).length;
+    const toneScore = toneTokens.filter(t => assetTokens.has(t)).length;
+    const voiceScore = voiceTokens.filter(t => assetTokens.has(t)).length;
+    const periodScore = periodToken && assetTokens.has(periodToken.replace(/\s+/g, ' '))
+      ? 1
+      : (periodToken && assetTokens.has(periodToken.replace(/\s+/g, '')) ? 1 : 0);
+
+    return { asset, genreScore, toneScore, voiceScore, periodScore };
+  });
+
+  scored.sort((a, b) => {
+    if (a.genreScore !== b.genreScore) return b.genreScore - a.genreScore;
+    if (a.toneScore !== b.toneScore) return b.toneScore - a.toneScore;
+    if (a.voiceScore !== b.voiceScore) return b.voiceScore - a.voiceScore;
+    if (a.periodScore !== b.periodScore) return b.periodScore - a.periodScore;
+    return a.asset.id.localeCompare(b.asset.id);
+  });
+
+  const best = scored[0];
+  const hasMatch = !!best && (best.genreScore + best.toneScore + best.voiceScore + best.periodScore) > 0;
+
+  if (!hasMatch) {
+    if (fallbackTheme && fs.existsSync(resolvePath(fallbackTheme.filePath))) {
+      return fallbackTheme;
+    }
+    return musicAssets
+      .filter(asset => fs.existsSync(resolvePath(asset.filePath)))
+      .sort((a, b) => a.id.localeCompare(b.id))[0];
+  }
+
   for (const item of scored) {
     if (fs.existsSync(resolvePath(item.asset.filePath))) {
       return item.asset;
@@ -306,18 +589,41 @@ function loadCatalog(): SoundLibraryCatalog | null {
   }
 }
 
-function selectAmbientAsset(catalog: SoundLibraryCatalog, tags: string[]): SoundAsset | undefined {
-  const ambients = catalog.assets.filter(a => a.type === 'ambient');
-  if (ambients.length === 0) return undefined;
-  if (tags.length === 0) return ambients[0];
+function buildAmbientLayerCommand(
+  segments: Array<{ assetPath: string; startMs: number; durationMs: number; loop: boolean }>,
+  outputPath: string,
+  totalDurationMs: number
+): string[] {
+  const args: string[] = [];
+  for (const segment of segments) {
+    if (segment.loop) {
+      args.push('-stream_loop', '-1');
+    }
+    args.push('-i', segment.assetPath);
+  }
 
-  const tagSet = new Set(tags);
-  const match = ambients.find(a =>
-    (a.genre?.some(g => tagSet.has(g)) ?? false) ||
-    (a.mood?.some(m => tagSet.has(m)) ?? false)
-  );
+  const filters: string[] = [];
+  segments.forEach((segment, index) => {
+    const durationSec = Math.max(segment.durationMs / 1000, 0.5);
+    filters.push(
+      `[${index}:a]atrim=0:${durationSec},asetpts=PTS-STARTPTS,adelay=${segment.startMs}|${segment.startMs}[amb${index}]`
+    );
+  });
 
-  return match ?? ambients[0];
+  const totalDurationSec = Math.max(totalDurationMs / 1000, 0.5);
+  filters.push(`anullsrc=r=24000:cl=mono,atrim=0:${totalDurationSec}[base]`);
+  const mixInputs = ['[base]', ...segments.map((_, idx) => `[amb${idx}]`)].join('');
+  filters.push(`${mixInputs}amix=inputs=${segments.length + 1}:duration=first:dropout_transition=2:normalize=0[amb]`);
+
+  return [
+    ...args,
+    '-filter_complex', filters.join(';'),
+    '-map', '[amb]',
+    '-ar', '24000',
+    '-ac', '1',
+    '-c:a', 'pcm_s16le',
+    outputPath,
+  ];
 }
 
 function resolveAssetPath(filePath: string): string {
@@ -431,6 +737,32 @@ async function runFfmpeg(args: string[]): Promise<{ code: number; stdout: string
   });
 }
 
+async function getAudioDurationMs(filePath: string): Promise<number | null> {
+  return new Promise((resolve) => {
+    const child = spawn('ffprobe', [
+      '-v', 'error',
+      '-show_entries', 'format=duration',
+      '-of', 'default=noprint_wrappers=1:nokey=1',
+      filePath,
+    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+    let stdout = '';
+    child.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    child.on('error', () => resolve(null));
+    child.on('close', () => {
+      const value = Number(stdout.trim());
+      if (!Number.isFinite(value) || value <= 0) {
+        resolve(null);
+        return;
+      }
+      resolve(Math.round(value * 1000));
+    });
+  });
+}
+
 export async function applySoundscapeToChapter(options: {
   bookTitle: string;
   chapterIndex: number;
@@ -472,26 +804,72 @@ export async function applySoundscapeToChapter(options: {
   let basePath = options.chapterPath;
 
   if (ambientEnabled) {
-    const tags = extractSceneTags(chapterText);
-    const ambient = selectAmbientAsset(catalog, tags);
+    const ambienceMap = await resolveChapterAmbienceMap(options.bookTitle, options.chapterIndex);
+    const ambienceMapToSave = ambienceMap ?? { ambience: [] };
+    try {
+      const bookDir = path.join(getAudiobooksDir(), options.bookTitle);
+      if (!fs.existsSync(bookDir)) {
+        fs.mkdirSync(bookDir, { recursive: true });
+      }
+      const mapPath = path.join(bookDir, `ambience_map_ch${options.chapterIndex.toString().padStart(2, '0')}.json`);
+      fs.writeFileSync(mapPath, JSON.stringify(ambienceMapToSave, null, 2), 'utf8');
+    } catch (error) {
+      console.warn('⚠️ Failed to save ambience map JSON:', error);
+    }
 
-    if (!ambient) {
-      console.warn('⚠️ No ambient assets available for soundscape mix');
+    if (!ambienceMap || ambienceMap.ambience.length === 0) {
+      console.warn('⚠️ No ambience map available for soundscape mix');
     } else {
-      const ambientPath = resolveAssetPath(ambient.filePath);
-      if (!fs.existsSync(ambientPath)) {
-        console.warn(`⚠️ Ambient file missing: ${ambientPath}`);
+      const speechBuffer = fs.readFileSync(options.chapterPath);
+      const speechDurationMs = estimateAudioDuration(speechBuffer) * 1000;
+      const totalDurationMs = speechDurationMs + AMBIENT_PRE_ROLL_MS + AMBIENT_POST_ROLL_MS;
+
+      const segments = (await Promise.all(ambienceMap.ambience.map(async (item) => {
+          const asset = catalog.assets.find(a => a.id === item.assetId && a.type === 'ambient');
+          if (!asset) return null;
+          const assetPath = resolveAssetPath(asset.filePath);
+          if (!fs.existsSync(assetPath)) {
+            console.warn(`⚠️ Ambient file missing: ${assetPath}`);
+            return null;
+          }
+          const startMs = AMBIENT_PRE_ROLL_MS + Math.round(item.start * speechDurationMs);
+          const endMs = AMBIENT_PRE_ROLL_MS + Math.round(item.end * speechDurationMs);
+          const durationMs = Math.max(endMs - startMs, 500);
+          const assetDurationMs = await getAudioDurationMs(assetPath);
+          const loop = assetDurationMs !== null && assetDurationMs < durationMs;
+          return { assetPath, startMs, durationMs, assetId: asset.id, loop };
+        })))
+        .filter((item): item is { assetPath: string; startMs: number; durationMs: number; assetId: string; loop: boolean } => Boolean(item));
+
+      if (segments.length === 0) {
+        console.warn('⚠️ No valid ambient assets resolved for ambience map');
       } else {
-        console.log(`🌿 Soundscape mix: ${options.bookTitle} ch${options.chapterIndex} -> ${ambient.id}`);
-        const speechBuffer = fs.readFileSync(options.chapterPath);
-        const speechDurationMs = estimateAudioDuration(speechBuffer) * 1000;
-        const args = buildMixCommand(options.chapterPath, ambientPath, soundscapeBasePath, getMixOptions(), speechDurationMs);
-        const result = await runFfmpeg(args);
-        if (result.code !== 0) {
-          console.error('✗ ffmpeg soundscape mix failed:', result.stderr);
-          return options.chapterPath;
+        console.log(`🌿 Soundscape ambience map: ${options.bookTitle} ch${options.chapterIndex} -> ${segments.map(s => s.assetId).join(', ')}`);
+        const tempDir = getTempAudioDir();
+        const ambientLayerPath = path.join(tempDir, `ambience_layer_${options.chapterIndex}.wav`);
+        const layerArgs = buildAmbientLayerCommand(
+          segments.map(s => ({ assetPath: s.assetPath, startMs: s.startMs, durationMs: s.durationMs, loop: s.loop })),
+          ambientLayerPath,
+          totalDurationMs
+        );
+        const layerResult = await runFfmpeg(layerArgs);
+        if (layerResult.code !== 0) {
+          console.error('✗ ffmpeg ambience layer build failed:', layerResult.stderr);
+        } else {
+          const args = buildMixCommand(options.chapterPath, ambientLayerPath, soundscapeBasePath, getMixOptions(), speechDurationMs);
+          const result = await runFfmpeg(args);
+          if (result.code !== 0) {
+            console.error('✗ ffmpeg soundscape mix failed:', result.stderr);
+            return options.chapterPath;
+          }
+          basePath = soundscapeBasePath;
         }
-        basePath = soundscapeBasePath;
+        if (fs.existsSync(ambientLayerPath)) {
+          fs.unlinkSync(ambientLayerPath);
+        }
+        if (fs.existsSync(tempDir)) {
+          fs.rmSync(tempDir, { recursive: true, force: true });
+        }
       }
     }
   }
@@ -512,7 +890,8 @@ export async function applySoundscapeToChapter(options: {
   const introLanguage = normalizeTargetLanguage((global as any).TARGET_LANGUAGE || metadata?.language || null);
 
   if (!fs.existsSync(introPath)) {
-    const theme = selectThemeAsset(catalog, options.preferences, chapterText);
+    const bookInfo = getBookInfoSnapshot(options.bookTitle);
+    const theme = selectThemeAsset(catalog, options.preferences, bookInfo);
     if (!theme) {
       console.warn('⚠️ No music theme available for intro');
     } else {

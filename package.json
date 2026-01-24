@@ -5,16 +5,13 @@
   "private": true,
   "workspaces": [
     "apps/backend",
-    "apps/frontend",
     "apps/pwa-v2",
     "packages/*"
   ],
   "scripts": {
-    "dev:frontend": "npm run dev --workspace=apps/frontend",
     "dev:backend": "npm run dev --workspace=apps/backend",
     "dev:pwa": "npm run dev --workspace=apps/pwa-v2 -- --port 5180",
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:pwa\"",
-    "build:frontend": "npm run build --workspace=apps/frontend",
     "build:backend": "npm run build --workspace=apps/backend",
     "build:pwa": "npm run build --workspace=apps/pwa-v2",
     "build": "npm run build:backend && npm run build:pwa"

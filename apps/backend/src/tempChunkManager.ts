@@ -39,6 +39,7 @@ import {
 } from './audiobookManager.js';
 import { Chapter } from './bookChunker.js';
 import { formatForMultiSpeakerTTS, getUniqueSpeakers, chunkForTwoSpeakers, TwoSpeakerChunk } from './twoSpeakerChunker.js';
+import { estimateTokens } from './costTracker.js';
 
 /**
  * Flag to control pre-dramatization pipeline
@@ -793,9 +794,10 @@ export async function generateAndSaveTempChunk(
     fs.mkdirSync(tempDir, { recursive: true });
   }
   fs.writeFileSync(tempFile, audioBuffer);
-  
+
   const elapsedMs = Date.now() - startTime;
   const duration = estimateAudioDuration(audioBuffer);
+
   console.log(`✅ Saved temp chunk ${chunkIndex}: ${tempFile} (${audioBuffer.length} bytes, ~${duration.toFixed(1)}s audio, ${elapsedMs}ms generation)`);
   return {
     audioBuffer,

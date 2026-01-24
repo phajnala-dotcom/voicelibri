@@ -91,6 +91,8 @@ Fields:
 - genre: Primary genre (e.g., "gothic horror", "young adult fantasy")
 - tone: Mood/atmosphere - NO words derivable from genre (e.g., "tense, melancholic")
 - voiceTone: EXACTLY two concise adjectives derived from genre + tone, format "adj1, adj2" (e.g., "ironic, witty")
+- period: One word or short phrase describing historical era (NO year numbers). Must be EXACTLY one of:
+  prehistory | antiquity | middle ages | modern age | contemporary | future | undefined
 
 `;
 }
@@ -123,7 +125,8 @@ export function getCharacterExtractionPrompt(
   "bookInfo": {
     "genre": "concise genre (few words)",
     "tone": "unique mood descriptors (few words)",
-    "voiceTone": "adj1, adj2"
+    "voiceTone": "adj1, adj2",
+    "period": "prehistory|antiquity|middle ages|modern age|contemporary|future|undefined"
   },` : '';
 
   return `You are an expert literary analyst and voice casting director for audiobook production.
@@ -174,6 +177,46 @@ RULES:
 7. Voice selection: Match voice characteristics to character role and gender (e.g., elderly → low pitch, child → high pitch)
 
 Return ONLY valid JSON, no markdown or explanation.`;
+}
+
+// =============================================================================
+// 1.1 CHAPTER AMBIENCE MAP PROMPT (Soundscape)
+// =============================================================================
+
+export function getChapterAmbienceMapPrompt(
+  chapterText: string,
+  ambientCatalogList: string
+): string {
+  return `You are an expert audio scene designer. Build a NON-OVERLAPPING ambience timeline for this chapter.
+
+AVAILABLE AMBIENT ASSETS (use ONLY these IDs):
+${ambientCatalogList}
+
+TASK:
+1) Identify ambience-worthy environments or sustained sources (e.g., forest, rain, cathedral, city, wind).
+2) Select the SINGLE BEST matching ambient asset ID for each segment using precise semantic match with asset tags/filename.
+3) Determine when each ambience starts and ends based on the chapter text flow.
+
+OUTPUT RULES:
+- Output JSON ONLY (no markdown).
+- Use start/end as fractions of chapter progress (0.0 to 1.0).
+- No overlaps: only ONE ambience active at a time.
+- If overlaps are possible, keep the most important/longest segment and drop the rest.
+- If nothing fits, return an empty list.
+
+JSON schema:
+{
+  "ambience": [
+    {
+      "assetId": "exact_ambient_asset_id",
+      "start": 0.0,
+      "end": 0.25
+    }
+  ]
+}
+
+CHAPTER TEXT:
+${chapterText.substring(0, 120000)}`;
 }
 
 /**

@@ -62,7 +62,7 @@ import {
   deleteAudiobook,
   type AudiobookMetadata,
 } from './audiobookManager.js';
-import { resolveChapterAudioPath, getSoundscapeThemeOptions, applySoundscapeToChapter } from './soundscapeIntegration.js';
+import { resolveChapterAudioPath, getSoundscapeThemeOptions, applySoundscapeToChapter, queueChapterAmbienceMap } from './soundscapeIntegration.js';
 import { 
   extractEpubChapters, 
   detectTextChapters, 
@@ -940,6 +940,13 @@ async function startBackgroundDramatization(
           // Only extract from content chapters, skip front matter sections
           // This is the key change: per-chapter extraction with alias detection
           const chapterTextForExtraction = textToDramatize;
+          if (!chapter.isFrontMatter) {
+            queueChapterAmbienceMap({
+              bookTitle: sanitizeBookTitle(BOOK_METADATA?.title || CURRENT_BOOK_FILE || 'Unknown'),
+              chapterIndex: chapterNum,
+              chapterText: chapterTextForExtraction,
+            });
+          }
           await characterRegistry.extractFromChapter(textToDramatize, chapterNum, chapter.isFrontMatter);
           
           // Track character extraction cost (input = chapter text, output = ~500 tokens for JSON response)
@@ -1160,7 +1167,7 @@ async function startBackgroundDramatization(
             chapterParallelism // TTS parallelism within chapter
           );
           
-          // Track audio generation cost for fallback path
+          // Track audio generation cost for fallback path (TTS: input = text, output ~10x)
           if (COST_TRACKER) {
             const inputTokens = estimateTokens(narratorText, TARGET_LANGUAGE || 'slavic');
             const outputTokens = inputTokens * 10;
