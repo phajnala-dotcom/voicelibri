@@ -942,10 +942,11 @@ async function startBackgroundDramatization(
           const chapterTextForExtraction = textToDramatize;
           await characterRegistry.extractFromChapter(textToDramatize, chapterNum, chapter.isFrontMatter);
           
-          // Track character extraction cost (input = chapter text, output = ~500 tokens for JSON response)
+          // Track character extraction cost (input = chapter text, output = character_registry.json tokens)
           if (COST_TRACKER && !chapter.isFrontMatter) {
             const inputTokens = estimateTokens(chapterTextForExtraction, TARGET_LANGUAGE || 'slavic');
-            const outputTokens = 500; // Approximate JSON response size
+            const registryJson = JSON.stringify(characterRegistry.toJSON(), null, 2);
+            const outputTokens = estimateTokens(registryJson, 'english');
             COST_TRACKER.addCharacterExtraction(inputTokens, outputTokens);
           }
           
@@ -1088,14 +1089,10 @@ async function startBackgroundDramatization(
             chapterParallelism // TTS parallelism within chapter
           );
           
-          // Track audio generation cost (TTS: input = text, output = ~10x for audio tokens)
+          // Track audio generation cost (TTS: output tokens = input tokens)
           if (COST_TRACKER) {
-            // Sum up all sub-chunk text for this chapter
-            const totalTextForTTS = newSubChunks.reduce((sum, sc) => 
-              sum + sc.segments.reduce((s, seg) => s + seg.text.length, 0), 0);
             const inputTokens = estimateTokens(result.taggedText, TARGET_LANGUAGE || 'slavic');
-            // Audio output tokens are roughly 10x the input for Gemini TTS
-            const outputTokens = inputTokens * 10;
+            const outputTokens = inputTokens;
             COST_TRACKER.addAudioGeneration(inputTokens, outputTokens);
           }
           
@@ -1160,10 +1157,10 @@ async function startBackgroundDramatization(
             chapterParallelism // TTS parallelism within chapter
           );
           
-          // Track audio generation cost for fallback path
+          // Track audio generation cost for fallback path (output tokens = input tokens)
           if (COST_TRACKER) {
             const inputTokens = estimateTokens(narratorText, TARGET_LANGUAGE || 'slavic');
-            const outputTokens = inputTokens * 10;
+            const outputTokens = inputTokens;
             COST_TRACKER.addAudioGeneration(inputTokens, outputTokens);
           }
           

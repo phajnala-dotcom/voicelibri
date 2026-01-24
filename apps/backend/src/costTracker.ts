@@ -7,7 +7,7 @@
  * Pricing (as of 2025):
  * - gemini-2.5-flash (character extraction): $0.30/M input, $2.50/M output
  * - gemini-2.5-flash (dramatization): $0.50/M input, $2.50/M output  
- * - gemini-2.5-flash-tts (audio): $0.30/M input, $10.00/M output
+ * - gemini-2.5-flash-tts (audio): $0.50/M input, $10.00/M output
  */
 
 import fs from 'fs';
@@ -82,7 +82,7 @@ export const PRICING = {
   },
   AUDIO_GENERATION: {
     model: 'gemini-2.5-flash-tts',
-    inputPerMillion: 0.30,
+    inputPerMillion: 0.50,
     outputPerMillion: 10.00,
   },
   TRANSLATION: {
