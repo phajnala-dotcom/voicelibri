@@ -1,4 +1,5 @@
 apps/backend/nul
+node_modules/
 audiobooks/
 soundscape/assets/
 !soundscape/assets/catalog.json
