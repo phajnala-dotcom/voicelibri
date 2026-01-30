@@ -1,5 +1,8 @@
 apps/backend/nul
 audiobooks/
+soundscape/assets/
+!soundscape/assets/catalog.json
+!soundscape/assets/manifest.json
 *.log
 *.docx
 test_*.ps1
@@ -9,5 +12,5 @@ reset.ps1
 *.ogg
 *.opus
 .env.example
-apps\backend\.env
-apps\backend\.gcsakey.json
+apps/backend/.env
+apps/backend/.gcsakey.json
