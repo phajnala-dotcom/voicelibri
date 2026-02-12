@@ -1,0 +1,132 @@
+Prompt na rozbalenie audio zip v assets:
+powershell -ExecutionPolicy Bypass -File "C:\Users\hajna\VoiceLibri\scripts\process-zips.ps1" -TargetDir "."
+
+# SOUNDSCAPE CATALOG GENERATION - PHASE 2 HANDOFF
+
+## PROJECT CONTEXT
+VoiceLibri soundscape module - 4,308 audio assets (.ogg) requiring comprehensive metadata catalog for LLM-based audiobook production. Files located in `soundscape/assets/` in folders `01_AMB`, `02_MUSIC`, `03_SFX`.
+
+## CURRENT STATE
+- **Excel**: `soundscape/assets/catalog.xlsx`
+- **Schema**: AssetID, Filename, Type, Texture, Genre, Era, Location, Source1/2/3, Mood1/2, Intensity
+- **Phase 1 COMPLETE**: User made manual edits to ~200 rows demonstrating patterns
+- **Phase 2 NEEDED**: AI applies learned patterns to all 4,308 rows
+
+- **jsons**: `soundscape/assets/catalog.json`, manifest.json - json version derived from catalog.xlsx - must be updated as a final step after final catalog.xlsx is approved by the user and locked.
+
+
+
+## ⚠️ CRITICAL: GENERALIZATION PRINCIPLE
+
+The rules and examples below are **ILLUSTRATIVE, NOT EXHAUSTIVE**. 
+You must **generalize the underlying logic** to ALL similar cases.
+Some of them were already applied - check thoroughly if it was done fully - if only partially, finish their 100% full application throughout the whole catalog
+
+### Examples → Generalize these Patterns:
+
+| Example Given | Generalized Rule |
+|---------------|------------------|
+| "Newcastle" wrongly matched "castle" | ALL city/location names must be checked as WHOLE WORDS, never substrings. Build proper word boundary matching. |
+| "village" in nature = not city | ANY word's meaning depends on CONTEXT. Village+forest=rural. Village+traffic=urban. Analyze surrounding words. |
+| fireplace → calm + cosy | ANY domestic/comfort source should infer appropriate mood. Bathtub=relaxed, kitchen=busy/warm, bedroom=intimate, etc. |
+| combat, fight, battle → aggressive + brutal/tense | ANY violent context needs mood differentiation: damage present=brutal, threat only=tense. Apply to sword, gun, explosion, etc. |
+| Dark_Harmonics drones ≠ war | ANY atmospheric/cinematic sound design is NOT literal combat. Distinguish SOUND DESIGN from DEPICTED ACTION. |
+| "short" is duration not texture | ANY audio-technical term (loop, stereo, mono, version, mix, master, take) is metadata, not content. |
+| horror as Genre not Type | ANY genre word (fantasy, comedy, drama, thriller) should NOT be used as Type. Type=WHERE, Genre=WHAT STYLE. |
+
+### The Mindset:
+Think like a **linguistic scientist + sound designer**:
+1. What does this word MEAN in THIS context?
+2. What category does this meaning belong to?
+3. What emotions would a listener associate with this sound?
+4. Apply this reasoning to EVERY word, not just listed examples.
+
+### When Uncertain:
+- If a pattern isn't covered by explicit rules, REASON BY ANALOGY
+- Ask: "What similar case WAS covered? How does that logic apply here?"
+- When truly ambiguous, leave empty rather than guess
+
+---
+
+## CRITICAL RULES (MUST FOLLOW)
+
+### General Principles
+1. **NO WORD WASTE** - Every meaningful word from filename and metadata MUST be placed in most suitable field. Also from the file subfolder, if it is not duplicate or redndant generalized category  to those from filenama and from metadata
+2. **NO DUPLICATES** - 1 mined word → 1 Excel cell only (never same word in Type AND Genre)
+3. **GRAMMATICAL NORMALIZATION ONLY** - daylight→day OK, afternoon→day FORBIDDEN
+4. **KEEP PLURALS IN SOURCES** - birds stays birds, don't change to bird
+5. **Combine excess sources** - If >3 sources, put 2-3 in one cell separated by comma and space ", "
+
+### Field-Specific Rules
+
+**TYPE** (environment/setting - WHERE the sound exists, eventually sonical type):
+- Nature sounds: forest, beach, ocean, river, mountain, cave, meadow, etc.
+- Urban: city, street, traffic, market, town
+- Interior: household, room, office, bar, restaurant, library
+- Historical: castle, dungeon, ruins, palace
+- Sci-fi: spacecraft, space, futuristic
+- Combat: combat, military, battle (but NOT "war" as type)
+- ⚠️ **HORROR RULE**: Horror is GENRE not TYPE (exception: use only if no other Type found)
+- ⚠️ **CITY NAMES** are Location, not Type indicators
+- ⚠️ **"village"** in nature context = nature/town, NOT city
+
+**TEXTURE** (auditory characteristics - HOW it sounds):
+- Impact: boom, crash, thud, impact, slam
+- Sustained: drone, hum, buzz, rumble, hiss, crackle, 
+- Movement: whoosh, swoosh, rush, pass, flyby
+- Pitch: high-pitched (not just "high"), low-frequency (not just "low")
+- Animal sounds: screech, growl, snarl, howl, chirp, squeak
+- Metallic: clang, clank, chime, ring, rattle
+- Percussive: percussive, rhythmic, pounding
+- Design: cinematic, riser, stinger, transition, swell
+- ⚠️ **"short"/"long"/"medium"** = audio duration, NOT texture - not in catalog, as already clear from track exact duration time
+
+**GENRE** (literary/musical style):
+- Literary (for AMB and SFX): horror, fantasy, sci-fi, historical, action, adventure, mystery, comedy, drama, crime, etc.
+- Musical (for MUSIC): classical, electronic, folk, world, jazz, rock, orchestral
+- ⚠️ Don't use "war" as genre - use "historical" or "action" instead
+
+**ERA** (time period):
+- prehistory, antiquity, medieval, modernity, historical, contemporary, future
+- past era: prehistory, antiquity, medieval, modernity - these can be used only in case they are clearly identified (e.g. Beethoven - modernity, dinosaurs - prehistory, ancient Rome - antiquity), otherwise must be used Era: historical (universal for 2+ past eras or impossible to identify particular era, but clear that it was in past - not contemporary nor future) 
+- ⚠️ **Nature types have NO era** (era-agnostic: forest, ocean, bird, etc.)
+- ⚠️ **City/Technology/Urban = contemporary** always (except clearly historical technology (e.g. steam train), etc. or clearly city ambience from history)
+- ⚠️ **technologies or invention clearly more advanced than contemporary = future** (e.g. spaceship, quantum teleportation, etc.
+
+**MOOD** (emotional/psychological impact to listener - WHICH emotions/feelings it evokes). Semantic LLM AI inference required if missing
+- Combat/fight/battle: Mood1=aggressive, Mood2=brutal (if blood/body damage etc.) OR tense (if threat only - SFX sound ofe arrow falling to water)
+- Household/fireplace: Mood1=calm, Mood2=cosy
+- Horror: Mood1=scary, Mood2=tense
+- Nature peaceful: serene, tranquil, peaceful
+- Nature dramatic: vast, powerful, majestic
+- ⚠️ **Rich vocabulary** - fine detail differentiation anchored in imaginative reality
+- ⚠️ **"Dark_Harmonics" / atmospheric drones** = scary/tense or mysterious/eerie, NOT aggressive
+
+---
+
+## KNOWN BUGS TO AVOID (from previous failed attempt)
+1. ❌ City name substrings: "Newcastle" matched "castle" → wrong Type
+2. ❌ City names in Type indicators caused nature sounds to be marked as "city"
+3. ❌ "village" in nature filenames wrongly classified as urban
+4. ❌ Atmospheric horror drones marked as Type="war" with Mood=aggressive
+5. ❌ Horror used as both Type AND Genre (duplication)
+
+---
+
+## TECH STACK
+- Python 3.11 (.venv)
+- openpyxl: Excel (preserve sheets: "Metadata, tags", "Annotation", "Hárok1" - DO NOT TOUCH Hárok1)
+- mutagen: Audio metadata extraction
+- Output: catalog.xlsx (source of truth), catalog.json, manifest.json
+
+## APPROACH
+1. Start with conservative, high-confidence extractions
+2. Test on small sample before full run
+3. Prioritize CORRECTNESS over fill rate
+4. When uncertain, leave field empty rather than guess wrong
+
+## FILES TO CREATE/MODIFY
+- `scripts/generate_catalog_v2.py` - Main generation script
+- `soundscape/assets/catalog.xlsx` - Output (restore from backup first)
+- `soundscape/assets/catalog.json` - JSON mirror
+- `soundscape/assets/manifest.json` - Manifest format

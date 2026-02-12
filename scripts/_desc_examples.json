@@ -1,0 +1,906 @@
+[
+  {
+    "id": "00507",
+    "file": "AIRHiss-L,R_Singapore-Air, Hiss, Leak, Air Condition, Air Floating, Broken Pipe, Empty Streets, Alley Ambience_FTUS_WOSB.ogg",
+    "desc": "Recording captures the hissing sound of an air leak from a broken air conditioning pipe in an alley of Singapore. The ambience includes the subtle presence of air floating and the quietude of empty streets nearby.",
+    "kw": "AIRHiss Singapore Air Leak Condition Floating Broken Pipe Empty Streets Alley Ambience FTUS WOSB",
+    "cat": "AIR",
+    "sub": "HISS"
+  },
+  {
+    "id": "00510",
+    "file": "AIRHiss-W,Y,Z,X_USA-Air, Hiss, Leaking, Pipe, Rumbling, Humming, Denver_FTUS_WOSB.ogg",
+    "desc": "Hissing air sound from a leaking pipe with rumbling and humming, recorded in Denver.",
+    "kw": "AIRHiss WYZX USA Air Hiss Leaking Pipe Rumbling Humming Denver FTUS WOSB",
+    "cat": "AIR",
+    "sub": "HISS"
+  },
+  {
+    "id": "00188",
+    "file": "AEROInt-LRbi_Korea-Aircraft, Interior, Room Tone, Chatter, Air System, Movements, Landing Mode, Light Chatter, Boeing 787, Binaural_FTUS_WOSB.ogg",
+    "desc": "Binaural recording of the Boeing 787 interior in landing mode, capturing room tone, light chatter, air system sounds, and seat movements.",
+    "kw": "AEROInt LRbi Korea Aircraft Interior Room Tone Chatter Air System Movements Landing Mode Light Boeing Binaural FTUS WOSB",
+    "cat": "AIRCRAFT",
+    "sub": "INTERIOR"
+  },
+  {
+    "id": "00168",
+    "file": "AEROInt-LRbi_Indonesia-Aircraft, Interior, Room Tone, Movements, Cruising, Engine, Vibrations, Singapore to Bali, Binaural, Boeing 777_FTUS_WOSB.ogg",
+    "desc": "Interior sounds recorded aboard a Boeing 777 cruising from Singapore to Bali. Includes room tone, movements, engine vibrations, and ambient aircraft sounds. Binaural recording for immersive experience.",
+    "kw": "AEROInt LRbi Indonesia Aircraft Interior Room Tone Movements Cruising Engine Vibrations Singapore to Bali Binaural Boeing FTUS WOSB",
+    "cat": "AIRCRAFT",
+    "sub": "INTERIOR"
+  },
+  {
+    "id": "00482",
+    "file": "ALRMBell-M,S,Cs_Thailand-Alarm, Bell, Fire Alarm, Test, Very Loud, Condominium, Bangkok_FTUS_WOSB.ogg",
+    "desc": "A very loud fire alarm test in a condominium building in Bangkok, with the sharp sound of the bell echoing through the space.",
+    "kw": "ALRMBell MSCs Thailand Alarm Bell Fire Test Very Loud Condominium Bangkok FTUS WOSB",
+    "cat": "ALARMS",
+    "sub": "BELL"
+  },
+  {
+    "id": "00479",
+    "file": "ALRMBell-LRbi_Japan-Alarm, Bell, Ring, Commuter Train, Pass By, Railroad Crossing, Clicks, Rain, Dripping, Umbrella, Daytime_FTUS_WOSB.ogg",
+    "desc": "Experience an alarm bell and a passing commuter train at a railroad crossing in Osaka, enveloped by rain and drips. Captured in daytime binaural audio.",
+    "kw": "ALRMBell LRbi Japan Alarm Bell Ring Commuter Train Pass By Railroad Crossing Clicks Rain Dripping Umbrella Daytime FTUS WOSB",
+    "cat": "ALARMS",
+    "sub": "BELL"
+  },
+  {
+    "id": 18628,
+    "file": "AMBMrkt_HongKong_Ambience_Chatter_L_R_Market_People_Walking_Footsteps_Tsim.ogg",
+    "desc": "Market in Tsim Sha Tsui, Hong Kong, with chatter, people walking, footsteps, sellers, and a motorbike.",
+    "kw": "AMBMrkt HongKong Ambience Chatter L R Market People Walking Footsteps Tsim",
+    "cat": "AMBIENCE",
+    "sub": "MARKET"
+  },
+  {
+    "id": "02438",
+    "file": "AMBPark-L,R_China-Ambience, Park, Hot Day, Extreme Loud Cicadas, People Walking, Chatter, Airplane Distant, Bird Chirping, Flies Buzzing, Daytime, Chengdu, 03_FTUS_WOSB.ogg",
+    "desc": "Park ambience recorded in Chengdu on a very hot day, featuring extremely loud cicadas, people walking by, chatting, a bird chirping, and flies buzzing around. An airplane passes in the distance during daytime.",
+    "kw": "AMBPark China Ambience Park Hot Day Extreme Loud Cicadas People Walking Chatter Airplane Distant Bird Chirping Flies Buzzing Daytime Chengdu FTUS WOSB",
+    "cat": "AMBIENCE",
+    "sub": "PARK"
+  },
+  {
+    "id": "08366",
+    "file": "ANMLRdnt-L,R_Taiwan-Animals, Rodent, Squirrel, Squeaks, Barks, Grunts, Water, Flow, Taipei, 17_FTUS_WOSB.ogg",
+    "desc": "Rodent vocalization ambience recorded in Taipei, Taiwan, featuring a squirrel squeaking, barking, and grunting, accompanied by the sound of flowing water nearby. Captures a lively and natural wildlife setting.",
+    "kw": "ANMLRdnt Taiwan Animals Rodent Squirrel Squeaks Barks Grunts Water Flow Taipei FTUS WOSB",
+    "cat": "ANIMALS",
+    "sub": "RODENT"
+  },
+  {
+    "id": "07888",
+    "file": "ANMLBat-L,R_Australia-Animals, Bat, Flying Foxes, Evening, Slowly Waking Up, Screeches, Hanging in Trees, Campground Activity, Pine Creek, Northern Territory, 02_FTUS_WOSB.ogg",
+    "desc": "Evening ambience in a rural Australian campground as flying foxes begin to stir in the treetops. Their screeches grow more frequent as they slowly wake up, accompanied by subtle campground activity below.",
+    "kw": "ANMLBat Australia Animals Bat Flying Foxes Evening Slowly Waking Up Screeches Hanging in Trees Campground Activity Pine Creek Northern Territory",
+    "cat": "ANIMALS",
+    "sub": "BAT"
+  },
+  {
+    "id": "00527",
+    "file": "IR-L,R_SriLanka-Impulse Response, Train Station, Three Hand Claps, Reverberation, Vintage, Large Space, Distant Reflections, Echo, Historic_FTUS_WOSB.ogg",
+    "desc": "Impulse response recorded inside a historic train station in Sri Lanka. Three hand claps from a distance create rich reverberation, capturing the acoustics of the large, aged structure.",
+    "kw": "IR Sri Lanka Impulse Response Train Station Three Hand Claps Reverberation Vintage Large Space Distant Reflections Echo Historic FTUS WOSB",
+    "cat": "ARCHIVED",
+    "sub": "IMPULSE RESPONSE"
+  },
+  {
+    "id": "00511",
+    "file": "IR-L,R_Australia-Archived, Impulse Response, Underground, Hand Clapping, Parking Garage, Air System, Eerie, Mad Max Film Location, Melbourne University, 01_FTUS_WOSB.ogg",
+    "desc": "South Lawn Carpark Ambience Featured location in Mad Max. Hand Clapping for IR.",
+    "kw": "IR Australia Archived Impulse Response Underground Hand Clapping Parking Garage Air System Eerie Mad Max Film Location Melbourne University FTUS WOSB",
+    "cat": "ARCHIVED",
+    "sub": "IMPULSE RESPONSE"
+  },
+  {
+    "id": "00531",
+    "file": "BEEPAppl-L,R_China-Beep, Appliance, Hotel Safe, Combination, Lock, 02_FTUS_WOSB.ogg",
+    "desc": "This recording captures the beeping of a hotel safe’s keypad as a combination is entered.",
+    "kw": "BEEPAppl China Beep Appliance Hotel Safe Combination Lock FTUS WOSB",
+    "cat": "BEEPS",
+    "sub": "APPLIANCE"
+  },
+  {
+    "id": "00537",
+    "file": "BEEPTimer-M_Singapore-Beep, Timer, Pedestrian, Traffic, Light Signal, 03_FTUS_WOSB.ogg",
+    "desc": "Beep timer sound from a pedestrian traffic light signal in Singapore.",
+    "kw": "BEEPTimer Singapore Beep Timer Pedestrian Traffic Light Signal FTUS WOSB",
+    "cat": "BEEPS",
+    "sub": "TIMER"
+  },
+  {
+    "id": "08483",
+    "file": "BELLHand-L,R_Thailand-Bells, Handbell, Sleigh Bells, Package, Movements 05_FTUS_WOSB.ogg",
+    "desc": "he soft jingling of sleigh bells accompanies the subtle rustling and movement of a package, creating a dynamic and textured soundscape in Thailand.",
+    "kw": "BELLHand Thailand Bells Handbell Sleigh Package Movements FTUS WOSB",
+    "cat": "BELLS",
+    "sub": "HANDBELL"
+  },
+  {
+    "id": "08491",
+    "file": "BELLHand-L,R_Thailand-Bells, Handbell, Sleigh Bells, Whoosh, 02_FTUS_WOSB.ogg",
+    "desc": "A sharp, airy whoosh blends with the jingling of sleigh bells, creating a dynamic and engaging sound effect that captures motion and energy in Thailand.",
+    "kw": "BELLHand Thailand Bells Handbell Sleigh Whoosh FTUS WOSB",
+    "cat": "BELLS",
+    "sub": "HANDBELL"
+  },
+  {
+    "id": "08777",
+    "file": "BIRDSong-L,R_Australia-Bird, Birdsong, Morning Birds, Funny Calls, Spangled Drongo, Forest, Campground, Northern Territory, 54_FTUS_WOSB.ogg",
+    "desc": "Lively morning birdsong in the Northern Territory featuring the unique and comical calls of a Noisy Friarbird.",
+    "kw": "BIRDSong Australia Bird Morning Birds Funny Calls Spangled Drongo Forest Campground Northern Territory",
+    "cat": "BIRDS",
+    "sub": "SONGBIRD"
+  },
+  {
+    "id": "08802",
+    "file": "BIRDSong-L,R_NewZealand-Birds, Songbird, Tui Bird, Clicks, Cackles, Wheezes, Melodic, Calls, Forest, 07_FTUS_WOSB.ogg",
+    "desc": "The melodic calls of the Tui bird echo through the forest in New Zealand, featuring intricate clicks, cackles, and wheezes that create a rich and dynamic soundscape.",
+    "kw": "BIRDSong New Zealand Birds Songbird Tui Bird Clicks Cackles Wheezes Melodic Calls Forest FTUS WOSB",
+    "cat": "BIRDS",
+    "sub": "SONGBIRD"
+  },
+  {
+    "id": "08894",
+    "file": "BOATHorn-L,R_Taiwan-Boats, Horn, Ship, Loud, Short, Industrial Harbor, Heavy Industry, Container Ship Loading, Unloading, Intense, Gritty, Kaohsiung, 01_FTUS_WOSB.ogg",
+    "desc": "Loud ship horn in Kaohsiungs industrial harbor. Heavy machinery, distant sirens, water splashes, and few birds in the sweltering heat. Gritty and intense atmosphere.",
+    "kw": "BOATHorn Taiwan Boats Horn Ship Loud Short Industrial Harbor Heavy Industry Container Loading Unloading Intense Gritty Kaohsiung FTUS WOSB",
+    "cat": "BOATS",
+    "sub": "HORN"
+  },
+  {
+    "id": "09183",
+    "file": "BOATShip-M,S,Cs_Korea-Boats, Ship, Ferry, Gate, Metallic Rumble, Movements, Mechanical, Docking, Captain Speaking, Korean Announcement, Wando, Chuja Do_FTUS_WOSB.ogg",
+    "desc": "Ferry docking with gate mechanical movements and metallic rumble, captain speaking at Wando to Chujado.",
+    "kw": "BOATShip MSCs Korea Boats Ship Ferry Gate Metallic Rumble Movements Mechanical Docking Captain Speaking Korean Announcement Wando Chuja Do FTUS WOSB",
+    "cat": "BOATS",
+    "sub": "SHIP"
+  },
+  {
+    "id": "00539",
+    "file": "CHAINMvmt-L,R_USA-Chain, Movements, Rattle, Impact, Hitting, Squeaking, Fence, Sign, No Entrance_FTUS_WOSB.ogg",
+    "desc": "Chain movements with rattling, impacts, and squeaking sounds from a fence and sign.",
+    "kw": "CHAINMvmt USA Chain Movements Rattle Impact Hitting Squeaking Fence Sign No Entrance FTUS WOSB",
+    "cat": "CHAINS",
+    "sub": "MOVEMENT"
+  },
+  {
+    "id": "00552",
+    "file": "CLOCKTick-W,Y,Z,X_USA-Clock, Ticking, Timer, Rattle, Old, Infrared Light, Roomtone, Wildwood Inn Hotel, Snowmass, Colorado_FTUS_WOSB.ogg",
+    "desc": "Clock ticking with a rattling timer, old infrared light, and room tone, recorded at Wildwood Inn Hotel, Snowmass, Colorado.",
+    "kw": "CLOCKTick WYZX USA Clock Ticking Timer Rattle Old Infrared Light Roomtone Wildwood Inn Hotel Snowmass Colorado FTUS WOSB",
+    "cat": "CLOCKS",
+    "sub": "TICK"
+  },
+  {
+    "id": "00551",
+    "file": "CLOCKTick-L,R_USA-Clocks, Tick, Clock Ticking, Clock Tower 1925, Police Siren Background, Howard Clock, Clock Pendulum, Denver East High School_FTUS_WOSB.ogg",
+    "desc": "Clock ticking with the pendulum of a 1925 Howard Clock, with police siren background, in Denver East High School.",
+    "kw": "CLOCKTick USA Clocks Tick Clock Ticking Tower Police Siren Background Howard Pendulum Denver East High School FTUS WOSB",
+    "cat": "CLOCKS",
+    "sub": "TICK"
+  },
+  {
+    "id": "00575",
+    "file": "CLOTHMvmt-L,R_Taiwan-Cloth, Towel, Flap, Whoosh, Snap, Fast Motion, Bathroom, Hotel, 05_FTUS_WOSB.ogg",
+    "desc": "A towel whips sharply through the air in a hotel bathroom in Taiwan, producing a fast whoosh followed by a crisp snap, similar to a whip crack. The recording captures both the movement of the fabric and the sharp impact of the snap, ideal for cleaning sequences, or comedic timing effects.",
+    "kw": "Cloth Towel Flap Whoosh Snap Fast Motion Fabric Handling Textile Sound Bathroom Hotel Soft Air Movement Material Swing Whip Crack Cleaning Household Sounds Interior Taiwan Domestic Rustle Sharp Crisp Impact",
+    "cat": "CLOTH",
+    "sub": "MOVEMENT"
+  },
+  {
+    "id": "00570",
+    "file": "CLOTHMvmt-L,R_Taiwan-Cloth, Towel, Flap, Whoosh, Fast Motion, Bathroom, Hotel, 11_FTUS_WOSB.ogg",
+    "desc": "A towel moves quickly through the air in a hotel bathroom in Taiwan, producing a sharp whoosh and flap as the fabric displaces air. The fast motion creates a crisp, dynamic textile sound ideal for Foley work, cleaning effects, or action-oriented interior scenes.",
+    "kw": "Cloth Towel Flap Whoosh Snap Fast Motion Fabric Handling Textile Sound Bathroom Hotel Soft Air Movement Material Swing Whip Crack Cleaning Household Sounds Interior Taiwan Domestic Rustle Sharp Crisp Impact",
+    "cat": "CLOTH",
+    "sub": "MOVEMENT"
+  },
+  {
+    "id": "00608",
+    "file": "COMTelph-L,R_HongKong-Communication, Telephone, Hanging On, Off, Hotel Room, Telephone, 02_FTUS_WOSB.ogg",
+    "desc": "Telephone interaction in a Hong Kong hotel room, capturing hanging on and off sounds.",
+    "kw": "COMTelph Hong Kong Communication Telephone Hanging On Off Hotel Room FTUS WOSB",
+    "cat": "COMMUNICATIONS",
+    "sub": "TELEPHONE"
+  },
+  {
+    "id": "00596",
+    "file": "COMTelph-L,R_Cyprus-Communication, Telephone, Rotary Phone, Dialing, Hanging On, Hanging Up, Phone, Old, Retro, 09_FTUS_WOSB.ogg",
+    "desc": "Old-fashioned rotary phone communication with dialing and hang-up sounds in a retro style in Cyprus.",
+    "kw": "COMTelph Cyprus Communication Telephone Rotary Phone Dialing Hanging On Up Old Retro FTUS WOSB",
+    "cat": "COMMUNICATIONS",
+    "sub": "TELEPHONE"
+  },
+  {
+    "id": "00640",
+    "file": "CREADrgn-L,R_Vietnam-Creatures, Dragon, Water, Hose, Cleaning, Dragon Bridge, Ambience, Crowd, Danang, 03_FTUS_WOSB.ogg",
+    "desc": "Dragon Bridge water-spraying ambiance with a crowd, recorded in Danang, Vietnam.",
+    "kw": "CREADrgn Vietnam Creatures Dragon Water Hose Cleaning Bridge Ambience Crowd Danang FTUS WOSB",
+    "cat": "CREATURES",
+    "sub": "DRAGON"
+  },
+  {
+    "id": "00637",
+    "file": "CREADrgn-L,R_Vietnam-Creatures, Dragon, Fire, Spit Fire, Dragon Bridge, Ambience, Crowd, Danang, 05_FTUS_WOSB.ogg",
+    "desc": "Dragon Bridge fire-spitting ambiance with a crowd, recorded in Danang, Vietnam.",
+    "kw": "CREADrgn Vietnam Creatures Dragon Fire Spit Bridge Ambience Crowd Danang FTUS WOSB",
+    "cat": "CREATURES",
+    "sub": "DRAGON"
+  },
+  {
+    "id": "09275",
+    "file": "CRWDChld-L,R_Croatia-Crowds, Children, School, Recess, Children, Playing, Outdoor, Ball Games, Croatian, Zagreb, 02_FTUS_WOSB.ogg",
+    "desc": "School recess with children playing outdoor ball games, speaking Croatian, in Zagreb, Croatia.",
+    "kw": "CRWDChld Croatia Crowds Children School Recess Playing Outdoor Ball Games Croatian Zagreb FTUS WOSB",
+    "cat": "CROWDS",
+    "sub": "CHILDREN"
+  },
+  {
+    "id": "09205",
+    "file": "CRWDAngr-L,R_HongKong-Crowds, Angry, Protest, Behind Road Block, Scary, Demonstration, Angry, Crowd, Walla, Cantonese, Shouting, Men, Women, Heavy Screaming, Shouting, 02_FTUS_WOSB.ogg",
+    "desc": "Hong Kong protest behind a roadblock, capturing angry crowds, Cantonese shouting, and heavy screaming, including men and women.",
+    "kw": "CRWDAngr Hong Kong Crowds Angry Protest Behind Road Block Scary Demonstration Crowd Walla Cantonese Shouting Men Women Heavy Screaming FTUS WOSB",
+    "cat": "CROWDS",
+    "sub": "ANGRY"
+  },
+  {
+    "id": "09636",
+    "file": "DESTRCrsh-M,S,Cs_Thailand-Destruction, Crash, Debris, Rampage, Room, Plastic, Printer, Scanner, Glass Breaking_FTUS_WOSB.ogg",
+    "desc": "Printer and scanner glass breaking with smashing debris during rampage.",
+    "kw": "DESTRCrsh MSCs Thailand Destruction Crash Debris Rampage Room Plastic Printer Scanner Glass Breaking FTUS WOSB",
+    "cat": "DESTRUCTION",
+    "sub": "CRASH & DEBRIS"
+  },
+  {
+    "id": "09637",
+    "file": "DESTRCrsh-M,S,Cs_Thailand-Destruction, Crash, Debris, Rampage, Room, Plastic, Printer_FTUS_WOSB.ogg",
+    "desc": "Plastic printer smashing with debris during rampage.",
+    "kw": "DESTRCrsh MSCs Thailand Destruction Crash Debris Rampage Room Plastic Printer FTUS WOSB",
+    "cat": "DESTRUCTION",
+    "sub": "CRASH & DEBRIS"
+  },
+  {
+    "id": "00643",
+    "file": "DIRTTonl-M_HongKong-Dirt, Tonal, Textures, Swoosh, Scratching, Bubbles, Sand Beach, Underwater, Hydrophone, Creative, 03_FTUS_WOSB.ogg",
+    "desc": "A creative underwater hydrophone recording from a sand beach, capturing tonal dirt textures, swooshes, scratching sounds, and the occasional bubbling. The submerged environment offers a unique blend of natural underwater ambiance and the gritty, textured sounds of sand and dirt moving.",
+    "kw": "DIRTTonl Hong Kong Dirt Tonal Textures Swoosh Scratching Bubbles Sand Beach Underwater Hydrophone Creative FTUS WOSB",
+    "cat": "DIRT & SAND",
+    "sub": "TONAL"
+  },
+  {
+    "id": "00647",
+    "file": "DIRTTonl-M_HongKong-Dirt, Tonal, Textures, Swoosh, Scratching, Bubbles, Sand Beach, Underwater, Hydrophone, Creative, 07_FTUS_WOSB.ogg",
+    "desc": "A creative underwater hydrophone recording from a sand beach, capturing tonal dirt textures, swooshes, scratching sounds, and the occasional bubbling. The submerged environment offers a unique blend of natural underwater ambiance and the gritty, textured sounds of sand and dirt moving.",
+    "kw": "DIRTTonl Hong Kong Dirt Tonal Textures Swoosh Scratching Bubbles Sand Beach Underwater Hydrophone Creative FTUS WOSB",
+    "cat": "DIRT & SAND",
+    "sub": "TONAL"
+  },
+  {
+    "id": "10003",
+    "file": "DOORMetl-L,R_USA-Doors, Metal, Locker, Spint, Metall, Open, Closing, Football Locker Room, Basement, Denver East High School, 09_FTUS_WOSB.ogg",
+    "desc": "Metal locker doors opening and closing in a football locker room basement at Denver East High School.",
+    "kw": "DOORMetl USA Doors Metal Locker Spint Metall Open Closing Football Room Basement Denver East High School FTUS WOSB",
+    "cat": "DOORS",
+    "sub": "METAL"
+  },
+  {
+    "id": "09939",
+    "file": "DOORMetl-L,R_Malaysia-Doors, Metal, Heavy Door, Truck Door, Open, Closing, Junk Yard, Penang, 05_FTUS_WOSB.ogg",
+    "desc": "Heavy metal truck door opening and closing in a junkyard in Penang, capturing the robust sound of metal movement.",
+    "kw": "DOORMetl Malaysia Doors Metal Heavy Door Truck Open Closing Junk Yard Penang FTUS WOSB",
+    "cat": "DOORS",
+    "sub": "METAL"
+  },
+  {
+    "id": "10437",
+    "file": "DRWRWood-L,R_Croatia-Drawers, Wood, Open, Closing, Apartment, Zagreb, 08_FTUS_WOSB.ogg",
+    "desc": "This recording features the sound of a wooden drawer being opened and closed within an apartment in Zagreb. The action captures the smooth glide and the subtle click of the drawer as it shuts, characteristic of household movements.",
+    "kw": "DRWRWood Croatia Drawers Wood Open Closing Apartment Zagreb FTUS WOSB",
+    "cat": "DRAWERS",
+    "sub": "WOOD"
+  },
+  {
+    "id": "10445",
+    "file": "DRWRWood-L,R_Croatia-Drawers, Wood, Open, Closing, Apartment, Zagreb, 16_FTUS_WOSB.ogg",
+    "desc": "This recording features the sound of a wooden drawer being opened and closed within an apartment in Zagreb. The action captures the smooth glide and the subtle click of the drawer as it shuts, characteristic of household movements.",
+    "kw": "DRWRWood Croatia Drawers Wood Open Closing Apartment Zagreb FTUS WOSB",
+    "cat": "DRAWERS",
+    "sub": "WOOD"
+  },
+  {
+    "id": "10722",
+    "file": "ELECEmf-M_HongKong-Electricity, Electromagnetic Fields, Old Lights, EMF, Buzzing, Hum, Static, Priezor, 09_FTUS_WOSB.ogg",
+    "desc": "A recording capturing the hum and static of old electrical lights, with prominent electromagnetic field buzzing noise. The sound evokes a sense of electrical equipment in a vintage tunnel setting. Perfect for adding tension or atmospheric depth to projects needing subtle electrical interference or retro industrial vibes.",
+    "kw": "ELECEmf Hong Kong Electricity Electromagnetic Fields Old Lights EMF Buzzing Hum Static Priezor FTUS WOSB",
+    "cat": "ELECTRICITY",
+    "sub": "ELECTROMAGNETIC"
+  },
+  {
+    "id": "10613",
+    "file": "ELECEmf-L,R_Malta-Electricity, Electromagnetic, Fields, Power Supply Box, Humming, Glitches, Buzz_FTUS_WOSB.ogg",
+    "desc": "Electromagnetic fields recording from a power supply box in Malta with humming, glitches, and buzz.",
+    "kw": "ELECEmf Malta Electricity Electromagnetic Fields Power Supply Box Humming Glitches Buzz FTUS WOSB",
+    "cat": "ELECTRICITY",
+    "sub": "ELECTROMAGNETIC"
+  },
+  {
+    "id": "00650",
+    "file": "FGHTMisc-L,R_Indonesia-Fight, Misc, Rooster Fight, Cock Fights, Men Shouting, Screaming, Betting, Cock A Doodle Doo, Ubud, Bali, Indonesia_FTUS_WOSB.ogg",
+    "desc": "Rooster fight with men shouting, betting, and cock-a-doodle-doo sounds in Ubud, Bali, Indonesia.",
+    "kw": "FGHTMisc Indonesia Fight Misc Rooster Cock Fights Men Shouting Screaming Betting Doodle Doo Ubud Bali FTUS WOSB",
+    "cat": "FIGHT",
+    "sub": "MISC"
+  },
+  {
+    "id": "10758",
+    "file": "FIREBurn-L,R_Turkey-Fire, Burn, Eternal Flames, Methan, Natural Gas, Yanartas, Nature, Forest, Birds, Olympus, Daytime, 03_FTUS_WOSB.ogg",
+    "desc": "Eternal flames of natural gas burning in a forest at Yanartaş, Olympus, with birds and daytime ambience in Turkey.",
+    "kw": "FIREBurn Turkey Fire Burn Eternal Flames Methan Natural Gas Yanartas Nature Forest Birds Olympus Daytime FTUS WOSB",
+    "cat": "FIRE",
+    "sub": "BURNING"
+  },
+  {
+    "id": "10777",
+    "file": "FIREGas-L,R_Turkey-Fire, Gas, Burning, Burner, Flame, Preparing, Fireplace, Crackle, Cave, Hotel, Cappadocia_FTUS_WOSB.ogg",
+    "desc": "Gas burner flames crackling and burning in preparation, captured near a fireplace in a cave hotel in Cappadocia, Turkey.",
+    "kw": "FIREGas Turkey Fire Gas Burning Burner Flame Preparing Fireplace Crackle Cave Hotel Cappadocia FTUS WOSB",
+    "cat": "FIRE",
+    "sub": "GAS"
+  },
+  {
+    "id": "10830",
+    "file": "FRWKComr-L,R_China-Fireworks, Commercial, New Years Eve, Hotel Room, Closed Windows, Shenzhen, Front Microphone, 01_FTUS_WOSB.ogg",
+    "desc": "Fireworks in Shenzhen on New Year’s Eve, experienced from a hotel room, front microphone recording with closed windows for a direct sound.",
+    "kw": "FRWKComr China Fireworks Commercial New Years Eve Hotel Room Closed Windows Shenzhen Front Microphone FTUS WOSB",
+    "cat": "FIREWORKS",
+    "sub": "COMMERCIAL"
+  },
+  {
+    "id": "10865",
+    "file": "FRWKComr-L,R_Thailand-Fireworks, Commercial, Distance, Ambience, Residential Neighborhood, Distance Traffic, New Years Eve, Nighttime, Bangkok, 08_FTUS_WOSB.ogg",
+    "desc": "Fireworks and ambient noise from a residential neighborhood during New Year’s Eve, Bangkok nighttime.",
+    "kw": "FRWKComr Thailand Fireworks Commercial Distance Ambience Residential Neighborhood Traffic New Years Eve Nighttime Bangkok FTUS WOSB",
+    "cat": "FIREWORKS",
+    "sub": "COMMERCIAL"
+  },
+  {
+    "id": "10956",
+    "file": "FOODGware-L,R_Turkey-Food, Glassware, Glass Bottle, Placing, On Table, Apartment, 01_FTUS_WOSB.ogg",
+    "desc": "Glass bottle placement on a table in a quiet apartment setting.",
+    "kw": "FOODGware Turkey Food Glassware Glass Bottle Placing On Table Apartment FTUS WOSB",
+    "cat": "FOOD & DRINK",
+    "sub": "GLASSWARE"
+  },
+  {
+    "id": "10972",
+    "file": "FOODKware-L,R_Germany-Food, Kitchenware, Tea Cup, Pot, Movements, Handling, 11_FTUS_WOSB.ogg",
+    "desc": "Kitchenware movements including handling a tea cup and pot, recorded in Germany.",
+    "kw": "FOODKware Germany Food Kitchenware Tea Cup Pot Movements Handling FTUS WOSB",
+    "cat": "FOOD & DRINK",
+    "sub": "KITCHENWARE"
+  },
+  {
+    "id": "11141",
+    "file": "FEETHmn-L,R_Thailand-Footsteps, Human, Wood, Floor, Creak, Cracks, Apartment, 11_FTUS_WOSB.ogg",
+    "desc": "Human footsteps creaking on a wooden floor in an apartment.",
+    "kw": "FEETHmn Thailand Footsteps Human Wood Floor Creak Cracks Apartment FTUS WOSB",
+    "cat": "FOOTSTEPS",
+    "sub": "HUMAN"
+  },
+  {
+    "id": "11004",
+    "file": "FEETHmn-L,R_Cyprus-Footsteps, Human, Running, Competition, Event, Runners, Marathon, Limassol, 04_FTUS_WOSB.ogg",
+    "desc": "Consecutive running footsteps in a marathon in Limassol, depicting the ongoing competition.",
+    "kw": "FEETHmn Cyprus Footsteps Human Running Competition Event Runners Marathon Limassol FTUS WOSB",
+    "cat": "FOOTSTEPS",
+    "sub": "HUMAN"
+  },
+  {
+    "id": "00651",
+    "file": "GAMECas-L,R_Japan-Games, Casino, Play, Pachinko Parlor, Arcade, Akihabara, Tokyo_FTUS_WOSB.ogg",
+    "desc": "Casino and pachinko parlor gameplay sounds in an arcade at Akihabara, Tokyo.",
+    "kw": "GAMECas Japan Games Casino Play Pachinko Parlor Arcade Akihabara Tokyo FTUS WOSB",
+    "cat": "GAMES",
+    "sub": "CASINO"
+  },
+  {
+    "id": "11361",
+    "file": "GEOGeyser-L,R_Iceland-Geothermal, Geyser, Geysir, Eruption, Blow Out, Fast, Spectacular, Birds Chirping, Wind Background, Strokkur, Haukadalur, 09_FTUS_WOSB.ogg",
+    "desc": "Fast and spectacular geyser eruptions with birds chirping, wind ambiance at Strokkur, Haukadalur, Iceland.",
+    "kw": "GEOGeyser Iceland Geothermal Geyser Geysir Eruption Blow Out Fast Spectacular Birds Chirping Wind Background Strokkur Haukadalur FTUS WOSB",
+    "cat": "GEOTHERMAL",
+    "sub": "GEYSER"
+  },
+  {
+    "id": "11347",
+    "file": "GEOGeyser-L,R_Iceland-Geothermal, Geyser, Geysir, Boiling Hot Water, Bubbling, Wet, Flowing, Birds, 2 AM, Haukadalur, 01_FTUS_WOSB.ogg",
+    "desc": "Standing in front of very small Geysir with boiling hot water. Restaurant fan in far background.",
+    "kw": "GEOGeyser Iceland Geothermal Geyser Geysir Boiling Hot Water Bubbling Wet Flowing Birds AM Haukadalur FTUS WOSB",
+    "cat": "GEOTHERMAL",
+    "sub": "GEYSER"
+  },
+  {
+    "id": "00658",
+    "file": "GLASMvmt-M_Japan-Glass, Movements, Shinkansen, Window, Vibrations, Drone, Dark, Rumble, Low Frequency, 07_FTUS_WOSB.ogg",
+    "desc": "Shinkansen glass window vibrations with low-frequency dark rumbling and drone, Japan.",
+    "kw": "GLASMvmt Japan Glass Movements Shinkansen Window Vibrations Drone Dark Rumble Low Frequency FTUS WOSB",
+    "cat": "GLASS",
+    "sub": "MOVEMENT"
+  },
+  {
+    "id": "00653",
+    "file": "GLASMvmt-M_Japan-Glass, Movements, Shinkansen, Window, Vibrations, Drone, Dark, Rumble, Low Frequency, 02_FTUS_WOSB.ogg",
+    "desc": "Shinkansen glass window vibrations with low-frequency dark rumbling and drone, Japan.",
+    "kw": "GLASMvmt Japan Glass Movements Shinkansen Window Vibrations Drone Dark Rumble Low Frequency FTUS WOSB",
+    "cat": "GLASS",
+    "sub": "MOVEMENT"
+  },
+  {
+    "id": "11408",
+    "file": "GOREMisc-L,R_La Reunion-Gore, Misc, Vegetables, Fruits, Destroy, Impact, Crushing, Crunching, Ripping Apart, Snap, Crunch, Squeeze, Wet, 12_FTUS_WOSB.ogg",
+    "desc": "The sound of vegetables being destroyed, with impacts, crushing, crunching, snapping, and ripping apart, featuring green cabbage, recorded on Réunion Island, France.",
+    "kw": "GOREMisc France La Reunion Gore Misc Vegetables Fruits Destroy Impact Crushing Crunching Ripping Apart Snap Crunch Squeeze Wet FTUS WOSB",
+    "cat": "GORE",
+    "sub": "MISC"
+  },
+  {
+    "id": "11417",
+    "file": "GOREMisc-L,R_La Reunion-Gore, Misc, Vegetables, Fruits, Destroy, Impact, Crushing, Crunching, Ripping Apart, Snap, Crunch, Squeeze, Wet, 21_FTUS_WOSB.ogg",
+    "desc": "The sound of vegetables being destroyed, with impacts, crushing, crunching, snapping, and ripping apart, featuring green cabbage, recorded on Réunion Island, France.",
+    "kw": "GOREMisc France La Reunion Gore Misc Vegetables Fruits Destroy Impact Crushing Crunching Ripping Apart Snap Crunch Squeeze Wet FTUS WOSB",
+    "cat": "GORE",
+    "sub": "MISC"
+  },
+  {
+    "id": "11473",
+    "file": "GUNRif-L,R_USA-AR 15, Guns, Rifle, Single Gun Shot, Shooting Range, Light Nature Ambience, Iowa, 21_FTUS_WOSB.ogg",
+    "desc": "Single AR-15 gunshot with light nature ambience at a shooting range in Iowa.",
+    "kw": "GUNRif USA AR Guns Rifle Single Gun Shot Shooting Range Light Nature Ambience Iowa FTUS WOSB",
+    "cat": "GUNS",
+    "sub": "RIFLE"
+  },
+  {
+    "id": "11449",
+    "file": "GUNRif-L,R_USA-AR 15, Guns, Rifle, Multiple Gun Shots, Very Fast, Shooting Range,On Ground, Light Nature Ambience, Iowa, 02_FTUS_WOSB.ogg",
+    "desc": "Very fast AR-15 gunshots with light nature ambience at a shooting range in Iowa.",
+    "kw": "GUNRif USA AR Guns Rifle Multiple Gun Shots Very Fast Shooting Range On Ground Light Nature Ambience Iowa FTUS WOSB",
+    "cat": "GUNS",
+    "sub": "RIFLE"
+  },
+  {
+    "id": "11513",
+    "file": "HMNSnor-L,R_Japan-Human, Snore, Snoring, Male, Night, Light Background Traffic, Bedroom, 11_FTUS_WOSB.ogg",
+    "desc": "Recording captures a male snoring during the night in a bedroom, with light background traffic noise filtering through from outside, providing a realistic nighttime environment in Japan.",
+    "kw": "HMNSnor Japan Human Snore Snoring Male Night Light Background Traffic Bedroom FTUS WOSB",
+    "cat": "HUMAN",
+    "sub": "SNORE"
+  },
+  {
+    "id": "11493",
+    "file": "HMNHart-L,R_Taiwan-Human, Heartbeat, Rythmic, Pulse, 03_FTUS_WOSB.ogg",
+    "desc": "Recording a normal, pulsing human heartbeat using a contact microphone attached to the chest, capturing the rhythm of life.",
+    "kw": "HMNHart Taiwan Human Heartbeat Rythmic Pulse FTUS WOSB",
+    "cat": "HUMAN",
+    "sub": "HEARTBEAT"
+  },
+  {
+    "id": "00664",
+    "file": "ICEMisc-L,R_USA-Ice, Misc, Cubes, Melting, Crush, Break, Fizz, Sizzle, Squeak, 01_FTUS_WOSB.ogg",
+    "desc": "Melting and crushing ice cubes with fizz, sizzle, and squeak sounds in the USA.",
+    "kw": "ICEMisc USA Ice Misc Cubes Melting Crush Break Fizz Sizzle Squeak FTUS WOSB",
+    "cat": "ICE",
+    "sub": "MISC"
+  },
+  {
+    "id": "00667",
+    "file": "ICEMisc-L,R_USA-Ice, Misc, Cubes, Melting, Crush, Break, Fizz, Sizzle, Squeak, 04_FTUS_WOSB.ogg",
+    "desc": "Melting and crushing ice cubes with fizz, sizzle, and squeak sounds in the USA.",
+    "kw": "ICEMisc USA Ice Misc Cubes Melting Crush Break Fizz Sizzle Squeak FTUS WOSB",
+    "cat": "ICE",
+    "sub": "MISC"
+  },
+  {
+    "id": "00674",
+    "file": "LETHRCreak-L,R_Japan-Leather, Creak, Handle Bar, Squeak, Movements, Commuter, Train, Interior, Osaka, 02_FTUS_WOSB.ogg",
+    "desc": "Male sneeze recorded in the interior of a subway train, Tokyo, Japan.",
+    "kw": "LETHRCreak Japan Leather Creak Handle Bar Squeak Movements Commuter Train Interior Osaka FTUS WOSB",
+    "cat": "LEATHER",
+    "sub": "CREAK"
+  },
+  {
+    "id": "00673",
+    "file": "LETHRCreak-L,R_Japan-Leather, Creak, Handle Bar, Squeak, Movements, Commuter, Train, Interior, Osaka, 01_FTUS_WOSB.ogg",
+    "desc": "Male sneeze recorded in the interior of a subway train, Tokyo, Japan.",
+    "kw": "LETHRCreak Japan Leather Creak Handle Bar Squeak Movements Commuter Train Interior Osaka FTUS WOSB",
+    "cat": "LEATHER",
+    "sub": "CREAK"
+  },
+  {
+    "id": "11761",
+    "file": "MACHElev-L,R_Japan-Machines, Elevator, Ambience, Small Crowd, People, Chatter, Osaka Tower, 02_FTUS_WOSB.ogg",
+    "desc": "Elevator ambience with a small crowd chatting, Osaka Tower, Japan.",
+    "kw": "MACHElev Japan Machines Elevator Ambience Small Crowd People Chatter Osaka Tower FTUS WOSB",
+    "cat": "MACHINES",
+    "sub": "ELEVATOR"
+  },
+  {
+    "id": "11625",
+    "file": "MACHAppl-L,R_Thailand-Machines, Appliances, Vacuum Cleaner, Turn On, Off, Faster Speed_FTUS_WOSB.ogg",
+    "desc": "Vacuum cleaner turning on and off at a faster speed.",
+    "kw": "MACHAppl Thailand Machines Appliances Vacuum Cleaner Turn On Off Faster Speed FTUS WOSB",
+    "cat": "MACHINES",
+    "sub": "APPLIANCE"
+  },
+  {
+    "id": "12327",
+    "file": "MECHSwtch-L,R_Korea-Mechanical, Switch, Light Switch, Click, Electricity Flow, Hotel Room, Jeju Island, 06_FTUS_WOSB.ogg",
+    "desc": "Mechanical light switch with an electricity flow clicking in a hotel room on Jeju Island.",
+    "kw": "MECHSwtch Korea Mechanical Switch Light Click Electricity Flow Hotel Room Jeju Island FTUS WOSB",
+    "cat": "MECHANICAL",
+    "sub": "SWITCH"
+  },
+  {
+    "id": "12275",
+    "file": "MECHClik-M_Australia-Mechanical, Click, Plastic, Light Switch, Apartment, Melbourne, 44_FTUS_WOSB.ogg",
+    "desc": "Mechanical plastic light switch click recorded in an apartment in Melbourne, Australia.",
+    "kw": "MECHClik Australia Mechanical Click Plastic Light Switch Apartment Melbourne FTUS WOSB",
+    "cat": "MECHANICAL",
+    "sub": "CLICK"
+  },
+  {
+    "id": "12829",
+    "file": "METLMvmt-L,R_Croatia-Metal, Movement, Footsteps, Impulse, Impact, Metallic, Abandoned Airplane, Željava Air Base, 07_FTUS_WOSB.ogg",
+    "desc": "Geofon footsteps and metallic impacts, spooky and dark, from an abandoned airplane at Željava Air Base, Croatia.",
+    "kw": "METLMvmt Croatia Metal Movement Footsteps Impulse Impact Metallic Abandoned Airplane Zeljava Air Base FTUS WOSB",
+    "cat": "METAL",
+    "sub": "MOVEMENT"
+  },
+  {
+    "id": "12781",
+    "file": "METLImpt-L,R_Japan-Metal, Impact, Vibration, Boom, Train, Rumble, Geofon, 01_FTUS_WOSB.ogg",
+    "desc": "Recorded impact of metal with a powerful vibration and resonant boom created by the rumbling of a passing train above bridge, captured by a Geofon in Japan.",
+    "kw": "METLImpt Japan Metal Impact Vibration Boom Train Rumble Geofon FTUS WOSB",
+    "cat": "METAL",
+    "sub": "IMPACT"
+  },
+  {
+    "id": "12912",
+    "file": "MOTRTurb-M,S,Cs_Korea-Motors, Turbine, Multiple, Blade Whoosh, Gusty, Snappy, People Walking, Yeongdeok, 02_FTUS_WOSB.ogg",
+    "desc": "A wide recording of multiple wind turbines spinning at Yeongdeok Wind Farm in South Korea. The layered whooshes of the blades cutting through the wind create an intense and dynamic soundscape, at times gusty and almost snapping as the air pressure shifts. The atmosphere is punctuated by the faint presence of people walking around the area, grounding the otherwise overwhelming rush of mechanical energy. This immersive ambience captures the scale and power of a wind farm in full operation.",
+    "kw": "Wind Turbines Motor Rotor Blades Multiple Blade Whoosh Gusty Snappy Whipping Farm Yeongdeok Renewable Energy Production People Walking Environmental Sound Atmosphere Mechanical Ambience South Korea Outdoors",
+    "cat": "MOTORS",
+    "sub": "TURBINE"
+  },
+  {
+    "id": "12922",
+    "file": "MOTRTurb-M,S,Cs_Korea-Motors, Turbine, Wind Farm, Rotor Blades, Whoosh, Powerful, Circulating, Yeongdeok, 09_FTUS_WOSB.ogg",
+    "desc": "Recording of massive wind turbines at Yeongdeok Wind Farm in South Korea. The huge rotor blades cut through the air with a powerful, rhythmic whoosh, creating a deep and immersive soundscape of renewable energy in motion. Captured up close to the turbines, the steady cycle of each rotation conveys both the scale and intensity of the wind farm.",
+    "kw": "Motor Turbine Wind Farm Yeongdeok Rotor Blades Powerful Whoosh Renewable Energy Power Airflow Blade Rotation Mechanical Production Circular Motion South Korea Outdoors Coastal",
+    "cat": "MOTORS",
+    "sub": "TURBINE"
+  },
+  {
+    "id": "12928",
+    "file": "MOVEHmn-L,R_Japan-Movements, Hand, Scratching Wall, Finger Nails, Hand Palm, Japanese House, Kyoto, 02_FTUS_WOSB.ogg",
+    "desc": "This recording captures the sounds of fingernails and a palm scratching against a wall in a traditional Japanese house in Kyoto.",
+    "kw": "MOVEHmn Japan Movements Hand Scratching Wall Finger Nails Palm Japanese House Kyoto FTUS WOSB",
+    "cat": "MOVEMENT",
+    "sub": "HUMAN"
+  },
+  {
+    "id": "12926",
+    "file": "MOVEActv-L,R_USA-Movements, Activity, Cleaning, Wet Floors, Cleaners, Swiping Floors, Engine, Swab, Dust Mob, Denver East High School, 02_FTUS_WOSB.ogg",
+    "desc": "Cleaning wet floors with swiping, engine sounds, and dust mop activity at Denver East High School.",
+    "kw": "MOVEActv USA Movements Activity Cleaning Wet Floors Cleaners Swiping Engine Swab Dust Mob Denver East High School FTUS WOSB",
+    "cat": "MOVEMENT",
+    "sub": "ACTIVITY"
+  },
+  {
+    "id": "13004",
+    "file": "MUSCInst-L,R_Indonesia-Musical, Instrument, Baleganjur, Instruments, Play, Group, Warm Up, Preparing, Outdoor, Bali, 04_FTUS_WOSB.ogg",
+    "desc": "Group Baleganjur instrument warm-up session outdoors, Bali, Indonesia.",
+    "kw": "MUSCInst Indonesia Musical Instrument Baleganjur Instruments Play Group Warm Up Preparing Outdoor Bali FTUS WOSB",
+    "cat": "MUSICAL",
+    "sub": "INSTRUMENT"
+  },
+  {
+    "id": "12954",
+    "file": "MUSCChim-LRbi_Indonesia-Musical, Chimes, Tinkle, Twinkle, Shimmer, Condominium Staircase, Reverb, 01_FTUS_WOSB.ogg",
+    "desc": "Soft shimmering chimes with a tinkle and twinkle, creating a delicate ambiance in Indonesia.",
+    "kw": "MUSCChim LRbi Indonesia Musical Chimes Tinkle Twinkle Shimmer Condominium Staircase Reverb FTUS WOSB",
+    "cat": "MUSICAL",
+    "sub": "CHIME"
+  },
+  {
+    "id": "13407",
+    "file": "OBJHsehld-L,R_Japan-Objects, Household, Shower Curtain, Movements, Metal Pipe, Bathroom, Apartment, 08_FTUS_WOSB.ogg",
+    "desc": "The sound of a shower curtain being moved along a metal pipe in a bathroom of a Japanese apartment. Subtle squeaks and friction as the curtain glides, creating a familiar household ambience.",
+    "kw": "OBJHsehld Japan Objects Household Shower Curtain Movements Metal Pipe Bathroom Apartment FTUS WOSB",
+    "cat": "OBJECTS",
+    "sub": "HOUSEHOLD"
+  },
+  {
+    "id": "13421",
+    "file": "OBJHsehld-L,R_NewZealand-Objects, Household, Coffee Machine, Handling, Hand, Movements, Preparing, Apartment, 01_FTUS_WOSB.ogg",
+    "desc": "Hear the gentle movements of hands as they deftly prepare the machine for brewing, filling the space with the delightful aroma of freshly brewed coffee.",
+    "kw": "OBJHsehld New Zealand Objects Household Coffee Machine Handling Hand Movements Preparing Apartment FTUS WOSB",
+    "cat": "OBJECTS",
+    "sub": "HOUSEHOLD"
+  },
+  {
+    "id": "00718",
+    "file": "PAPRHndl-M_Thailand-Paper, Handle, Touching, Moving, Large Box, Cardboard, 04_FTUS_WOSB.ogg",
+    "desc": "Audible interaction with a large cardboard box, including touches and movement-related rustles.",
+    "kw": "PAPRHndl Thailand Paper Handle Touching Moving Large Box Cardboard FTUS WOSB",
+    "cat": "PAPER",
+    "sub": "HANDLE"
+  },
+  {
+    "id": "00811",
+    "file": "PAPRTonl-M_Thailand-Paper, Tonal, Movements, Handling, Shuffle, Elements, 21_FTUS_WOSB.ogg",
+    "desc": "A tonal play on paper, with a focus on the shuffling and other movement-related noises.",
+    "kw": "PAPRTonl Thailand Paper Tonal Movements Handling Shuffle Elements FTUS WOSB",
+    "cat": "PAPER",
+    "sub": "TONAL"
+  },
+  {
+    "id": "14398",
+    "file": "RAINPlas-M_NewZealand-Rain, Plastic, Rain Drops, Dripping, Underwater, Hydrophone, 04_FTUS_WOSB.ogg",
+    "desc": "Raindrops dripping on plastic, captured underwater using a hydrophone, creating a unique and immersive soundscape.",
+    "kw": "RAINPlas New Zealand Rain Plastic Drops Dripping Underwater Hydrophone FTUS WOSB",
+    "cat": "RAIN",
+    "sub": "PLASTIC"
+  },
+  {
+    "id": "13872",
+    "file": "RAIN-L,R_Korea-Rain, General, Concrete, Trees, Cover, Wind, Distance Harbor Movements, Park, Summer, Mokpo, 02_FTUS_WOSB.ogg",
+    "desc": "Summer rain in a park in Mokpo with concrete surfaces and trees, featuring cover sounds, wind, distant harbor movements, and a gentle ambiance.",
+    "kw": "RAIN Korea General Concrete Trees Cover Wind Distance Harbor Movements Park Summer Mokpo FTUS WOSB",
+    "cat": "RAIN",
+    "sub": "GENERAL"
+  },
+  {
+    "id": "00873",
+    "file": "ROCKImpt-L,R_Croatia-Rocks, Impact, Hit, Smash, Dropping, Falling, Rattle, Texture, Rocky Beach, 11_FTUS_WOSB.ogg",
+    "desc": "Impact rock smash sounds with texture and rattle recorded on a rocky beach in Croatia.",
+    "kw": "ROCKImpt Croatia Rocks Impact Hit Smash Dropping Falling Rattle Texture Rocky Beach FTUS WOSB",
+    "cat": "ROCKS",
+    "sub": "IMPACT"
+  },
+  {
+    "id": "00892",
+    "file": "ROCKImpt-L,R_Croatia-Rocks, Impact, Hit, Smash, Dropping, Falling, Rattle, Texture, Rocky Beach, 30_FTUS_WOSB.ogg",
+    "desc": "Impact rock smash sounds with texture and rattle recorded on a rocky beach in Croatia.",
+    "kw": "ROCKImpt Croatia Rocks Impact Hit Smash Dropping Falling Rattle Texture Rocky Beach FTUS WOSB",
+    "cat": "ROCKS",
+    "sub": "IMPACT"
+  },
+  {
+    "id": "14558",
+    "file": "SPRTIndor-L,R_USA-Sports, Indoor, Billiard, Table, Game Play, Hitting Cue Ball, Balls Moving, Rolling, Basement, Apartment, 06_FTUS_WOSB.ogg",
+    "desc": "Billiard table gameplay, cue ball hits, rolling balls, and pocket falls recorded in a basement apartment.",
+    "kw": "SPRTIndor USA Sports Indoor Billiard Table Game Play Hitting Cue Ball Balls Moving Rolling Basement Apartment FTUS WOSB",
+    "cat": "SPORTS",
+    "sub": "INDOOR"
+  },
+  {
+    "id": "14515",
+    "file": "SPRTField-L,R_NewZealand-Sports, Field, Cricket, Batsman, Cricket Bat, Hit, Running, Crowd Chatter, Hand Clapping, Cicadas, Footsteps, Flip Flops, Devonport_FTUS_WOSB.ogg",
+    "desc": "Atmosphere of a cricket field in Devonport, New Zealand. Rhythmic chirping of cicadas, the striking sound of the batsman hitting the ball, and the moments of players running and the chatter of the crowd. Person walks by in flip flops.",
+    "kw": "SPRTField New Zealand Sports Field Cricket Batsman Bat Hit Running Crowd Chatter Hand Clapping Cicadas Footsteps Flip Flops Devonport FTUS WOSB",
+    "cat": "SPORTS",
+    "sub": "FIELD"
+  },
+  {
+    "id": "00918",
+    "file": "SWSH-L,R_Malta-Swooshes, Swish, Whooshes, Circle Metal, Wire, Original, Ambience, Outdoor, Fort Ricasoli, 01_FTUS_WOSB.ogg",
+    "desc": "Thunder claps and rumbles captured from a high-rise condominium in Malaysia, with rain dripping and room tone through an open window.",
+    "kw": "SWSH Malta Swooshes Swish Whooshes Circle Metal Wire Original Ambience Outdoor Fort Ricasoli FTUS WOSB",
+    "cat": "SWOOSHES",
+    "sub": "SWISH"
+  },
+  {
+    "id": "00919",
+    "file": "SWSH-L,R_Malta-Swooshes, Swish, Whooshes, Circle Metal, Wire, Original, Ambience, Outdoor, Fort Ricasoli, 02_FTUS_WOSB.ogg",
+    "desc": "Thunder claps and rumbles captured from a high-rise condominium in Malaysia, with rain dripping and room tone through an open window.",
+    "kw": "SWSH Malta Swooshes Swish Whooshes Circle Metal Wire Original Ambience Outdoor Fort Ricasoli FTUS WOSB",
+    "cat": "SWOOSHES",
+    "sub": "SWISH"
+  },
+  {
+    "id": "00933",
+    "file": "TOOLHand-L,R_Indonesia-Tools, Hammer, Hammering, Upstairs Neighbors, Room Tone, Fridge Humming, Surabaya, 04_FTUS_WOSB.ogg",
+    "desc": "Interior room ambience from a residential building in Surabaya, Indonesia. Features hammering sounds from upstairs neighbors, a steady fridge humming, and a subtle room tone, creating an immersive everyday indoor atmosphere.",
+    "kw": "TOOLHand Indonesia Tools Hammer Hammering Upstairs Neighbors Room Tone Fridge Humming Surabaya FTUS WOSB",
+    "cat": "TOOLS",
+    "sub": "HAND"
+  },
+  {
+    "id": "00932",
+    "file": "TOOLHand-L,R_Indonesia-Tools, Hammer, Hammering, Upstairs Neighbors, Room Tone, Fridge Humming, Surabaya, 03_FTUS_WOSB.ogg",
+    "desc": "Interior room ambience from a residential building in Surabaya, Indonesia. Features hammering sounds from upstairs neighbors, a steady fridge humming, and a subtle room tone, creating an immersive everyday indoor atmosphere.",
+    "kw": "TOOLHand Indonesia Tools Hammer Hammering Upstairs Neighbors Room Tone Fridge Humming Surabaya FTUS WOSB",
+    "cat": "TOOLS",
+    "sub": "HAND"
+  },
+  {
+    "id": "00941",
+    "file": "TOYMech-M_Japan-Toy, Mechanical, Fidget Spinner, Spinning, Wooden Table, Apartment, Hiroshima, 03_FTUS_WOSB.ogg",
+    "desc": "The sound of a mechanical fidget spinner rapidly spinning on a wooden table in a quiet apartment in Hiroshima.",
+    "kw": "TOYMech Japan Toy Mechanical Fidget Spinner Spinning Wooden Table Apartment Hiroshima FTUS WOSB",
+    "cat": "TOYS",
+    "sub": "MECHANICAL"
+  },
+  {
+    "id": "00934",
+    "file": "TOYMech-M_Japan-Toy, Mechanical, Fidget Spinner, Spinning, In Hand, Apartment, Hiroshima, 01_FTUS_WOSB.ogg",
+    "desc": "Mechanical fidget spinner spinning in hand inside a quiet apartment in Hiroshima. The subtle whirring and light clicking noises provide a rhythmic, mechanical sound ideal for background sound design.",
+    "kw": "TOYMech Japan Toy Mechanical Fidget Spinner Spinning In Hand Apartment Hiroshima FTUS WOSB",
+    "cat": "TOYS",
+    "sub": "MECHANICAL"
+  },
+  {
+    "id": "14941",
+    "file": "TRNHspd-L,R_Spain-Trains, High Speed, Interior, Bathroom, Room Tone_FTUS_WOSB.ogg",
+    "desc": "Room tone inside a high-speed train bathroom in Spain.",
+    "kw": "TRNHspd Spain Trains High Speed Interior Bathroom Room Tone FTUS WOSB",
+    "cat": "TRAINS",
+    "sub": "HIGH SPEED"
+  },
+  {
+    "id": "14644",
+    "file": "TRNDiesl-L,R_SriLanka-Trains, Diesel, Pass By, Fast, Morning, Railway Crossing, Light Chatter_FTUS_WOSB.ogg",
+    "desc": "Morning diesel train passing quickly with light chatter at a railway crossing.",
+    "kw": "TRNDiesl Sri Lanka Trains Diesel Pass By Fast Morning Railway Crossing Light Chatter FTUS WOSB",
+    "cat": "TRAINS",
+    "sub": "DIESEL"
+  },
+  {
+    "id": "00943",
+    "file": "VEGELeaf-L,R_Thailand-Vegetation, Leaves, Crush, Crunch, Brake, Hand Movement, Outdoor, Bee Fly By, 02_FTUS_WOSB.ogg",
+    "desc": "Crushing leaf sounds with crunches and hand movements outdoors, accompanied by a bee fly-by.",
+    "kw": "VEGELeaf Thailand Vegetation Leaf Crush Crunch Brake Hand Movement Outdoor Bee Fly By FTUS WOSB",
+    "cat": "VEGETATION",
+    "sub": "LEAVES"
+  },
+  {
+    "id": "00942",
+    "file": "VEGELeaf-L,R_Thailand-Vegetation, Leaves, Crush, Crunch, Brake, Hand Movement, Outdoor, Bee Fly By, 01_FTUS_WOSB.ogg",
+    "desc": "Crushing leaf sounds with crunches and hand movements outdoors, accompanied by a bee fly-by.",
+    "kw": "VEGELeaf Thailand Vegetation Leaf Crush Crunch Brake Hand Movement Outdoor Bee Fly By FTUS WOSB",
+    "cat": "VEGETATION",
+    "sub": "LEAVES"
+  },
+  {
+    "id": "15662",
+    "file": "VEHCar-L,R_Thailand-Vehicles, Car, Taxi, Interior, Back Seat, Driving, Rumble, Distance Traffic, Blinker, Slow Driving, Fast, Stop, Go, Movements, Bangkok, 02_FTUS_WOSB.ogg",
+    "desc": "Taxi interior from the back seat with rumble, slow driving, and traffic sounds while moving around Bangkok.",
+    "kw": "VEHCar Thailand Vehicles Car Taxi Interior Back Seat Driving Rumble Distance Traffic Blinker Slow Fast Stop Go Movements Bangkok FTUS WOSB",
+    "cat": "VEHICLES",
+    "sub": "CAR"
+  },
+  {
+    "id": "15449",
+    "file": "VEHBus-L,R_Korea-Vehicles, Bus, Interior, Room Tone, Driving, Windy Road, Rumble, Squeak, Subtle Chatter, Overland Bus Seogwipo to Jeju City, Jeju Island_FTUS_WOSB.ogg",
+    "desc": "Bus interior room tone on a windy road with rumble, squeaks, and subtle chatter, recorded on an overland bus from Seogwipo to Jeju City.",
+    "kw": "VEHBus Korea Vehicles Bus Interior Room Tone Driving Windy Road Rumble Squeak Subtle Chatter Overland Seogwipo to Jeju City Island FTUS WOSB",
+    "cat": "VEHICLES",
+    "sub": "BUS"
+  },
+  {
+    "id": "00950",
+    "file": "VOXScrm-L,R_Iceland-Voices, Scream, Hello, Scream, Male, Echo, Hljodaklettar, 01_FTUS_WOSB.ogg",
+    "desc": "Male scream with “Hello” echoing inside Hljodaklettar, Iceland.",
+    "kw": "VOXScrm Iceland Voices Scream Hello Male Echo Hljodaklettar FTUS WOSB",
+    "cat": "VOICES",
+    "sub": "SCREAM"
+  },
+  {
+    "id": "00962",
+    "file": "VOXScrm-L,R_Iceland-Voices, Scream, Male, Echo, Hljodaklettar, 01_FTUS_WOSB.ogg",
+    "desc": "Male scream echoing inside a cave, recorded at Hljodaklettar, Iceland.",
+    "kw": "VOXScrm Iceland Voices Scream Male Echo Hljodaklettar FTUS WOSB",
+    "cat": "VOICES",
+    "sub": "SCREAM"
+  },
+  {
+    "id": "16811",
+    "file": "WATRPlmb-L,R_Japan-Water, Plumbing, Toilet, Flush, Aircraft, Interior, 05_FTUS_WOSB.ogg",
+    "desc": "Strong water flow in a creek at Bear Creek, Colorado, during spring.",
+    "kw": "WATRPlmb Japan Water Plumbing Toilet Flush Aircraft Interior FTUS WOSB",
+    "cat": "WATER",
+    "sub": "PLUMBING"
+  },
+  {
+    "id": "16593",
+    "file": "WATRFlow-L,R_USA-Water, Flow, River, Creek, Nature, Flowing Water, Strong, Spring, Bear Creek, Colorado, 15_FTUS_WOSB.ogg",
+    "desc": "Strong daytime river flow and streams captured near River De Langevin, Réunion Island, with prominent water sounds.",
+    "kw": "water flow USA River Creek Nature Flowing Strong Spring Bear Colorado FTUS WOSB",
+    "cat": "WATER",
+    "sub": "FLOW"
+  },
+  {
+    "id": "17720",
+    "file": "THUN-L,R_Turkey-Weather, Thunder, Heavy, Rolling, Raindrops, Rain, Nighttime, Spooky, Nighttime, 02_FTUS_WOSB.ogg",
+    "desc": "Heavy rolling thunder with rain and raindrops creating a spooky nighttime ambiance in Turkey.",
+    "kw": "THUN Turkey Weather Thunder Heavy Rolling Raindrops Rain Nighttime Spooky FTUS WOSB",
+    "cat": "WEATHER",
+    "sub": "THUNDER"
+  },
+  {
+    "id": "17660",
+    "file": "THUN-L,R_Malaysia-Weather, Thunder, Clap, Rumble, Condominium, High Rise, Open Window, Rain Dripping, Room Tone, 17_FTUS_WOSB.ogg",
+    "desc": "Thunder claps and rumbles captured from a high-rise condominium in Malaysia, with rain dripping and room tone through an open window.",
+    "kw": "THUN Malaysia Weather Thunder Clap Rumble Condominium High Rise Open Window Rain Dripping Room Tone FTUS WOSB",
+    "cat": "WEATHER",
+    "sub": "THUNDER"
+  },
+  {
+    "id": "18155",
+    "file": "WINDVege-LR_Taiwan-Wind, Vegetation, Strong, Powerful, Lakeside, Park, Daytime Taitung, 05_FTUS_WOSB.ogg",
+    "desc": "Strong wind gusting through trees by a lakeside park outside Taitung, with only a few joggers, cyclists, and walkers.",
+    "kw": "WINDVege Taiwan Wind Vegetation Strong Powerful Lakeside Park Daytime Taitung FTUS WOSB",
+    "cat": "WIND",
+    "sub": "VEGETATION"
+  },
+  {
+    "id": "18225",
+    "file": "WINDVege-M,S,Cs_Australia-Wind, Vegetation, Moving Palm Trees, Bushes, Eerie, Motel Room, Open Windows, Morning, Neighbor Movements, Coastal Town, Bowen_FTUS_WOSB.ogg",
+    "desc": "Nighttime ambience from a hotel room in Bowen, Australia. Wind flows through open windows, moving palm trees and bushes outside. The quiet, eerie atmosphere is layered with subtle neighbor movements—distant footsteps, room activity, or shifting sounds—hinting at nearby human presence in an otherwise still coastal setting.",
+    "kw": "neighbor movement night ambience hotel room interior eerie wind palm tree rustle subtle footsteps indoor-outdoor soundscape coastal town open window breeze vegetation in human presence distant activity Bowen Australia",
+    "cat": "WIND",
+    "sub": "VEGETATION"
+  },
+  {
+    "id": "18318",
+    "file": "WNDWCover-LR_Georgia-Windows, Cover, Curtain, Heavy, Movement, Swoosh, Metallic Bar, Hotel, 02_FTUS_WOSB.ogg",
+    "desc": "Hotel window ambiance in Georgia, capturing heavy curtain movements, swooshing sounds, and metallic bar noises.",
+    "kw": "WNDWCover Georgia Windows Cover Curtain Heavy Movement Swoosh Metallic Bar Hotel FTUS WOSB",
+    "cat": "WINDOWS",
+    "sub": "COVERING"
+  },
+  {
+    "id": "18337",
+    "file": "WNDWCover-M_Japan-Windows, Cover, Curtains, Manual Rope, Down, Apartment, Hiroshima, 03_FTUS_WOSB.ogg",
+    "desc": "Curtains lowered manually with a rope, soft fabric rustling and rope sounds in a Hiroshima apartment setting.",
+    "kw": "WNDWCover Japan Windows Cover Curtains Manual Rope Down Apartment Hiroshima FTUS WOSB",
+    "cat": "WINDOWS",
+    "sub": "COVERING"
+  },
+  {
+    "id": "18383",
+    "file": "WINGBird-LR_NewZealand-Wings, Bird, Fly Away, Tui Bird, Chirping, Bird Song, Urban Forest, Wellington, 04_FTUS_WOSB.ogg",
+    "desc": "Urban forest in Wellington, New Zealand, as a Tui bird gracefully takes flight. Gentle flapping of its wings as it soars through the trees, adding a touch of natural beauty to the soundscape.",
+    "kw": "WINGBird New Zealand Wings Bird Fly Away Tui Chirping Song Urban Forest Wellington FTUS WOSB",
+    "cat": "WINGS",
+    "sub": "BIRD"
+  },
+  {
+    "id": "18386",
+    "file": "WINGBird-LR_Turkey-Wings, Bird, Pigeon Flock, Birds, Call, Chirping, Cooing, Grunting, Sheep Distance, Tourists, Distance Traffic, Pigeon Valley, Cappadocia_FTUS_WOSB.ogg",
+    "desc": "Pigeon flock wings flapping, chirping, cooing, and grunting with distant sheep, tourists, and traffic, recorded in Pigeon Valley, Cappadocia.",
+    "kw": "WINGBird Turkey Wings Bird Pigeon Flock Birds Call Chirping Cooing Grunting Sheep Distance Tourists Traffic Valley Cappadocia FTUS WOSB",
+    "cat": "WINGS",
+    "sub": "BIRD"
+  },
+  {
+    "id": "00988",
+    "file": "WOODTonl-M_HongKong-Wood, Tonal, Textures, Wind, Rumble, Scratches, Gritty, Contact Microphone Attached To Tree, 03_FTUS_WOSB.ogg",
+    "desc": "A contact microphone recording of wood tones and textures from a tree in Hong Kong. The sound features subtle wind rumble, gritty scratches, and the tonal resonance of wood, captured with the microphone attached to the tree for a deep, textured experience.",
+    "kw": "WOODTonl Hong Kong Wood Tonal Textures Wind Rumble Scratches Gritty Contact Microphone Attached To Tree FTUS WOSB",
+    "cat": "WOOD",
+    "sub": "TONAL"
+  },
+  {
+    "id": "00985",
+    "file": "WOODMvmt-LR_Thailand-Wood, Movements, Sitting, Up, Down, Heat Crackling_FTUS_WOSB.ogg",
+    "desc": "Wooden movements with sitting up and down combined with heat crackling sounds.",
+    "kw": "WOODMvmt Thailand Wood Movements Sitting Up Down Heat Crackling FTUS WOSB",
+    "cat": "WOOD",
+    "sub": "MOVEMENT"
+  }
+]

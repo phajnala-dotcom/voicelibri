@@ -21,11 +21,47 @@ import {
   DEFAULT_NARRATOR_VOICE
 } from './promptConfig.js';
 
+function normalizeBookPeriod(raw?: string | null): BookPeriod {
+  if (!raw) return 'undefined';
+  const normalized = raw.toLowerCase().trim();
+  if (!normalized) return 'undefined';
+
+  const directMap: Record<string, BookPeriod> = {
+    prehistory: 'prehistory',
+    prehistoric: 'prehistory',
+    antiquity: 'antiquity',
+    ancient: 'antiquity',
+    classical: 'antiquity',
+    'middle ages': 'middle ages',
+    medieval: 'middle ages',
+    'modern age': 'modern age',
+    modern: 'modern age',
+    contemporary: 'contemporary',
+    present: 'contemporary',
+    current: 'contemporary',
+    future: 'future',
+    futuristic: 'future',
+    'science fiction': 'future',
+    scifi: 'future',
+    'sci-fi': 'future',
+    undefined: 'undefined',
+    unknown: 'undefined',
+  };
+
+  if (directMap[normalized]) {
+    return directMap[normalized];
+  }
+
+  return 'undefined';
+}
+
 /**
  * Book/document information for narrator TTS instruction
  * Extracted from chapter 1, refined in chapter 2, then LOCKED
  * Each field STRICTLY MAX 10 WORDS
  */
+export type BookPeriod = 'prehistory' | 'antiquity' | 'middle ages' | 'modern age' | 'contemporary' | 'future' | 'undefined';
+
 export interface BookInfo {
   /** Genre(s) with adjectives: dark fantasy, gothic horror, etc. (MAX 10 WORDS) */
   genre: string;
@@ -35,6 +71,9 @@ export interface BookInfo {
 
   /** Voice tone: EXACTLY two concise adjectives, "adj1, adj2" (MAX 10 WORDS) */
   voiceTone: string;
+
+  /** Historical period/era (normalized) */
+  period?: BookPeriod;
   
   /** Whether bookInfo is locked (after chapter 2) */
   locked?: boolean;
@@ -280,13 +319,14 @@ FEMALE VOICES: ${femaleVoices}`;
       
       // Process bookInfo if present (chapters 1-2)
       if (result.bookInfo && !this.bookInfo?.locked) {
+        const normalizedPeriod = normalizeBookPeriod(result.bookInfo.period);
         if (chapterNum === 1) {
           // First extraction
-          this.bookInfo = { ...result.bookInfo, locked: false };
+          this.bookInfo = { ...result.bookInfo, period: normalizedPeriod, locked: false };
           console.log(`   📚 Book info extracted: ${this.bookInfo.genre}, ${this.bookInfo.tone}`);
         } else if (chapterNum === 2) {
           // Refine and lock
-          this.bookInfo = { ...result.bookInfo, locked: true };
+          this.bookInfo = { ...result.bookInfo, period: normalizedPeriod, locked: true };
           this.buildNarratorInstruction();
           console.log(`   📚 Book info refined and LOCKED: ${this.bookInfo.genre}, ${this.bookInfo.tone}`);
         }

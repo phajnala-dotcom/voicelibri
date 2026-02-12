@@ -1,0 +1,22 @@
+{
+  "catalog": {
+    "csvPath": "soundscape/assets/All In One Bundle 4824.csv",
+    "xlsxPath": "soundscape/assets/All In One Bundle 4824.xlsx"
+  },
+  "operations": [
+    {
+      "type": "move",
+      "from": "AMBIENCE_03/OLD_SUBFOLDER",
+      "to": "AMBIENCE_03/NEW_SUBFOLDER"
+    },
+    {
+      "type": "rename",
+      "from": "BELLS_01/some_old_name.ogg",
+      "to": "BELLS_01/some_new_name.ogg"
+    },
+    {
+      "type": "delete",
+      "from": "DESIGNED_01/bad_file.ogg"
+    }
+  ]
+}

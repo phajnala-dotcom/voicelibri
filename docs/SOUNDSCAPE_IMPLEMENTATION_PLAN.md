@@ -5,6 +5,14 @@
 - **Key dependency:** Curated sound library + metadata.
 - **Biggest risk:** Licensing/asset curation, not engineering.
 
+## Current Status (2026-01-22)
+- ✅ Intro build + mixing pipeline already exists in backend.
+- ✅ Soundscape catalog present in soundscape/assets/catalog.json.
+- ✅ Character registry already extracts bookInfo (now extended with period).
+- ✅ Ambient map LLM pass added (separate, parallel to character extraction).
+- ✅ Music theme selection now deterministic via catalog + bookInfo, with fallback theme ID.
+- ✅ Ambient layer uses LLM ambience map; no overlap, no fallback when map missing.
+
 ## Estimated Development Time (2‑person team)
 Assumes you (vibe coder) + Copilot agent, full‑time focus.
 - **Phase 1 MVP (music intro + ambient mixing): 45–65 hours**
@@ -102,3 +110,7 @@ Assumes you (vibe coder) + Copilot agent, full‑time focus.
 - Chapter intro music using book theme
 - Global toggles for ambient/music
 - Cached output files
+
+## TODO (Next)
+- Add more fallback intro themes in catalog (ids: fallback_theme_2, fallback_theme_3).
+- Add per-user rotation registry (avoid repeating same intro theme across books).

@@ -2,6 +2,7 @@ apps/backend/nul
 node_modules/
 audiobooks/
 soundscape/assets/
+soundscape/assets/assets_ogg_opus/
 !soundscape/assets/catalog.json
 !soundscape/assets/manifest.json
 *.log

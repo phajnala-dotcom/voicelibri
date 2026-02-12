@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AOIB Bulk Edit Change Plan",
+  "type": "object",
+  "required": ["catalog", "operations"],
+  "properties": {
+    "catalog": {
+      "type": "object",
+      "required": ["csvPath"],
+      "properties": {
+        "csvPath": {"type": "string"},
+        "xlsxPath": {"type": "string"}
+      }
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": {"enum": ["move", "rename", "delete"]},
+          "from": {"type": "string"},
+          "to": {"type": "string"},
+          "allowOverwrite": {"type": "boolean"}
+        }
+      }
+    }
+  }
+}
