@@ -886,8 +886,9 @@ def main() -> None:
     aoib_ogg = repo / 'soundscape' / 'assets' / 'aoib_ogg'
     roots = {
         'realistic': repo / 'soundscape' / 'assets' / 'realistic',
-        'cinematic_&_foley': repo / 'soundscape' / 'assets' / 'cinematic_&_foley',
+        'cinematic': repo / 'soundscape' / 'assets' / 'cinematic',
         'music': repo / 'soundscape' / 'assets' / 'music',
+        'SFX': repo / 'soundscape' / 'assets' / 'SFX',
     }
 
     extras: list[str] = []
