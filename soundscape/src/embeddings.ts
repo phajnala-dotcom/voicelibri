@@ -1,15 +1,16 @@
 /**
  * Soundscape Module — Embedding Engine
  *
- * In-memory vector search using Gemini embedding-001 (384 dimensions).
+ * In-memory vector search using Gemini embedding-001 (768 truncated dimensions).
  * Builds, persists, and queries embedding indices for:
- *   - Ambient asset descriptions (from XLSX catalog)
+ *   - Ambient asset descriptions (from CSV catalog)
  *   - Music filenames (from soundscape/assets/music/)
  *
  * No external vector DB — brute-force cosine similarity is sufficient
- * for our scale (~22K ambient + ~200 music entries).
+ * for our scale (~1400 ambient + ~200 music entries).
  *
- * @see https://cloud.google.com/vertex-ai/generative-ai/docs/embeddings/get-text-embeddings
+ * Uses the official Vertex AI :predict endpoint per:
+ * @see https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-reference/text-embeddings-api
  */
 
 import fs from 'fs';
@@ -18,6 +19,7 @@ import {
   EMBEDDING_MODEL,
   EMBEDDING_DIMENSIONS,
   EMBEDDING_BATCH_SIZE,
+  EMBEDDING_CONCURRENCY,
   AMBIENT_EMBEDDINGS_PATH,
   MUSIC_EMBEDDINGS_PATH,
 } from './config.js';
@@ -43,25 +45,24 @@ const auth = new GoogleAuth({
 });
 
 /**
- * Embed a batch of texts via Vertex AI Gemini embedding-001.
+ * Embed a batch of texts via Vertex AI :predict endpoint.
  *
- * Uses the official batchEmbedContents endpoint per Google docs:
- * https://cloud.google.com/vertex-ai/generative-ai/docs/embeddings/get-text-embeddings#get-text-embeddings-sample-drest
+ * Uses the official Vertex AI predict endpoint per Google docs:
+ * https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-reference/text-embeddings-api
+ *
+ * Request format: { instances: [{ content }], parameters: { outputDimensionality } }
+ * Response format: { predictions: [{ embeddings: { values: number[] } }] }
  */
 async function embedTexts(texts: string[]): Promise<number[][]> {
   const projectId = process.env.GOOGLE_CLOUD_PROJECT || 'calmbridge-2';
   const location = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1';
-  const endpoint = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${EMBEDDING_MODEL}:batchEmbedContents`;
+  const endpoint = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${EMBEDDING_MODEL}:predict`;
 
   const client = await auth.getClient();
   const token = await client.getAccessToken();
   if (!token.token) throw new Error('Failed to get access token for embeddings');
 
-  const requests = texts.map((text) => ({
-    model: `publishers/google/models/${EMBEDDING_MODEL}`,
-    content: { parts: [{ text }] },
-    outputDimensionality: EMBEDDING_DIMENSIONS,
-  }));
+  const instances = texts.map((text) => ({ content: text }));
 
   const response = await fetch(endpoint, {
     method: 'POST',
@@ -69,7 +70,10 @@ async function embedTexts(texts: string[]): Promise<number[][]> {
       'Authorization': `Bearer ${token.token}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ requests }),
+    body: JSON.stringify({
+      instances,
+      parameters: { outputDimensionality: EMBEDDING_DIMENSIONS },
+    }),
     signal: AbortSignal.timeout(60000),
   });
 
@@ -79,8 +83,8 @@ async function embedTexts(texts: string[]): Promise<number[][]> {
   }
 
   const json: any = await response.json();
-  const embeddings: number[][] = json.embeddings.map(
-    (e: any) => e.values as number[]
+  const embeddings: number[][] = json.predictions.map(
+    (p: any) => p.embeddings.values as number[]
   );
 
   return embeddings;
@@ -92,46 +96,60 @@ async function embedTexts(texts: string[]): Promise<number[][]> {
 
 /**
  * Build an embedding index from id+text pairs.
- * Batches requests to stay within API limits.
+ * Sends requests with EMBEDDING_CONCURRENCY parallel calls,
+ * each containing EMBEDDING_BATCH_SIZE texts (1 for gemini-embedding-001).
  *
  * @param items - Array of { id, text } to embed
- * @param onProgress - Optional progress callback (batchIndex, totalBatches)
+ * @param onProgress - Optional progress callback (completed, total)
  */
 export async function buildEmbeddingIndex(
   items: Array<{ id: string; text: string }>,
-  onProgress?: (batch: number, total: number) => void
+  onProgress?: (completed: number, total: number) => void
 ): Promise<EmbeddingIndex> {
-  const entries: EmbeddingEntry[] = [];
-  const totalBatches = Math.ceil(items.length / EMBEDDING_BATCH_SIZE);
+  const entries: EmbeddingEntry[] = new Array(items.length);
+  let completed = 0;
 
-  for (let i = 0; i < items.length; i += EMBEDDING_BATCH_SIZE) {
-    const batch = items.slice(i, i + EMBEDDING_BATCH_SIZE);
-    const batchNum = Math.floor(i / EMBEDDING_BATCH_SIZE) + 1;
+  // Process items with concurrency limit
+  const queue = items.map((item, idx) => ({ item, idx }));
+  const workers: Promise<void>[] = [];
 
-    if (onProgress) onProgress(batchNum, totalBatches);
+  async function processQueue(): Promise<void> {
+    while (queue.length > 0) {
+      const batch = queue.splice(0, EMBEDDING_BATCH_SIZE);
+      if (batch.length === 0) break;
 
-    const texts = batch.map((b) => b.text);
-    const vectors = await embedTexts(texts);
+      const texts = batch.map((b) => b.item.text);
+      const vectors = await embedTexts(texts);
 
-    for (let j = 0; j < batch.length; j++) {
-      entries.push({
-        id: batch[j].id,
-        text: batch[j].text,
-        vector: vectors[j],
-      });
-    }
+      for (let j = 0; j < batch.length; j++) {
+        entries[batch[j].idx] = {
+          id: batch[j].item.id,
+          text: batch[j].item.text,
+          vector: vectors[j],
+        };
+      }
 
-    // Small delay between batches to avoid rate limiting
-    if (i + EMBEDDING_BATCH_SIZE < items.length) {
-      await new Promise((r) => setTimeout(r, 200));
+      completed += batch.length;
+      if (onProgress) onProgress(completed, items.length);
+
+      // Small delay to avoid rate limiting
+      await new Promise((r) => setTimeout(r, 50));
     }
   }
+
+  // Launch concurrent workers
+  const workerCount = Math.min(EMBEDDING_CONCURRENCY, items.length);
+  for (let i = 0; i < workerCount; i++) {
+    workers.push(processQueue());
+  }
+
+  await Promise.all(workers);
 
   return {
     model: EMBEDDING_MODEL,
     dimensions: EMBEDDING_DIMENSIONS,
     createdAt: new Date().toISOString(),
-    entries,
+    entries: entries.filter(Boolean), // filter out any gaps from race conditions
   };
 }
 

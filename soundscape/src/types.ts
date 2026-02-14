@@ -158,7 +158,7 @@ export interface EmbeddingEntry {
   id: string;
   /** The text that was embedded (description or filename) */
   text: string;
-  /** Embedding vector (384 dimensions for gemini-embedding-001) */
+  /** Embedding vector (768 dimensions, truncated from gemini-embedding-001's 3072 default) */
   vector: number[];
 }
 

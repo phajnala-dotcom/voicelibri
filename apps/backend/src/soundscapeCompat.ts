@@ -150,7 +150,6 @@ export async function applySoundscapeToChapter(options: {
         const speechDurationMs = estimateAudioDuration(speechBuffer) * 1000;
 
         const ambientPath = options.chapterPath.replace(/\.wav$/i, '_ambient.wav');
-        const { generateAmbientTrack } = await import('../../../soundscape/src/ambientLayer.js');
         const ambientResult = await generateAmbientTrack(
           ambientAsset,
           speechDurationMs,

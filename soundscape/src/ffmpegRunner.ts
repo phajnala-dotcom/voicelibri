@@ -29,4 +29,3 @@ export function runFfmpeg(args: string[]): Promise<FfmpegResult> {
     });
   });
 }
-}

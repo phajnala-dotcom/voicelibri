@@ -124,11 +124,14 @@ export const INTRO_NARRATOR_VOICE = 'Algieba';
 /** Gemini embedding model */
 export const EMBEDDING_MODEL = 'gemini-embedding-001';
 
-/** Embedding vector dimensions */
-export const EMBEDDING_DIMENSIONS = 384;
+/** Embedding vector dimensions (gemini-embedding-001 supports up to 3072; 768 balances quality vs memory for ~22K entries) */
+export const EMBEDDING_DIMENSIONS = 768;
 
-/** Max texts per embedding API call */
-export const EMBEDDING_BATCH_SIZE = 100;
+/** Max texts per embedding API call (gemini-embedding-001 only supports 1 text per request) */
+export const EMBEDDING_BATCH_SIZE = 1;
+
+/** Max concurrent embedding API requests */
+export const EMBEDDING_CONCURRENCY = 5;
 
 // ========================================
 // LLM Director
