@@ -27,7 +27,7 @@ import {
 } from './audiobookManager.js';
 import { Chapter } from './bookChunker.js';
 import { ChunkInfo } from './chapterChunker.js';
-import { applySoundscapeToChapter } from './soundscapeIntegration.js';
+import { applySoundscapeToChapter } from './soundscapeCompat.js';
 
 // ========================================
 // Worker State & Queue

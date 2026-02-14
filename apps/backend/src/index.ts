@@ -62,7 +62,7 @@ import {
   deleteAudiobook,
   type AudiobookMetadata,
 } from './audiobookManager.js';
-import { resolveChapterAudioPath, getSoundscapeThemeOptions, applySoundscapeToChapter } from './soundscapeIntegration.js';
+import { resolveChapterAudioPath, getSoundscapeThemeOptions, applySoundscapeToChapter } from './soundscapeCompat.js';
 import { 
   extractEpubChapters, 
   detectTextChapters, 
