@@ -23,7 +23,7 @@ const __dirname = path.dirname(__filename);
 export interface ChapterMetadata {
   index: number;
   title: string;
-  filename: string; // e.g., "Chapter_01_Title.wav"
+  filename: string; // e.g., "Chapter_01_Title.ogg"
   duration: number; // seconds (estimated initially, actual when generated)
   estimatedDuration?: number; // Duration estimated from text length
   actualDuration?: number;    // Actual duration from generated audio
@@ -428,7 +428,7 @@ export function getChapterPath(
     filename += `_Part ${(partIndex + 1).toString().padStart(2, '0')}`;
   }
   
-  filename += '.wav';
+  filename += '.ogg';
   
   return path.join(bookDir, filename);
 }

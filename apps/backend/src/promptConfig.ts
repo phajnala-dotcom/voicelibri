@@ -471,3 +471,46 @@ export const DEFAULT_NARRATOR_VOICE = 'Enceladus';
  * Silence gap between subchunks in milliseconds
  */
 export const SUBCHUNK_SILENCE_GAP_MS = 500;
+
+// =============================================================================
+// SOUNDSCAPE CONFIGURATION
+// =============================================================================
+
+/**
+ * Soundscape pipeline configuration — externalized values.
+ * All tuneable parameters for ambient layer, SFX, and embedding search.
+ */
+export const SOUNDSCAPE_CONFIG = {
+  /** Similarity threshold for ambient asset matching (cosine similarity) */
+  similarityThresholdAmbient: 0.3,
+  /** Similarity threshold for SFX asset matching */
+  similarityThresholdSfx: 0.35,
+  /** Hysteresis margin — avoid switching ambient if score difference < this */
+  hysteresisMargin: 0.05,
+  /** Minimum ambient duration in seconds */
+  ambientMinDurationSec: 10,
+  /** Cooldown between ambient switches in seconds */
+  ambientCooldownSec: 30,
+  /** Cooldown between SFX triggers in seconds */
+  sfxCooldownSec: 5,
+  /** Fade-in duration for ambient layer in ms */
+  fadeInMs: 2000,
+  /** Fade-out duration for ambient layer in ms */
+  fadeOutMs: 2000,
+  /** Max parallel subchunk TTS generation */
+  maxParallelSubchunks: 3,
+  /** Ambient volume in dB under narration */
+  ambientVolumeDb: -6,
+  /** Ambient LUFS target for loudnorm (speech-friendly) */
+  ambientLufsTarget: -35,
+  /** Ambient true peak limit */
+  ambientTruePeak: -2,
+  /** Ambient loudness range */
+  ambientLra: 11,
+  /** SFX volume in dB */
+  sfxVolumeDb: -3,
+  /** Embedding dimensions (gemini-embedding-001: 768 balances quality vs memory) */
+  embeddingDimensions: 768,
+  /** Max SFX duration to be considered SFX (longer = ambient) */
+  sfxMaxDurationSec: 20,
+};

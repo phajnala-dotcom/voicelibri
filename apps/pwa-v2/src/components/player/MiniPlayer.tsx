@@ -4,7 +4,7 @@
  * Fixed bottom bar for audio playback
  */
 
-import { Play, Pause, RotateCcw, SkipBack, SkipForward } from 'lucide-react';
+import { Play, Pause, RotateCcw, SkipBack, SkipForward, Volume2, VolumeX } from 'lucide-react';
 import { usePlayerStore } from '../../stores/playerStore';
 import { LinearProgress } from '../ui/ProgressBar';
 import { formatDuration } from '../../utils/formatters';
@@ -30,6 +30,10 @@ export function MiniPlayer({ onExpand }: MiniPlayerProps) {
     isMiniPlayerVisible,
     playbackMode,
     currentSubChunk,
+    ambientVolume,
+    ambientEnabled,
+    setAmbientVolume,
+    toggleAmbient,
   } = usePlayerStore();
 
   const isPlaying = playbackState === 'playing';
@@ -175,6 +179,38 @@ export function MiniPlayer({ onExpand }: MiniPlayerProps) {
             <SkipForward className="w-4 h-4" />
           </button>
         </div>
+        </div>
+        
+        {/* Ambient controls row */}
+        <div className="px-4 pb-2 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+          <button
+            onClick={toggleAmbient}
+            className={`
+              p-1 rounded transition-colors
+              ${ambientEnabled
+                ? 'text-[var(--neu-secondary)]'
+                : 'text-[var(--neu-gray-400)]'
+              }
+            `}
+            aria-label={ambientEnabled ? 'Disable ambient' : 'Enable ambient'}
+          >
+            {ambientEnabled ? <Volume2 className="w-3.5 h-3.5" /> : <VolumeX className="w-3.5 h-3.5" />}
+          </button>
+          <span className="text-[var(--neu-gray-600)] text-[10px] min-w-[40px]">Ambient</span>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            value={Math.round(ambientVolume * 100)}
+            onChange={(e) => setAmbientVolume(parseInt(e.target.value) / 100)}
+            className="flex-1 h-1 accent-[var(--neu-secondary)] cursor-pointer"
+            disabled={!ambientEnabled}
+            title="Ambient volume"
+            aria-label="Ambient volume"
+          />
+          <span className="text-[var(--neu-gray-600)] text-[10px] min-w-[24px] text-right">
+            {Math.round(ambientVolume * 100)}%
+          </span>
         </div>
       </div>
     </div>

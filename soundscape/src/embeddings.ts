@@ -3,11 +3,14 @@
  *
  * In-memory vector search using Gemini embedding-001 (768 truncated dimensions).
  * Builds, persists, and queries embedding indices for:
- *   - Ambient asset descriptions (from CSV catalog)
+ *   - Ambient asset descriptions (from CSV catalog, description-only)
  *   - Music filenames (from soundscape/assets/music/)
  *
  * No external vector DB — brute-force cosine similarity is sufficient
- * for our scale (~1400 ambient + ~200 music entries).
+ * for our asset library scale.
+ *
+ * Runtime search: searchEmbeddingsBatch() embeds multiple chapter text
+ * snippets concurrently (EMBEDDING_CONCURRENCY workers) for throughput.
  *
  * Uses the official Vertex AI :predict endpoint per:
  * @see https://docs.cloud.google.com/vertex-ai/generative-ai/docs/model-reference/text-embeddings-api
@@ -22,6 +25,7 @@ import {
   EMBEDDING_CONCURRENCY,
   AMBIENT_EMBEDDINGS_PATH,
   MUSIC_EMBEDDINGS_PATH,
+  SFX_EMBEDDINGS_PATH,
 } from './config.js';
 import type {
   EmbeddingEntry,
@@ -35,6 +39,7 @@ import type {
 
 let ambientIndex: EmbeddingIndex | null = null;
 let musicIndex: EmbeddingIndex | null = null;
+let sfxIndex: EmbeddingIndex | null = null;
 
 // ========================================
 // Vertex AI Embedding API
@@ -243,6 +248,61 @@ export function searchEmbeddingsWithVector(
   return scored.slice(0, topK);
 }
 
+/**
+ * Embed multiple query texts concurrently and search for best matches.
+ *
+ * Used at runtime to embed all search snippets extracted from chapters.
+ * Runs EMBEDDING_CONCURRENCY parallel embedding calls for throughput.
+ *
+ * @param index - The embedding index to search against
+ * @param queryTexts - Array of snippet texts to embed and search
+ * @param topK - Number of results per snippet
+ * @param filterIds - Optional set of IDs to restrict search to
+ * @returns Array of { snippetIndex, snippet, results[] } for each input text
+ */
+export async function searchEmbeddingsBatch(
+  index: EmbeddingIndex,
+  queryTexts: string[],
+  topK: number = 5,
+  filterIds?: Set<string>
+): Promise<Array<{ snippetIndex: number; snippet: string; results: EmbeddingSearchResult[] }>> {
+  if (queryTexts.length === 0) return [];
+
+  // Embed all snippets concurrently with EMBEDDING_CONCURRENCY workers
+  const queryVectors: Array<{ idx: number; vector: number[] }> = [];
+  const queue = queryTexts.map((text, idx) => ({ text, idx }));
+  const workers: Promise<void>[] = [];
+
+  async function processQueue(): Promise<void> {
+    while (queue.length > 0) {
+      const item = queue.shift();
+      if (!item) break;
+
+      const [vector] = await embedTexts([item.text]);
+      queryVectors.push({ idx: item.idx, vector });
+
+      // Small delay to avoid rate limiting
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+
+  const workerCount = Math.min(EMBEDDING_CONCURRENCY, queryTexts.length);
+  for (let i = 0; i < workerCount; i++) {
+    workers.push(processQueue());
+  }
+  await Promise.all(workers);
+
+  // Sort back to original order
+  queryVectors.sort((a, b) => a.idx - b.idx);
+
+  // Run cosine search for each embedded snippet (brute-force, <1ms per query)
+  return queryVectors.map((qv) => ({
+    snippetIndex: qv.idx,
+    snippet: queryTexts[qv.idx],
+    results: searchEmbeddingsWithVector(index, qv.vector, topK, filterIds),
+  }));
+}
+
 // ========================================
 // Ambient index management
 // ========================================
@@ -271,4 +331,17 @@ export function getMusicIndex(): EmbeddingIndex | null {
 /** Set the music embedding index (after building) */
 export function setMusicIndex(index: EmbeddingIndex): void {
   musicIndex = index;
+}
+
+/** Get or load the SFX embedding index */
+export function getSfxIndex(): EmbeddingIndex | null {
+  if (sfxIndex) return sfxIndex;
+  const loaded = loadEmbeddingIndex(SFX_EMBEDDINGS_PATH);
+  if (loaded) sfxIndex = loaded;
+  return sfxIndex;
+}
+
+/** Set the SFX embedding index (after building) */
+export function setSfxIndex(index: EmbeddingIndex): void {
+  sfxIndex = index;
 }

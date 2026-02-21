@@ -1,27 +1,34 @@
 /**
  * Soundscape Integration — Compatibility Layer
  *
- * Drop-in replacement for the legacy soundscapeIntegration.ts.
+ * Soundscape integration layer.
  * Provides the same public API surface used by index.ts and audiobookWorker.ts,
  * but delegates to the new modular soundscape/ pipeline.
+ *
+ * Architecture (per prompt spec):
+ *   - Voice and soundscape are rendered as two INDEPENDENT OGG Opus tracks — no mixing.
+ *   - Ambient track is generated as a separate _ambient.ogg file.
+ *   - Intro is generated as a separate _intro.ogg file and prepended to voice only.
+ *   - LLM Director is used for scene analysis (supports all languages).
+ *   - ffprobe is used for exact audio durations.
  *
  * Exports:
  *   - applySoundscapeToChapter() — called by audiobookWorker after consolidation
  *   - resolveChapterAudioPath() — called by index.ts for audio streaming
+ *   - getAmbientAudioPath() — returns path to separate ambient track
  *   - getSoundscapeThemeOptions() — called by index.ts for theme picker UI
  */
 
 import fs from 'fs';
 import path from 'path';
-import { isSoundscapeEnabled } from '../../../soundscape/src/config.js';
+import { isSoundscapeEnabled, INTRO_NARRATOR_VOICE } from '../../../soundscape/src/config.js';
 import { loadCatalog } from '../../../soundscape/src/catalogLoader.js';
 import { initIntroGenerator, generateIntro, buildBookIntroSpec, buildChapterIntroSpec } from '../../../soundscape/src/introGenerator.js';
 import { generateAmbientTrack } from '../../../soundscape/src/ambientLayer.js';
-import { mixAmbientWithVoice, prependIntro } from '../../../soundscape/src/audioMixer.js';
 import { selectMusicTrack } from '../../../soundscape/src/musicSelector.js';
-import { resolveByKeyword, resolveAmbientAsset } from '../../../soundscape/src/assetResolver.js';
-import { buildFallbackScene } from '../../../soundscape/src/llmDirector.js';
-import { DEFAULT_KEYWORD_MAP, INTRO_NARRATOR_VOICE } from '../../../soundscape/src/config.js';
+import { resolveByKeyword, resolveAmbientAsset, resolveSfxAssets } from '../../../soundscape/src/assetResolver.js';
+import { analyzeChapterScene, buildFallbackScene } from '../../../soundscape/src/llmDirector.js';
+import { getAudioDuration } from '../../../soundscape/src/ffmpegRunner.js';
 import type { SoundscapePreferences, BookInfo } from '../../../soundscape/src/types.js';
 
 import { synthesizeText } from './ttsClient.js';
@@ -42,15 +49,92 @@ function ensureInitialized(): void {
 }
 
 // ========================================
-// Compat: applySoundscapeToChapter
+// Early intro generation (fire-and-forget)
 // ========================================
 
-function getSoundscapeChapterPath(chapterPath: string): string {
-  return chapterPath.replace(/\.wav$/i, '_soundscape.wav');
+/**
+ * Generate intro (before chapter TTS).
+ * Called from index.ts after CharacterRegistry is first saved.
+ * Runs sequentially — completes before chapter TTS starts.
+ *
+ * @returns Path to generated intro OGG, or null on failure
+ */
+export async function startEarlyIntroGeneration(options: {
+  bookTitle: string;
+  chapterPath: string;
+}): Promise<string | null> {
+  if (!isSoundscapeEnabled()) return null;
+
+  ensureInitialized();
+
+  const introPath = getIntroPath(options.chapterPath);
+
+  // Already exists — skip
+  if (fs.existsSync(introPath)) {
+    console.log(`🎵 Intro: Already exists at ${path.basename(introPath)}`);
+    return introPath;
+  }
+
+  try {
+    const metadata = loadAudiobookMetadata(options.bookTitle);
+    const bookTitle = metadata?.title ?? options.bookTitle;
+    const author = metadata?.author ?? 'Unknown author';
+    const chapterTitle = metadata?.chapters?.[0]?.title || 'Chapter 1';
+    const introLanguage = normalizeTargetLanguage(
+      (global as any).TARGET_LANGUAGE || metadata?.language || null
+    );
+
+    const bookInfo: BookInfo = {
+      genre: 'unknown', tone: 'neutral', voiceTone: 'neutral',
+      period: 'modern', locked: false,
+    };
+
+    const bookDir = path.dirname(options.chapterPath);
+    const registryPath = path.join(bookDir, 'character_registry.json');
+    if (fs.existsSync(registryPath)) {
+      try {
+        const reg = JSON.parse(fs.readFileSync(registryPath, 'utf-8'));
+        if (reg.bookInfo) Object.assign(bookInfo, reg.bookInfo);
+      } catch { /* ignore */ }
+    }
+
+    bookInfo.title = metadata?.title ?? options.bookTitle;
+    bookInfo.author = metadata?.author ?? undefined;
+
+    console.log(`🎵 Early intro: Starting music selection for "${bookTitle}"...`);
+    const musicResult = await selectMusicTrack(bookInfo);
+    console.log(`🎵 Early intro: Music selected — ${musicResult.matchReason}`);
+
+    const introSpec = buildBookIntroSpec(bookTitle, author, chapterTitle);
+
+    console.log(`🎵 Early intro: Generating intro audio...`);
+    await generateIntro(
+      introSpec,
+      musicResult.asset,
+      INTRO_NARRATOR_VOICE,
+      introPath,
+      introLanguage
+    );
+
+    console.log(`✅ Early intro: Generated at ${path.basename(introPath)}`);
+    return introPath;
+  } catch (error) {
+    console.warn('⚠️ Early intro generation failed:', error);
+    return null;
+  }
 }
 
+// ========================================
+// Path helpers
+// ========================================
+
 function getIntroPath(chapterPath: string): string {
-  return chapterPath.replace(/\.wav$/i, '_intro.wav');
+  return chapterPath.replace(/\.ogg$/i, '_intro.ogg');
+}
+
+/** Path for the independent ambient track (separate from voice) */
+function getAmbientTrackPath(chapterPath: string): string {
+  return chapterPath.replace(/\.ogg$/i, '_ambient.ogg');
 }
 
 function normalizeTargetLanguage(raw?: string | null): string | null {
@@ -67,11 +151,17 @@ function normalizeTargetLanguage(raw?: string | null): string | null {
   return map[trimmed.toLowerCase()] ?? trimmed;
 }
 
+// ========================================
+// Compat: applySoundscapeToChapter
+// ========================================
+
 /**
  * Apply soundscape to a single chapter — backward-compatible API.
  *
- * This bridges the old monolithic call to the new modular pipeline.
- * Sequentially: ambient mix → intro → concat.
+ * Architecture: voice and ambient are SEPARATE independent OGG files.
+ *   - Voice chapter: {chapter}.ogg (unchanged)
+ *   - Ambient track: {chapter}_ambient.ogg (independent, same duration as voice + pre/post roll)
+ *   - Intro: prepended to voice only → {chapter}_soundscape.ogg
  */
 export async function applySoundscapeToChapter(options: {
   bookTitle: string;
@@ -95,19 +185,15 @@ export async function applySoundscapeToChapter(options: {
     return options.chapterPath;
   }
 
-  const soundscapePath = getSoundscapeChapterPath(options.chapterPath);
   const introPath = getIntroPath(options.chapterPath);
+  const ambientPath = getAmbientTrackPath(options.chapterPath);
 
-  if (fs.existsSync(soundscapePath) && !musicEnabled) {
-    return soundscapePath;
-  }
-
-  let currentPath = options.chapterPath;
-
-  // ── Ambient mix ──
-  if (ambientEnabled) {
+  // ── Ambient track (separate, independent OGG — NOT mixed with voice) ──
+  if (ambientEnabled && !fs.existsSync(ambientPath)) {
     try {
-      const metadata = loadAudiobookMetadata(options.bookTitle);
+      console.log(`  🔊 Ambient: Starting for chapter ${options.chapterIndex}...`);
+
+      // Load book info from character registry
       const bookInfo: BookInfo = {
         genre: 'unknown',
         tone: 'neutral',
@@ -116,7 +202,6 @@ export async function applySoundscapeToChapter(options: {
         locked: false,
       };
 
-      // Try to get book info from character registry
       const bookDir = path.dirname(options.chapterPath);
       const registryPath = path.join(bookDir, 'character_registry.json');
       if (fs.existsSync(registryPath)) {
@@ -128,104 +213,146 @@ export async function applySoundscapeToChapter(options: {
         } catch { /* ignore */ }
       }
 
-      // Use fallback scene analysis (no LLM call in compat mode)
-      const scene = buildFallbackScene(
-        options.chapterIndex,
-        options.chapterText,
-        bookInfo
-      );
+      console.log(`  🔊 Ambient: bookInfo = ${JSON.stringify(bookInfo)}`);
 
-      // Try embedding-based resolution, fall back to keyword
+      // Use LLM scene analysis for language-agnostic scene extraction
+      // Falls back to keyword-based if LLM call fails
+      let scene;
+      try {
+        console.log(`  🔊 Ambient: Running LLM scene analysis...`);
+        scene = await analyzeChapterScene(
+          options.chapterIndex,
+          options.chapterText,
+          bookInfo
+        );
+        console.log(`  🔊 Ambient: LLM scene: env="${scene.environment}" sounds=[${scene.soundElements.join(',')}] snippets=${scene.searchSnippets.length}`);
+      } catch (llmErr) {
+        console.warn(`  🔊 Ambient: LLM analysis failed, using keyword fallback:`, llmErr instanceof Error ? llmErr.message : llmErr);
+        scene = buildFallbackScene(options.chapterIndex, options.chapterText, bookInfo);
+        console.log(`  🔊 Ambient: Fallback scene: env="${scene.environment}" sounds=[${scene.soundElements.join(',')}]`);
+      }
+
+      // Resolve best matching ambient asset via embedding search
       let ambientAsset = null;
+      let resolveMethod = 'none';
       try {
         const result = await resolveAmbientAsset(scene);
         ambientAsset = result?.asset ?? null;
-      } catch {
+        if (ambientAsset) {
+          resolveMethod = `embedding (score=${result!.score.toFixed(3)})`;
+        }
+      } catch (embErr) {
+        console.log(`  🔊 Ambient: Embedding search failed: ${embErr instanceof Error ? embErr.message : embErr}`);
         const catalog = loadCatalog();
         ambientAsset = resolveByKeyword(scene, catalog);
+        if (ambientAsset) resolveMethod = 'keyword-fallback';
       }
 
-      if (ambientAsset && fs.existsSync(ambientAsset.filePath)) {
-        const speechBuffer = fs.readFileSync(options.chapterPath);
-        const speechDurationMs = estimateAudioDuration(speechBuffer) * 1000;
+      if (!ambientAsset) {
+        console.log(`  🔊 Ambient: No matching asset found — skipping ambient layer`);
+      } else if (!fs.existsSync(ambientAsset.filePath)) {
+        console.log(`  🔊 Ambient: Asset found but file missing: ${ambientAsset.filePath}`);
+      } else {
+        console.log(`  🔊 Ambient: Resolved via ${resolveMethod}: "${ambientAsset.description?.substring(0, 80)}" (${ambientAsset.id})`);
+        console.log(`  🔊 Ambient: File: ${ambientAsset.filePath} (${ambientAsset.durationSec?.toFixed(1) ?? '?'}s)`);
 
-        const ambientPath = options.chapterPath.replace(/\.wav$/i, '_ambient.wav');
-        const ambientResult = await generateAmbientTrack(
-          ambientAsset,
-          speechDurationMs,
-          -6,
-          ambientPath
-        );
-
-        if (ambientResult.code === 0) {
-          const mixedPath = options.chapterPath.replace(/\.wav$/i, '_ambient_mix.wav');
-          const mixResult = await mixAmbientWithVoice(currentPath, ambientPath, mixedPath);
-          if (mixResult.code === 0) {
-            currentPath = mixedPath;
+        // Resolve SFX assets to overlay into the ambient track (multiple per chapter)
+        let sfxAssets: import('../../../soundscape/src/types.js').SoundAsset[] = [];
+        try {
+          const sfxResults = await resolveSfxAssets(scene);
+          if (sfxResults.length > 0) {
+            sfxAssets = sfxResults.map(r => r.asset);
+            for (const r of sfxResults) {
+              console.log(`  🎯 SFX: Resolved "${r.asset.description?.substring(0, 60)}" (score=${r.score.toFixed(3)})`);
+            }
+          } else {
+            console.log(`  🎯 SFX: No matching SFX found for this chapter`);
           }
-          // Clean up ambient temp
-          if (fs.existsSync(ambientPath)) fs.unlinkSync(ambientPath);
+        } catch (sfxErr) {
+          console.log(`  🎯 SFX: Resolution failed (non-critical): ${sfxErr instanceof Error ? sfxErr.message : sfxErr}`);
+        }
+
+        // Get exact voice duration via ffprobe (not heuristic)
+        const speechDurationSec = await getAudioDuration(options.chapterPath);
+        const speechDurationMs = speechDurationSec * 1000;
+        console.log(`  🔊 Ambient: Voice duration = ${speechDurationSec.toFixed(1)}s (ffprobe)`);
+
+        if (speechDurationMs > 0) {
+          // Generate ambient (+ optional SFX overlay) as INDEPENDENT OGG file
+          const ambientResult = await generateAmbientTrack(
+            ambientAsset,
+            speechDurationMs,
+            -6,
+            ambientPath,
+            sfxAssets.length > 0 ? sfxAssets : null
+          );
+
+          if (ambientResult.code === 0) {
+            const ambientDuration = await getAudioDuration(ambientPath);
+            console.log(`  ✅ Ambient: Generated separate track → ${path.basename(ambientPath)} (${ambientDuration.toFixed(1)}s)`);
+          } else {
+            console.error(`  ❌ Ambient: Generation failed`);
+          }
+        } else {
+          console.warn(`  🔊 Ambient: Could not determine voice duration — skipping`);
         }
       }
     } catch (error) {
-      console.warn('⚠️ Ambient mix failed, continuing without:', error);
+      console.error('⚠️ Ambient generation failed, continuing without:', error);
     }
   }
 
   // ── Intro ──
   if (musicEnabled && !fs.existsSync(introPath)) {
-    try {
-      const metadata = loadAudiobookMetadata(options.bookTitle);
-      const bookTitle = metadata?.title ?? options.bookTitle;
-      const author = metadata?.author ?? 'Unknown author';
-      const chapterTitle = metadata?.chapters?.[options.chapterIndex - 1]?.title
-        || `Chapter ${options.chapterIndex}`;
-      const introLanguage = normalizeTargetLanguage(
-        (global as any).TARGET_LANGUAGE || metadata?.language || null
-      );
+    if (options.chapterIndex === 1) {
+      // Chapter 1 intro is generated synchronously before chapter TTS starts
+      // — if we reach here, it means the early generation was skipped or failed
+      console.warn('  🎵 Chapter 1 intro not found — was expected from early generation');
+    } else {
+      // Chapters 2+: generate chapter intro inline
+      try {
+        const metadata = loadAudiobookMetadata(options.bookTitle);
+        const chapterTitle = metadata?.chapters?.[options.chapterIndex - 1]?.title
+          || `Chapter ${options.chapterIndex}`;
+        const introLanguage = normalizeTargetLanguage(
+          (global as any).TARGET_LANGUAGE || metadata?.language || null
+        );
 
-      const bookInfo: BookInfo = {
-        genre: 'unknown', tone: 'neutral', voiceTone: 'neutral',
-        period: 'modern', locked: false,
-      };
+        const bookInfo: BookInfo = {
+          genre: 'unknown', tone: 'neutral', voiceTone: 'neutral',
+          period: 'modern', locked: false,
+        };
 
-      const musicResult = await selectMusicTrack(bookInfo);
+        const bookDir = path.dirname(options.chapterPath);
+        const registryPath = path.join(bookDir, 'character_registry.json');
+        if (fs.existsSync(registryPath)) {
+          try {
+            const reg = JSON.parse(fs.readFileSync(registryPath, 'utf-8'));
+            if (reg.bookInfo) Object.assign(bookInfo, reg.bookInfo);
+          } catch { /* ignore */ }
+        }
 
-      const introSpec = options.chapterIndex === 1
-        ? buildBookIntroSpec(bookTitle, author, chapterTitle)
-        : buildChapterIntroSpec(options.chapterIndex, chapterTitle);
+        bookInfo.title = metadata?.title ?? options.bookTitle;
+        bookInfo.author = metadata?.author ?? undefined;
 
-      await generateIntro(
-        introSpec,
-        musicResult.asset,
-        INTRO_NARRATOR_VOICE,
-        introPath,
-        introLanguage
-      );
-    } catch (error) {
-      console.warn('⚠️ Intro generation failed:', error);
-    }
-  }
+        const musicResult = await selectMusicTrack(bookInfo);
+        const introSpec = buildChapterIntroSpec(options.chapterIndex, chapterTitle);
 
-  // ── Concat intro + chapter ──
-  if (fs.existsSync(introPath)) {
-    const concatResult = await prependIntro(introPath, currentPath, soundscapePath);
-    if (concatResult.code === 0) {
-      // Clean up intermediate files
-      if (currentPath !== options.chapterPath && fs.existsSync(currentPath)) {
-        fs.unlinkSync(currentPath);
+        await generateIntro(
+          introSpec,
+          musicResult.asset,
+          INTRO_NARRATOR_VOICE,
+          introPath,
+          introLanguage
+        );
+      } catch (error) {
+        console.warn('⚠️ Intro generation failed:', error);
       }
-      if (fs.existsSync(introPath)) fs.unlinkSync(introPath);
-      return soundscapePath;
     }
   }
 
-  // If we have a mixed file but no intro, rename to soundscape path
-  if (currentPath !== options.chapterPath) {
-    fs.renameSync(currentPath, soundscapePath);
-    return soundscapePath;
-  }
-
+  // Intro stays as standalone _intro.ogg — served separately as chapter 0.
+  // Voice chapter stays clean (no concat). Ambient is also independent.
   return options.chapterPath;
 }
 
@@ -233,12 +360,36 @@ export async function applySoundscapeToChapter(options: {
 // Compat: resolveChapterAudioPath
 // ========================================
 
+/**
+ * Resolve the voice audio path for chapter playback.
+ * Intro is no longer baked in — served separately as chapter 0.
+ */
 export function resolveChapterAudioPath(chapterPath: string): string {
-  if (!isSoundscapeEnabled()) {
-    return chapterPath;
-  }
-  const soundscapePath = getSoundscapeChapterPath(chapterPath);
-  return fs.existsSync(soundscapePath) ? soundscapePath : chapterPath;
+  return chapterPath;
+}
+
+// ========================================
+// Compat: getAmbientAudioPath
+// ========================================
+
+/**
+ * Get the path to the independent ambient track for a chapter.
+ * Returns null if ambient doesn't exist.
+ */
+export function getAmbientAudioPath(chapterPath: string): string | null {
+  if (!isSoundscapeEnabled()) return null;
+  const ambientPath = getAmbientTrackPath(chapterPath);
+  return fs.existsSync(ambientPath) ? ambientPath : null;
+}
+
+/**
+ * Get the path to the standalone intro audio for a chapter.
+ * Returns null if intro doesn't exist.
+ */
+export function getIntroAudioPath(chapterPath: string): string | null {
+  if (!isSoundscapeEnabled()) return null;
+  const introPath = getIntroPath(chapterPath);
+  return fs.existsSync(introPath) ? introPath : null;
 }
 
 // ========================================
@@ -249,9 +400,6 @@ export function getSoundscapeThemeOptions(
   _text: string,
   _maxOptions: number = 5
 ): Array<{ id: string; label: string; score: number }> {
-  // In the new architecture, music selection is done via embeddings
-  // This endpoint is kept for backward compatibility but returns empty
-  // (the theme picker UI can be updated to use the new musicSelector API)
   console.warn('⚠️ getSoundscapeThemeOptions() is deprecated — use musicSelector.selectMusicTrack() instead');
   return [];
 }

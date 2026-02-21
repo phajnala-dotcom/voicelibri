@@ -853,7 +853,7 @@ interface TTSResult {
 }
 
 export async function generateTTS(chunk: TTSChunk): Promise<TTSResult> {
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-exp' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
   
   // Configure voice and style
   const config = {

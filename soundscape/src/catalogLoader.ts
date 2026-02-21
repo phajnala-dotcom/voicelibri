@@ -2,11 +2,12 @@
  * Soundscape Module — Catalog Loader
  *
  * Parses the voicelibri_assets_catalog.csv and builds SoundAsset[]
- * for ambient/SFX asset search. CSV columns:
+ * for ambient/SFX and music asset search. CSV columns:
  *   FileID, Filename, Description, Keywords, Duration,
  *   Type, Category, SubCategory, Location,
  *   Microphone, TrackYear, RecMedium, FilePath
  *
+ * The Type column determines SoundAsset.type ('ambient' or 'music').
  * Filenames may contain commas — proper RFC 4180 CSV parsing required.
  */
 
@@ -148,6 +149,17 @@ export function loadCatalog(csvPath?: string): SoundAsset[] {
     // Parse duration
     const durationSec = parseDuration(fields[idxDuration]?.trim() || '');
 
+    // Determine asset type from CSV Type column
+    const rawType = (idxType !== -1 ? fields[idxType]?.trim() : '').toLowerCase();
+    let assetType: 'ambient' | 'music' | 'sfx';
+    if (rawType === 'music') {
+      assetType = 'music';
+    } else if (rawType === 'sfx') {
+      assetType = 'sfx';
+    } else {
+      assetType = 'ambient'; // realistic, cinematic → ambient
+    }
+
     // Derive genre/mood from category + subcategory + keywords
     const genre = [
       category.toLowerCase(),
@@ -155,8 +167,8 @@ export function loadCatalog(csvPath?: string): SoundAsset[] {
     ].filter(Boolean);
 
     assets.push({
-      id: `ambient/${fileId}`,
-      type: 'ambient',
+      id: `${assetType}/${fileId}`,
+      type: assetType,
       filePath: absPath,
       description,
       keywords,
@@ -169,7 +181,10 @@ export function loadCatalog(csvPath?: string): SoundAsset[] {
   }
 
   cachedCatalog = assets;
-  console.log(`📋 Loaded ${assets.length} ambient assets from catalog`);
+  const ambientCount = assets.filter((a) => a.type === 'ambient').length;
+  const sfxCount = assets.filter((a) => a.type === 'sfx').length;
+  const musicCount = assets.filter((a) => a.type === 'music').length;
+  console.log(`📋 Loaded ${assets.length} assets from catalog (${ambientCount} ambient, ${sfxCount} SFX, ${musicCount} music)`);
   return assets;
 }
 
@@ -192,8 +207,27 @@ export function getAssetsByCategory(category: string): SoundAsset[] {
 
 /**
  * Get a specific asset by its FileID.
+ * Accepts raw FileID, or prefixed id like 'ambient/xxx' or 'music/xxx'.
  */
 export function getAssetById(fileId: string): SoundAsset | undefined {
   const catalog = loadCatalog();
-  return catalog.find((a) => a.id === `ambient/${fileId}` || a.id === fileId);
+  return catalog.find(
+    (a) => a.id === fileId || a.id === `ambient/${fileId}` || a.id === `music/${fileId}` || a.id === `sfx/${fileId}`
+  );
+}
+
+/**
+ * Load only music assets from the catalog.
+ * Convenience wrapper filtering by type === 'music'.
+ */
+export function loadMusicCatalog(): SoundAsset[] {
+  return loadCatalog().filter((a) => a.type === 'music');
+}
+
+/**
+ * Load only SFX assets from the catalog.
+ * Convenience wrapper filtering by type === 'sfx'.
+ */
+export function loadSfxCatalog(): SoundAsset[] {
+  return loadCatalog().filter((a) => a.type === 'sfx');
 }

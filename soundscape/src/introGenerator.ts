@@ -174,9 +174,9 @@ function buildMusicBedArgs(
     '-stream_loop', '-1', '-i', musicPath,
     '-t', durationSec.toString(),
     '-af', `volume=${volumeDb}dB,afade=t=in:st=0:d=${fadeInSec},afade=t=out:st=${fadeOutStart}:d=${fadeOutSec}`,
-    '-ar', '24000',
-    '-ac', '1',
-    '-c:a', 'pcm_s16le',
+    '-ar', '48000',
+    '-ac', '2',
+    '-c:a', 'libopus',
     outputPath,
   ];
 }
@@ -191,9 +191,9 @@ function buildConcatArgs(inputs: string[], outputPath: string): string[] {
   return [
     ...args,
     '-filter_complex', filter,
-    '-ar', '24000',
-    '-ac', '1',
-    '-c:a', 'pcm_s16le',
+    '-ar', '48000',
+    '-ac', '2',
+    '-c:a', 'libopus',
     outputPath,
   ];
 }
@@ -240,7 +240,7 @@ export async function generateIntro(
       // Synthesize TTS
       const voiceAudio = await _synthesizeText(voiceText, narratorVoice, 'normal', undefined, targetLanguage ?? undefined);
       const voiceDurationMs = _estimateAudioDuration(voiceAudio) * 1000;
-      const voicePath = path.join(tempDir, `intro_voice_${i}.wav`);
+      const voicePath = path.join(tempDir, `intro_voice_${i}.ogg`);
 
       // Compute start position
       if (overlay.startMs !== undefined) {
@@ -256,7 +256,7 @@ export async function generateIntro(
 
     // ── Step 2: Build music bed ──
     const computedDurationMs = Math.max(introSpec.totalDurationMs ?? 0, lastEndMs);
-    const baseMusicPath = path.join(tempDir, 'intro_base_music.wav');
+    const baseMusicPath = path.join(tempDir, 'intro_base_music.ogg');
     const baseVolume = applyMusicBoost(-14, MUSIC_FULL_BOOST_DB);
 
     console.log(`🎵 Building music bed: ${computedDurationMs}ms, volume=${baseVolume}dB`);
@@ -268,7 +268,7 @@ export async function generateIntro(
     }
 
     // ── Step 3: Mix voice overlays with ducking ──
-    const introTempPath = path.join(tempDir, 'intro_temp.wav');
+    const introTempPath = path.join(tempDir, 'intro_temp.ogg');
     const fullVolumeDb = applyMusicBoost(-14, MUSIC_FULL_BOOST_DB);
     const backgroundVolumeDb = applyMusicBoost(MUSIC_BACKGROUND_DB, MUSIC_BACKGROUND_BOOST_DB);
     const backgroundRatio = Number(Math.pow(10, (backgroundVolumeDb - fullVolumeDb) / 20).toFixed(6));
@@ -303,8 +303,9 @@ export async function generateIntro(
       '-i', baseMusicPath,
       ...voiceFiles.flatMap((v) => ['-i', v.path]),
       '-filter_complex', filterComplex,
-      '-ar', '24000',
-      '-ac', '1',
+      '-ar', '48000',
+      '-ac', '2',
+      '-c:a', 'libopus',
       introTempPath,
     ];
 
@@ -317,11 +318,12 @@ export async function generateIntro(
     let finalIntroPath = introTempPath;
 
     if (introSpec.endSilenceMs > 0) {
-      const silencePath = path.join(tempDir, 'intro_silence.wav');
+      const silencePath = path.join(tempDir, 'intro_silence.ogg');
       const silenceArgs = [
         '-f', 'lavfi',
         '-t', (introSpec.endSilenceMs / 1000).toString(),
-        '-i', 'anullsrc=r=24000:cl=mono',
+        '-i', 'anullsrc=r=48000:cl=stereo',
+        '-c:a', 'libopus',
         silencePath,
       ];
 
@@ -329,7 +331,7 @@ export async function generateIntro(
       if (silenceResult.code !== 0) {
         console.warn('⚠️ Silence generation failed, skipping end silence');
       } else {
-        const withSilencePath = path.join(tempDir, 'intro_with_silence.wav');
+        const withSilencePath = path.join(tempDir, 'intro_with_silence.ogg');
         const concatResult = await runFfmpeg(buildConcatArgs([introTempPath, silencePath], withSilencePath));
         if (concatResult.code !== 0) {
           console.warn('⚠️ Silence concat failed, using intro without silence');
@@ -389,7 +391,7 @@ export async function generateAllIntros(
       ? buildBookIntroSpec(bookTitle, author, ch.title)
       : buildChapterIntroSpec(ch.index, ch.title);
 
-    const outputPath = path.join(outputDir, `chapter_${ch.index}_intro.wav`);
+    const outputPath = path.join(outputDir, `chapter_${ch.index}_intro.ogg`);
 
     // Skip if already generated
     if (fs.existsSync(outputPath)) {

@@ -29,7 +29,7 @@ import { processDramatizedText } from './dramatizedProcessor.js';
 import { processTaggedTextFile } from './dramatizedChunkerSimple.js';
 import { extractVoiceSegments, removeVoiceTags } from './dramatizedChunkerSimple.js';
 import { loadVoiceMap, assignVoices, type Character } from './voiceAssigner.js';
-import { concatenateWavBuffers, addSilence } from './audioUtils.js';
+import { concatenateOggBuffers, addSilence } from './audioUtils.js';
 import { 
   generateAndSaveTempChunk,
   tempChunkExists, 
@@ -62,7 +62,7 @@ import {
   deleteAudiobook,
   type AudiobookMetadata,
 } from './audiobookManager.js';
-import { resolveChapterAudioPath, getSoundscapeThemeOptions, applySoundscapeToChapter } from './soundscapeCompat.js';
+import { resolveChapterAudioPath, getAmbientAudioPath, getIntroAudioPath, getSoundscapeThemeOptions, applySoundscapeToChapter, startEarlyIntroGeneration } from './soundscapeCompat.js';
 import { 
   extractEpubChapters, 
   detectTextChapters, 
@@ -88,6 +88,41 @@ import { CharacterRegistry } from './characterRegistry.js';
 import { resetPipeline } from './parallelPipelineManager.js';
 // Cost tracking for audiobook generation
 import { CostTracker, estimateTokens } from './costTracker.js';
+
+// ── Intro-as-chapter-0 helper ──────────────────────────────────
+/**
+ * If a standalone _intro.ogg exists for chapter 1, prepend it to the
+ * metadata chapters array as index 0 ("Intro").  Returns a shallow copy
+ * of metadata so the on-disk JSON is never mutated.
+ */
+function injectIntroChapter(
+  metadata: AudiobookMetadata,
+  bookTitle: string,
+): AudiobookMetadata {
+  const ch1Path = getChapterPath(bookTitle, 1);
+  const introPath = getIntroAudioPath(ch1Path);
+  if (!introPath) return metadata;
+
+  // Avoid duplicating if already injected (index 0 already present)
+  if (metadata.chapters.length > 0 && metadata.chapters[0].index === 0) {
+    return metadata;
+  }
+
+  // Build the intro chapter entry
+  const introChapter: AudiobookMetadata['chapters'][number] = {
+    index: 0,
+    title: 'Intro',
+    filename: path.basename(introPath),
+    duration: 0, // will be filled by client on load
+    isGenerated: true,
+    isConsolidated: true,
+  };
+
+  return {
+    ...metadata,
+    chapters: [introChapter, ...metadata.chapters],
+  };
+}
 
 // ES modules dirname workaround
 const __filename = fileURLToPath(import.meta.url);
@@ -961,6 +996,13 @@ async function startBackgroundDramatization(
             console.error(`   ⚠️ Failed to save character registry:`, saveErr);
           }
           
+          // Generate intro for chapter 1 (sequential — completes before chapter TTS starts)
+          if (chapterNum === 1) {
+            const ch1Title = BOOK_CHAPTERS[1]?.title;
+            const ch1Path = getChapterPath(bookTitle, 1, ch1Title);
+            await startEarlyIntroGeneration({ bookTitle, chapterPath: ch1Path });
+          }
+          
           // Convert registry characters to CharacterProfile[] for hybrid tagger
           const registeredChars = characterRegistry.getAllCharacters();
           const characters: CharacterProfile[] = registeredChars.map(rc => ({
@@ -1079,7 +1121,7 @@ async function startBackgroundDramatization(
           dramatizationStatus.currentOperation = `Generating audio for chapter ${chapterNum}`;
           dramatizationStatus.lastActivityAt = Date.now();
           
-          const chapterParallelism = chapterNum === 1 ? 1 : 3;
+          const chapterParallelism = 3; // Uniform parallelism for all chapters
           await generateSubChunksParallel(
             bookTitle,
             chapterNum,
@@ -1147,7 +1189,7 @@ async function startBackgroundDramatization(
           // Generate TTS even for fallback
           const bookTitle = sanitizeBookTitle(BOOK_METADATA?.title || CURRENT_BOOK_FILE || 'Unknown');
           console.log(`   🎤 Generating TTS for chapter ${chapterNum} (fallback)...`);
-          const chapterParallelism = chapterNum === 1 ? 1 : 3;
+          const chapterParallelism = 3; // Uniform parallelism for all chapters
           await generateSubChunksParallel(
             bookTitle,
             chapterNum,
@@ -1244,7 +1286,7 @@ async function checkAndConsolidateReadyChapters(bookTitle: string): Promise<void
       const bookDir = path.join(audiobooksDir, bookTitle);
       const chapterPrefix = `${chapterNum.toString().padStart(2, '0')}_`;
       const consolidatedFiles = fs.existsSync(bookDir) 
-        ? fs.readdirSync(bookDir).filter(f => f.startsWith(chapterPrefix) && f.endsWith('.wav'))
+        ? fs.readdirSync(bookDir).filter(f => f.startsWith(chapterPrefix) && f.endsWith('.ogg'))
         : [];
       
       if (consolidatedFiles.length > 0) {
@@ -1309,7 +1351,7 @@ async function checkAndConsolidateReadyChapters(bookTitle: string): Promise<void
         chaptersMetadata.push({
           index: chapterNum - 1, // metadata uses 0-based array
           title: chapter.title,
-          filename: `${chapterNum.toString().padStart(2, '0')}_${sanitizeChapterTitle(chapter.title)}.wav`,
+          filename: `${chapterNum.toString().padStart(2, '0')}_${sanitizeChapterTitle(chapter.title)}.ogg`,
           duration: 0,
           isGenerated: false,
           tempChunksCount: CHAPTER_SUBCHUNKS.get(chapterNum)?.length || 0,
@@ -1502,7 +1544,7 @@ app.post('/api/book/select', async (req: Request, res: Response) => {
         chapters: validChapters.map((chapter, i) => ({
           index: i + 1, // 1-based chapter index
           title: chapter.title,
-          filename: `${(i + 1).toString().padStart(2, '0')}_${sanitizeChapterTitle(chapter.title)}.wav`,
+          filename: `${(i + 1).toString().padStart(2, '0')}_${sanitizeChapterTitle(chapter.title)}.ogg`,
           duration: 0,
           isGenerated: false,
           tempChunksCount: 0,
@@ -1858,7 +1900,7 @@ app.post('/api/tts/read-sample', async (req: Request, res: Response) => {
 
     console.log(`✓ Audio generated: ${audioBuffer.length} bytes`);
 
-    // Set appropriate headers for WAV audio (Vertex AI returns PCM/WAV)
+    // Set appropriate headers for WAV audio (LINEAR16 PCM from TTS)
     res.setHeader('Content-Type', 'audio/wav');
     res.setHeader('Content-Length', audioBuffer.length.toString());
     res.setHeader('Accept-Ranges', 'bytes');
@@ -2217,9 +2259,8 @@ app.post('/api/tts/chunk', async (req: Request, res: Response) => {
         const cacheTime = Date.now() - requestStartTime;
         console.log(`📦 Serving whole chapter file: ${chapterNum} (${cacheTime}ms) - sub-chunks were cleaned up`);
         
-        // Calculate seek offset in seconds based on requested sub-chunk index
-        // Total chapter duration from audio buffer (24kHz, mono, 16-bit = 48000 bytes/sec)
-        const chapterDurationSec = (chapterAudio.length - 44) / 48000; // minus WAV header
+        // Estimate chapter duration from OGG Opus buffer (heuristic: ~6000 bytes/sec)
+        const chapterDurationSec = chapterAudio.length / 6000;
         const chapterSubChunks = CHAPTER_SUBCHUNKS.get(chapterNum);
         const totalSubChunks = chapterSubChunks?.length || 1;
         
@@ -2229,7 +2270,7 @@ app.post('/api/tts/chunk', async (req: Request, res: Response) => {
         
         console.log(`   Seek offset: ${seekOffsetSec.toFixed(2)}s (subChunk ${localSubChunkIndex}/${totalSubChunks}, chapter ${chapterDurationSec.toFixed(1)}s)`);
         
-        res.setHeader('Content-Type', 'audio/wav');
+        res.setHeader('Content-Type', 'audio/ogg');
         res.setHeader('Content-Length', chapterAudio.length.toString());
         res.setHeader('Accept-Ranges', 'bytes');
         res.setHeader('X-Cache', 'CHAPTER_FILE');
@@ -2467,7 +2508,8 @@ app.get('/api/audiobooks', (req: Request, res: Response) => {
     
     // Load metadata for each audiobook
     const audiobookList = audiobooks.map(bookTitle => {
-      const metadata = loadAudiobookMetadata(bookTitle);
+      let metadata = loadAudiobookMetadata(bookTitle);
+      if (metadata) metadata = injectIntroChapter(metadata, bookTitle);
       const progress = audiobookWorker.getProgress(bookTitle);
       
       return {
@@ -2499,7 +2541,7 @@ app.get('/api/audiobooks', (req: Request, res: Response) => {
 app.get('/api/audiobooks/:bookTitle', (req: Request, res: Response) => {
   try {
     const { bookTitle } = req.params;
-    const metadata = loadAudiobookMetadata(bookTitle);
+    let metadata = loadAudiobookMetadata(bookTitle);
     
     if (!metadata) {
       return res.status(404).json({
@@ -2508,6 +2550,7 @@ app.get('/api/audiobooks/:bookTitle', (req: Request, res: Response) => {
       });
     }
     
+    metadata = injectIntroChapter(metadata, bookTitle);
     const progress = audiobookWorker.getProgress(bookTitle);
     const tempChunksCount = countTempChunks(bookTitle);
     
@@ -2635,7 +2678,7 @@ app.post('/api/audiobooks/generate', async (req: Request, res: Response) => {
       chapters: chapters.map((chapter, i) => ({
         index: i,
         title: chapter.title,
-        filename: `Chapter_${i.toString().padStart(2, '0')}.wav`,
+        filename: `Chapter_${i.toString().padStart(2, '0')}.ogg`,
         duration: 0,
         isGenerated: false,
         tempChunksCount: chunkingResult.chapterChunkCounts[i] ?? 0,
@@ -2803,7 +2846,23 @@ app.post('/api/dramatize/auto', async (req: Request, res: Response) => {
 app.get('/api/audiobooks/:bookTitle/chapters/:chapterIndex', (req: Request, res: Response) => {
   try {
     const { bookTitle, chapterIndex } = req.params;
-    const chapterPath = getChapterPath(bookTitle, parseInt(chapterIndex));
+    const idx = parseInt(chapterIndex);
+
+    // Chapter 0 = standalone intro audio
+    if (idx === 0) {
+      const ch1Path = getChapterPath(bookTitle, 1);
+      const introPath = getIntroAudioPath(ch1Path);
+      if (!introPath) {
+        return res.status(404).json({
+          error: 'Intro not found',
+          message: 'No intro audio available for this audiobook',
+        });
+      }
+      res.setHeader('Content-Type', 'audio/ogg');
+      return res.sendFile(path.resolve(introPath));
+    }
+
+    const chapterPath = getChapterPath(bookTitle, idx);
     const resolvedPath = resolveChapterAudioPath(chapterPath);
     
     if (!fs.existsSync(resolvedPath)) {
@@ -2818,6 +2877,36 @@ app.get('/api/audiobooks/:bookTitle/chapters/:chapterIndex', (req: Request, res:
     console.error('✗ Error serving chapter:', error);
     res.status(500).json({
       error: 'Failed to serve chapter',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * Serve independent ambient track for a chapter
+ * 
+ * GET /api/audiobooks/:bookTitle/chapters/:chapterIndex/ambient
+ * Returns the separate ambient OGG file (not mixed with voice)
+ */
+app.get('/api/audiobooks/:bookTitle/chapters/:chapterIndex/ambient', (req: Request, res: Response) => {
+  try {
+    const { bookTitle, chapterIndex } = req.params;
+    const chapterPath = getChapterPath(bookTitle, parseInt(chapterIndex));
+    const ambientPath = getAmbientAudioPath(chapterPath);
+    
+    if (!ambientPath) {
+      return res.status(404).json({
+        error: 'Ambient not found',
+        message: `No ambient track for chapter ${chapterIndex}`,
+      });
+    }
+    
+    res.setHeader('Content-Type', 'audio/ogg');
+    res.sendFile(path.resolve(ambientPath));
+  } catch (error) {
+    console.error('✗ Error serving ambient:', error);
+    res.status(500).json({
+      error: 'Failed to serve ambient',
       message: error instanceof Error ? error.message : 'Unknown error',
     });
   }

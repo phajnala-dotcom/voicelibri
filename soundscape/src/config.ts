@@ -2,12 +2,11 @@
  * Soundscape Module — Configuration
  *
  * All tuneable constants centralized here.
- * Values ported from the production-proven legacy soundscapeIntegration.ts.
+ * All values are tuneable via this single module.
  */
 
 import path from 'path';
 import { fileURLToPath } from 'url';
-import type { GenreMusicMap } from './types.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -34,6 +33,9 @@ export const AMBIENT_EMBEDDINGS_PATH = path.join(ASSETS_ROOT, 'ambient_embedding
 /** Persisted embedding index for music filenames */
 export const MUSIC_EMBEDDINGS_PATH = path.join(ASSETS_ROOT, 'music_embeddings.json');
 
+/** Persisted embedding index for SFX assets */
+export const SFX_EMBEDDINGS_PATH = path.join(ASSETS_ROOT, 'sfx_embeddings.json');
+
 // ========================================
 // Feature toggles (env-driven)
 // ========================================
@@ -47,9 +49,9 @@ export function isSoundscapeEnabled(): boolean {
 // Audio output format
 // ========================================
 
-export const AUDIO_SAMPLE_RATE = 24000;
-export const AUDIO_CHANNELS = 1;
-export const AUDIO_CODEC = 'pcm_s16le';
+export const AUDIO_SAMPLE_RATE = 48000;
+export const AUDIO_CHANNELS = 2;
+export const AUDIO_CODEC = 'libopus';
 
 // ========================================
 // Ambient layer
@@ -138,75 +140,13 @@ export const EMBEDDING_CONCURRENCY = 5;
 // ========================================
 
 /** Model for scene analysis */
-export const SCENE_ANALYSIS_MODEL = 'gemini-2.0-flash';
+export const SCENE_ANALYSIS_MODEL = 'gemini-2.5-flash';
 
 // ========================================
-// Music genre mapping
+// Music genre mapping (DEPRECATED)
 // ========================================
 
-/**
- * Maps book genres/tones to music asset folders.
- * First-pass: deterministic folder selection.
- * Second-pass: embedding search within selected folders.
- */
-export const GENRE_MUSIC_MAP: GenreMusicMap = {
-  // Book genres → music folders
-  fantasy: ['Medieval', 'Orchestral', 'Celtic', 'New Age'],
-  'science fiction': ['Electronic', 'New Age', 'Orchestral'],
-  scifi: ['Electronic', 'New Age', 'Orchestral'],
-  horror: ['Orchestral', 'Psychedelic', 'Electronic'],
-  thriller: ['Orchestral', 'Electronic'],
-  mystery: ['Orchestral', 'Classical', 'Electronic'],
-  romance: ['Classical', 'Folk', 'New Age'],
-  historical: ['Classical', 'Orchestral', 'Medieval', 'Antiquity'],
-  'historical fiction': ['Classical', 'Orchestral', 'Medieval', 'Antiquity'],
-  adventure: ['Orchestral', 'Celtic', 'Folk', 'World'],
-  drama: ['Classical', 'Orchestral', 'Folk'],
-  comedy: ['Folk', 'Country', 'Pop', 'Children'],
-  children: ['Children', 'Folk', 'Classical'],
-  war: ['Orchestral', 'Brass', 'World'],
-  western: ['Country', 'Folk'],
-  literary: ['Classical', 'New Age'],
-  epic: ['Orchestral', 'Medieval', 'Brass', 'World'],
-  mythology: ['Antiquity', 'World', 'Orchestral'],
-  fairy_tale: ['Celtic', 'Folk', 'Children', 'Classical'],
-
-  // Tone/mood fallbacks
-  dark: ['Orchestral', 'Psychedelic', 'Electronic'],
-  calm: ['New Age', 'Classical', 'Folk'],
-  epic_tone: ['Orchestral', 'Brass', 'World'],
-  suspenseful: ['Orchestral', 'Electronic', 'Psychedelic'],
-  romantic: ['Classical', 'Folk', 'New Age'],
-  whimsical: ['Celtic', 'Folk', 'Children'],
-
-  // Period fallbacks
-  medieval: ['Medieval', 'Celtic', 'Antiquity'],
-  ancient: ['Antiquity', 'World'],
-  modern: ['Electronic', 'Pop'],
-  victorian: ['Classical', 'Orchestral'],
-  renaissance: ['Classical', 'Antiquity'],
-};
-
-/** Default folders when no genre match */
-export const DEFAULT_MUSIC_FOLDERS = ['Orchestral', 'Classical'];
-
-// ========================================
-// Keyword map (fallback for non-LLM scene tagging)
-// ========================================
-
-export const DEFAULT_KEYWORD_MAP: Record<string, string[]> = {
-  forest: ['forest', 'woods', 'trees', 'pine', 'jungle', 'grove', 'thicket'],
-  rain: ['rain', 'storm', 'thunder', 'lightning', 'downpour', 'drizzle'],
-  sea: ['sea', 'ocean', 'wave', 'shore', 'harbor', 'beach', 'coast', 'sail'],
-  city: ['city', 'street', 'traffic', 'crowd', 'market', 'tavern', 'inn', 'pub'],
-  interior: ['room', 'hall', 'castle', 'cathedral', 'church', 'chamber', 'dungeon'],
-  sciFi: ['spaceship', 'engine', 'hull', 'airlock', 'android', 'laser', 'reactor'],
-  fire: ['fire', 'flame', 'smoke', 'campfire', 'torch', 'hearth', 'fireplace'],
-  wind: ['wind', 'breeze', 'gust', 'howling wind', 'gale'],
-  cave: ['cave', 'tunnel', 'underground', 'cavern', 'mine', 'grotto'],
-  water: ['river', 'stream', 'waterfall', 'creek', 'pond', 'lake', 'fountain'],
-  birds: ['bird', 'chirp', 'songbird', 'robin', 'crow', 'raven', 'owl', 'hawk'],
-  battle: ['sword', 'battle', 'fight', 'clash', 'armor', 'shield', 'war'],
-  night: ['night', 'midnight', 'dark', 'moonlight', 'starlight', 'nocturnal'],
-  horses: ['horse', 'gallop', 'trot', 'hooves', 'stable', 'carriage', 'wagon'],
-};
+// NOTE: GENRE_MUSIC_MAP, DEFAULT_MUSIC_FOLDERS, and DEFAULT_KEYWORD_MAP
+// have been removed. Music selection now uses LLM-generated queries
+// with embedding search across all music assets (see musicSelector.ts).
+// Ambient asset matching uses LLM scene analysis (see llmDirector.ts).

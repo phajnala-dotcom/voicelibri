@@ -20,7 +20,6 @@ import { Card, CardBody, Toggle } from '../components/ui';
 import { selectBook, convertToBook, getGenerationProgress, getAudiobook, createFromText, createFromUrl } from '../services/api';
 import { useLibraryStore } from '../stores/libraryStore';
 import { usePlayerStore } from '../stores/playerStore';
-import { useProgressiveAudioPlayback } from '../hooks/useProgressiveAudioPlayback';
 
 // Voice options - separated by gender
 const MALE_VOICES = [
@@ -65,7 +64,6 @@ const FEMALE_VOICES = [
 export function GenerateScreen() {
   const { addBook, books } = useLibraryStore();
   const { showMiniPlayer, startProgressivePlayback: startProgressivePlaybackStore } = usePlayerStore();
-  const { startProgressivePlayback } = useProgressiveAudioPlayback();
   
   // Upload state
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -239,7 +237,6 @@ export function GenerateScreen() {
         console.log('🚀 Starting progressive playback for new audiobook:', book.title);
         showMiniPlayer();
         startProgressivePlaybackStore(book);
-        await startProgressivePlayback(book);
         
         // Start polling for status updates
         const pollInterval = setInterval(async () => {

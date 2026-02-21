@@ -23,6 +23,7 @@ import re
 import copy
 import requests
 import openpyxl
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from google.oauth2 import service_account
 from google.auth.transport.requests import Request as GoogleAuthRequest
 
@@ -34,6 +35,7 @@ PROJECT_ID   = 'calmbridge-2'
 LOCATION     = 'us-central1'
 MODEL        = 'gemini-2.5-flash'
 BATCH_SIZE   = 20
+CONCURRENCY  = 5   # parallel API calls
 CHECK_EVERY  = 10  # validate quality every N batches
 SAVE_EVERY   = 10  # save progress every N batches
 SHOW_EVERY   = 5   # print sample Keywords vs Description every N batches
@@ -177,7 +179,7 @@ RULES:
 6. Use ENGLISH only.
 7. STRICT GROUNDING — describe ONLY what the Keywords, Filename, Category, and SubCategory explicitly contain. Do NOT fabricate, infer, or add any details, imagery, or scene elements not present in the source data. Shorter descriptions are perfectly acceptable when the data is sparse.
 7b. NEVER include the Category or SubCategory name (genre) in the description. The description must stand on its own without referencing its classification.
-8. USE ALL MEANINGFUL KEYWORDS — every significant keyword from the Keywords field must appear in the description using the EXACT original word. Never substitute synonyms for keywords.
+8. KEYWORD HANDLING — Use meaningful, recognizable English keywords from the Keywords field in the description. SKIP any abbreviated codes, catalog IDs, gibberish tokens, or unintelligible fragments (e.g. "AMBSea", "ptem", "nona", "biiansu", "MSCs", "METLFric"). If you can confidently infer the full word from context (e.g. "Elec" → "Electric"), use the full word. Otherwise OMIT the token entirely. Never include nonsense or abbreviated strings in the output description.
 9. Output valid JSON array, nothing else.
 
 OUTPUT FORMAT (JSON array only):
@@ -221,10 +223,12 @@ def quality_check(results, batch_rows):
             warnings.append(f"FileID {fid}: possibly {period_count+1} sentences")
 
         # For partial completions, check we didn't replace original
+        # Use normalized comparison (whitespace + case) to avoid false positives
         if row['Mode'] == 'complete' and row['Description']:
-            orig_start = row['Description'][:50]
-            if not s.startswith(orig_start[:30]):
-                issues.append(f"FileID {fid}: partial completion changed original text")
+            orig_norm = ' '.join(row['Description'][:50].lower().split())
+            result_norm = ' '.join(s[:50].lower().split())
+            if not result_norm.startswith(orig_norm[:25]):
+                warnings.append(f"FileID {fid}: partial completion may have changed original text")
 
     ok = len(issues) == 0
     all_notes = issues + [f"(warn) {w}" for w in warnings[:3]]
@@ -359,23 +363,70 @@ def main():
     batch_num = 0
     total_quality_issues = []
 
+    def process_one_batch(batch_info):
+        """Worker: build prompt, call API, parse response. Returns (batch, results) or raises."""
+        batch, bn = batch_info
+        prompt = build_prompt(style_examples, batch)
+        t0 = time.time()
+        response = call_gemini(prompt, temperature=0.6)
+        elapsed = time.time() - t0
+        results = parse_llm_response(response)
+        return batch, bn, results, elapsed
+
+    # Split all rows into batches upfront
+    all_batches = []
     for i in range(0, len(rows_to_process), BATCH_SIZE):
-        batch = rows_to_process[i:i + BATCH_SIZE]
-        batch_num += 1
+        all_batches.append(rows_to_process[i:i + BATCH_SIZE])
 
-        modes = f"({sum(1 for r in batch if r['Mode']=='generate')}gen, {sum(1 for r in batch if r['Mode']=='complete')}fix)"
-        print(f"  📦 Batch {batch_num}/{total_batches} {modes}...", end=" ", flush=True)
+    # Process in waves of CONCURRENCY parallel batches
+    wave_start = 0
+    while wave_start < len(all_batches):
+        wave_end = min(wave_start + CONCURRENCY, len(all_batches))
+        wave = all_batches[wave_start:wave_end]
+        wave_batch_nums = list(range(wave_start + 1, wave_end + 1))  # 1-based
 
-        try:
-            # Build and send prompt
-            prompt = build_prompt(style_examples, batch)
-            t0 = time.time()
-            response = call_gemini(prompt, temperature=0.6)
-            elapsed = time.time() - t0
+        # Print what we're launching
+        for idx, (batch, bn) in enumerate(zip(wave, wave_batch_nums)):
+            modes = f"({sum(1 for r in batch if r['Mode']=='generate')}gen, {sum(1 for r in batch if r['Mode']=='complete')}fix)"
+            print(f"  📦 Batch {bn}/{total_batches} {modes}...", flush=True)
 
-            # Parse response
-            results = parse_llm_response(response)
-            print(f"✓ {len(results)} results ({elapsed:.1f}s)", end="")
+        # Fire all in parallel
+        wave_results = {}  # bn -> (batch, results, elapsed)
+        wave_errors = []
+        t_wave = time.time()
+        with ThreadPoolExecutor(max_workers=CONCURRENCY) as executor:
+            futures = {
+                executor.submit(process_one_batch, (batch, bn)): bn
+                for batch, bn in zip(wave, wave_batch_nums)
+            }
+            for future in as_completed(futures):
+                bn = futures[future]
+                try:
+                    batch, _, results, elapsed = future.result()
+                    wave_results[bn] = (batch, results, elapsed)
+                except Exception as e:
+                    wave_errors.append((bn, str(e)[:200]))
+
+        wave_elapsed = time.time() - t_wave
+
+        # Handle errors
+        if wave_errors:
+            for bn, err in wave_errors:
+                print(f"  ❌ Batch {bn}: {err}")
+            failed_batches += len(wave_errors)
+            if failed_batches >= 5:
+                print(f"\n❌ SUSPENDED: {failed_batches} total failures")
+                save_progress(completed_ids)
+                wb.save(OUTPUT_PATH)
+                print(f"   Progress saved to {OUTPUT_PATH}")
+                return
+
+        # Process results sequentially (XLSX write is not thread-safe)
+        for bn in sorted(wave_results.keys()):
+            batch, results, elapsed = wave_results[bn]
+            batch_num = bn
+
+            print(f"  ✓ Batch {bn}: {len(results)} results ({elapsed:.1f}s)", end="")
 
             # Quality check on periodic intervals
             if batch_num % CHECK_EVERY == 0:
@@ -431,34 +482,22 @@ def main():
                     completed_ids.add(fid)
                     processed += 1
 
-            # Save progress periodically
-            if batch_num % SAVE_EVERY == 0:
-                print(f"  💾 Saving progress ({processed} processed so far)...")
-                save_progress(completed_ids)
-                wb.save(OUTPUT_PATH)
+        # After each wave: check if we should save
+        last_bn = max(wave_results.keys()) if wave_results else 0
+        if last_bn % SAVE_EVERY < CONCURRENCY or wave_end == len(all_batches):
+            print(f"  💾 Saving progress ({processed} processed so far)...")
+            save_progress(completed_ids)
+            wb.save(OUTPUT_PATH)
 
-        except Exception as e:
-            err_msg = str(e)[:200]
-            print(f"❌ ERROR: {err_msg}")
-            failed_batches += 1
-            if failed_batches >= 5:
-                print(f"\n❌ SUSPENDED: {failed_batches} consecutive failures")
-                print(f"   Last error: {err_msg}")
-                save_progress(completed_ids)
-                wb.save(OUTPUT_PATH)
-                print(f"   Progress saved to {OUTPUT_PATH}")
-                return
-            # Wait and retry with increasing delay
-            delay = 10 * failed_batches
-            print(f"   Waiting {delay}s before retry (attempt {failed_batches}/5)...")
-            time.sleep(delay)
-            continue
+        # Reset failure counter on successful wave
+        if not wave_errors:
+            failed_batches = 0
 
-        # Reset failure counter on success
-        failed_batches = 0
+        # Advance to next wave
+        wave_start = wave_end
 
-        # Rate limiting: small delay between batches
-        time.sleep(1)
+        print(f"  ⚡ Wave done: {len(wave_results)} batches in {wave_elapsed:.1f}s")
+        print()
 
     # Final save
     print(f"\n💾 Saving final output to {OUTPUT_PATH}...")

@@ -4,7 +4,7 @@
  * Main layout wrapper
  */
 
-import { useState, useEffect } from 'react';
+import { useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
 import { BottomNavigation } from '../navigation';
 import { MiniPlayer } from '../player';
@@ -19,8 +19,7 @@ import { getAudiobooks, convertToBook } from '../../services/api';
  * Main app layout with navigation and player
  */
 export function AppShell() {
-  const [isPlayerExpanded, setIsPlayerExpanded] = useState(false);
-  const { currentBook, setCurrentBook, setCurrentChapter, showMiniPlayer, isMiniPlayerVisible } = usePlayerStore();
+  const { currentBook, setCurrentBook, setCurrentChapter, showMiniPlayer, isMiniPlayerVisible, isFullPlayerOpen, openFullPlayer, closeFullPlayer } = usePlayerStore();
   const { addBook, books } = useLibraryStore();
   
   // Initialize progressive audio playback
@@ -93,14 +92,14 @@ export function AppShell() {
       </main>
       
       {/* Mini Player */}
-      <MiniPlayer onExpand={() => setIsPlayerExpanded(true)} />
+      <MiniPlayer onExpand={() => openFullPlayer()} />
       
       {/* Bottom Navigation */}
       <BottomNavigation />
       
       {/* Full Player Modal */}
-      {isPlayerExpanded && (
-        <FullPlayer onCollapse={() => setIsPlayerExpanded(false)} />
+      {isFullPlayerOpen && (
+        <FullPlayer onCollapse={() => closeFullPlayer()} />
       )}
     </div>
   );

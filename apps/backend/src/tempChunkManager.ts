@@ -26,7 +26,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { synthesizeText, synthesizeMultiSpeaker, SpeakerConfig } from './ttsClient.js';
 import { extractVoiceSegments, removeVoiceTags } from './dramatizedChunkerSimple.js';
-import { concatenateWavBuffers, addSilence } from './audioUtils.js';
+import { concatenateWavBuffers, addSilence, estimateWavDuration, convertWavToOgg } from './audioUtils.js';
 import { validateVoiceSegment, GEMINI_TTS_HARD_LIMIT } from './chapterChunker.js';
 import { 
   getTempChunkPath, 
@@ -976,7 +976,7 @@ export async function consolidateChapterFromTemps(
   // 1. Load all temp chunk files and track boundaries
   const chunkBuffers: Buffer[] = [];
   const chunkBoundaries: Array<{ chunkIndex: number; startByte: number; endByte: number; duration: number }> = [];
-  let currentByte = 44; // WAV header is 44 bytes
+  let currentByte = 0;
   
   for (const chunkIndex of chunkIndices) {
     const tempFile = getTempChunkPath(bookTitle, chunkIndex);
@@ -988,29 +988,32 @@ export async function consolidateChapterFromTemps(
     const buffer = fs.readFileSync(tempFile);
     chunkBuffers.push(buffer);
     
-    // Track chunk boundaries (excluding WAV header for each chunk)
-    const pcmDataSize = buffer.length - 44;
+    // Track chunk boundaries (WAV sub-chunks — exact byte boundaries from PCM data)
+    const chunkSize = buffer.length;
     const duration = estimateAudioDuration(buffer);
     
     chunkBoundaries.push({
       chunkIndex,
       startByte: currentByte,
-      endByte: currentByte + pcmDataSize,
+      endByte: currentByte + chunkSize,
       duration,
     });
     
-    currentByte += pcmDataSize;
+    currentByte += chunkSize;
   }
   
-  // 2. Concatenate into single WAV
-  const chapterAudio = concatenateWavBuffers(chunkBuffers);
+  // 2. Concatenate WAV sub-chunks into single WAV
+  const chapterWav = concatenateWavBuffers(chunkBuffers);
   
-  // 3. Save consolidated chapter file
+  // 3. Convert WAV → OGG Opus (single encode, 70kbps VBR)
+  const chapterAudio = await convertWavToOgg(chapterWav);
+  
+  // 4. Save consolidated chapter file (OGG Opus)
   fs.writeFileSync(outputPath, chapterAudio);
   const duration = estimateAudioDuration(chapterAudio);
   
   // 4. Save chunk boundaries metadata for extraction
-  const boundariesPath = outputPath.replace('.wav', '_boundaries.json');
+  const boundariesPath = outputPath.replace('.ogg', '_boundaries.json');
   fs.writeFileSync(boundariesPath, JSON.stringify({
     chapterIndex,
     totalChunks: chunkIndices.length,
@@ -1084,7 +1087,8 @@ export async function consolidateChapterSmart(
       return [outputPath];
     }
     
-    const chapterAudio = concatenateWavBuffers(chunkBuffers);
+    const chapterWav = concatenateWavBuffers(chunkBuffers);
+    const chapterAudio = await convertWavToOgg(chapterWav);
     fs.writeFileSync(outputPath, chapterAudio);
     
     console.log(`  ✅ Created: ${path.basename(outputPath)} (${(totalDuration / 60).toFixed(1)} min)`);
@@ -1115,7 +1119,8 @@ export async function consolidateChapterSmart(
       const outputPath = getChapterPath(bookTitle, chapter.index, chapter.title, partIndex);
       
       if (!fs.existsSync(outputPath)) {
-        const partAudio = concatenateWavBuffers(currentPartBuffers);
+        const partWav = concatenateWavBuffers(currentPartBuffers);
+        const partAudio = await convertWavToOgg(partWav);
         fs.writeFileSync(outputPath, partAudio);
         console.log(`  ✅ Part ${partIndex + 1}: ${path.basename(outputPath)} (${(currentPartDuration / 60).toFixed(1)} min)`);
       } else {
@@ -1134,7 +1139,8 @@ export async function consolidateChapterSmart(
   // Handle any remaining chunks (shouldn't happen, but safety check)
   if (currentPartBuffers.length > 0) {
     const outputPath = getChapterPath(bookTitle, chapter.index, chapter.title, partIndex);
-    const partAudio = concatenateWavBuffers(currentPartBuffers);
+    const partWav = concatenateWavBuffers(currentPartBuffers);
+    const partAudio = await convertWavToOgg(partWav);
     fs.writeFileSync(outputPath, partAudio);
     console.log(`  ✅ Part ${partIndex + 1} (final): ${path.basename(outputPath)} (${(currentPartDuration / 60).toFixed(1)} min)`);
     outputPaths.push(outputPath);
@@ -1173,25 +1179,27 @@ export async function consolidateAllChapters(
 // ========================================
 
 /**
- * Estimate audio duration from WAV buffer
+ * Estimate audio duration from buffer (format-aware)
  * 
- * Formula: duration = data_size / (sample_rate * channels * bytes_per_sample)
- * Gemini TTS defaults: 24000 Hz, mono, 16-bit
+ * - WAV (LINEAR16 PCM): Exact calculation from header fields
+ * - OGG Opus: Heuristic based on typical bitrate (~6000 bytes/sec)
  * 
- * @param wavBuffer - WAV audio buffer
- * @returns Estimated duration in seconds
+ * Detects format by checking for RIFF header magic bytes.
+ * 
+ * @param audioBuffer - WAV or OGG Opus audio buffer
+ * @returns Duration in seconds
  */
-export function estimateAudioDuration(wavBuffer: Buffer): number {
-  // WAV header is 44 bytes, rest is PCM data
-  const pcmDataSize = wavBuffer.length - 44;
+export function estimateAudioDuration(audioBuffer: Buffer): number {
+  // Detect WAV by RIFF header magic bytes
+  if (audioBuffer.length >= 44 && audioBuffer.toString('ascii', 0, 4) === 'RIFF') {
+    // WAV: Exact calculation from header
+    return estimateWavDuration(audioBuffer);
+  }
   
-  // Gemini TTS defaults
-  const sampleRate = 24000;
-  const channels = 1; // mono
-  const bytesPerSample = 2; // 16-bit
-  
-  const duration = pcmDataSize / (sampleRate * channels * bytesPerSample);
-  return duration;
+  // OGG Opus heuristic: ~6000 bytes per second at typical Gemini TTS bitrate
+  // This is an approximation; for exact duration use ffprobe
+  const OPUS_BYTES_PER_SEC = 6000;
+  return audioBuffer.length / OPUS_BYTES_PER_SEC;
 }
 
 /**
@@ -1237,7 +1245,7 @@ export function extractChunkFromConsolidated(
   chunkIndex: number
 ): Buffer | null {
   const chapterPath = getChapterPath(bookTitle, chapterIndex);
-  const boundariesPath = chapterPath.replace('.wav', '_boundaries.json');
+  const boundariesPath = chapterPath.replace('.ogg', '_boundaries.json');
   
   // Check if consolidated file and boundaries exist
   if (!fs.existsSync(chapterPath) || !fs.existsSync(boundariesPath)) {
@@ -1631,7 +1639,7 @@ export async function generateSubChunksWorkerPool(
  * @param subChunks - Array of sub-chunks to generate
  * @param voiceMap - Character to voice mapping
  * @param defaultVoice - Default voice for narrator
- * @param parallelism - Number of concurrent TTS calls (default: 2)
+ * @param parallelism - Number of concurrent TTS calls (default: 3)
  * @returns Array of sub-chunk results
  */
 export async function generateSubChunksParallel(
@@ -1640,15 +1648,23 @@ export async function generateSubChunksParallel(
   subChunks: TwoSpeakerChunk[],
   voiceMap: Record<string, string> = {},
   defaultVoice: string = 'Algieba',
-  parallelism: number = 2
+  parallelism: number = 3
 ): Promise<SubChunkResult[]> {
   console.log(`🚀 Parallel generation: Chapter ${chapterIndex}, ${subChunks.length} sub-chunks (parallelism: ${parallelism})`);
   const startTime = Date.now();
   
   const results: SubChunkResult[] = [];
   
-  // Process in batches of `parallelism` size
-  for (let i = 0; i < subChunks.length; i += parallelism) {
+  // Generate first sub-chunk alone (sequential) to minimize first-listen latency.
+  // The frontend polls for subchunk 0 first — it must be on disk ASAP.
+  if (subChunks.length > 0) {
+    const firstResult = await generateSubChunk(bookTitle, chapterIndex, subChunks[0], voiceMap, defaultVoice);
+    results.push(firstResult);
+    console.log(`  📊 Progress: 1/${subChunks.length} sub-chunks (first ready)`);
+  }
+  
+  // Process remaining sub-chunks in parallel batches
+  for (let i = 1; i < subChunks.length; i += parallelism) {
     const batch = subChunks.slice(i, i + parallelism);
     
     const batchResults = await Promise.all(
@@ -1703,7 +1719,8 @@ export async function consolidateChapterFromSubChunks(
     chunkBuffers.push(buffer);
   }
   
-  const chapterAudio = concatenateWavBuffers(chunkBuffers);
+  const chapterWav = concatenateWavBuffers(chunkBuffers);
+  const chapterAudio = await convertWavToOgg(chapterWav);
   const outputPath = getChapterPath(bookTitle, chapterIndex, chapterTitle);
   fs.writeFileSync(outputPath, chapterAudio);
   

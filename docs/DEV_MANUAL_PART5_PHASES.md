@@ -399,7 +399,7 @@ interface TTSOptions {
 
 export async function generateSpeech(options: TTSOptions): Promise<Buffer> {
   const model = genAI.getGenerativeModel({
-    model: 'gemini-2.0-flash-exp',
+    model: 'gemini-2.5-flash',
     generationConfig: {
       responseModalities: ['audio'],
       speechConfig: {

@@ -19,6 +19,10 @@ interface PlayerStore {
   currentSubChunk: { chapterIndex: number; subChunkIndex: number } | null;
   highestReadyChapter: number; // Tracks which chapters are fully consolidated
   
+  // Ambient/soundscape controls (dual-player architecture)
+  ambientVolume: number; // 0.0 – 1.0
+  ambientEnabled: boolean; // enable/disable ambient layer
+  
   // Sleep timer (BookPlayer pattern)
   sleepTimer: SleepTimerState;
   
@@ -73,6 +77,11 @@ interface PlayerStore {
   
   // Settings
   updateSettings: (settings: Partial<UserSettings>) => void;
+  
+  // Ambient controls
+  setAmbientVolume: (volume: number) => void;
+  setAmbientEnabled: (enabled: boolean) => void;
+  toggleAmbient: () => void;
 }
 
 export const usePlayerStore = create<PlayerStore>()(
@@ -88,6 +97,8 @@ export const usePlayerStore = create<PlayerStore>()(
       playbackMode: 'chapters',
       currentSubChunk: null,
       highestReadyChapter: 0,
+      ambientVolume: 0.5,
+      ambientEnabled: true,
       sleepTimer: { type: 'off' },
       settings: {
         playbackSpeed: 1.0,
@@ -112,6 +123,9 @@ export const usePlayerStore = create<PlayerStore>()(
           currentBook: book,
           isMiniPlayerVisible: shouldShowPlayer,
           currentChapter: book?.chapters[0] ?? null,
+          playbackMode: 'chapters',
+          currentSubChunk: null,
+          currentTime: 0,
         });
       },
       setCurrentChapter: (chapter) => set({ currentChapter: chapter }),
@@ -292,6 +306,11 @@ export const usePlayerStore = create<PlayerStore>()(
         
         return false;
       },
+      
+      // Ambient controls
+      setAmbientVolume: (volume) => set({ ambientVolume: Math.max(0, Math.min(1, volume)) }),
+      setAmbientEnabled: (enabled) => set({ ambientEnabled: enabled }),
+      toggleAmbient: () => set((s) => ({ ambientEnabled: !s.ambientEnabled })),
     }),
     {
       name: 'voicelibri-player',
@@ -299,6 +318,8 @@ export const usePlayerStore = create<PlayerStore>()(
         settings: state.settings,
         speed: state.speed,
         volume: state.volume,
+        ambientVolume: state.ambientVolume,
+        ambientEnabled: state.ambientEnabled,
         currentBook: state.currentBook,
         currentChapter: state.currentChapter,
         isMiniPlayerVisible: state.isMiniPlayerVisible,

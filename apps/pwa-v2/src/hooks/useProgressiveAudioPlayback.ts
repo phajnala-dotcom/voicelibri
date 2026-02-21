@@ -1,11 +1,19 @@
 /**
  * Progressive Audio Playback Hook
- * Handles real-time subchunk streaming during generation and automatic chapter switching
+ * Handles real-time subchunk streaming during generation and automatic chapter switching.
+ * Includes dual-player support: voice (master) + ambient (follower).
  */
 
 import { useEffect, useRef, useCallback } from 'react';
 import { usePlayerStore } from '../stores/playerStore';
-import { getChapterAudioUrl, getSubChunkAudioUrl, isChapterReady, getHighestReadyChapter } from '../services/api';
+import {
+  getChapterAudioUrl,
+  getSubChunkAudioUrl,
+  isChapterReady,
+  getHighestReadyChapter,
+  getChapterAmbientUrl,
+  isAmbientReady,
+} from '../services/api';
 
 // Audio cache for blob URLs
 interface AudioCache {
@@ -14,10 +22,13 @@ interface AudioCache {
 
 /**
  * Enhanced audio playback hook with progressive subchunk support
+ * and independent ambient track playback.
  */
 export function useProgressiveAudioPlayback() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const ambientRef = useRef<HTMLAudioElement | null>(null);
   const audioCacheRef = useRef<AudioCache>({});
+  const driftIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   
   const {
     currentBook,
@@ -27,6 +38,8 @@ export function useProgressiveAudioPlayback() {
     playbackMode,
     currentSubChunk,
     highestReadyChapter,
+    ambientVolume,
+    ambientEnabled,
     setPlaybackState,
     setCurrentTime,
     setCurrentSubChunk,
@@ -36,11 +49,17 @@ export function useProgressiveAudioPlayback() {
     switchToChapterMode,
   } = usePlayerStore();
 
-  // Initialize audio element
+  // Initialize audio elements (voice + ambient)
   useEffect(() => {
     if (!audioRef.current) {
       audioRef.current = new Audio();
       audioRef.current.preload = 'metadata';
+    }
+    if (!ambientRef.current) {
+      ambientRef.current = new Audio();
+      ambientRef.current.preload = 'metadata';
+      ambientRef.current.loop = true; // Loop ambient in case it's shorter than voice
+      ambientRef.current.volume = ambientEnabled ? ambientVolume : 0;
     }
 
     const audio = audioRef.current;
@@ -82,8 +101,48 @@ export function useProgressiveAudioPlayback() {
       audio.removeEventListener('canplaythrough', handleCanPlayThrough);
       audio.pause();
       audio.src = '';
+      // Also stop ambient
+      if (ambientRef.current) {
+        ambientRef.current.pause();
+        ambientRef.current.src = '';
+      }
     };
   }, [playbackMode, currentSubChunk, playbackState, setPlaybackState, setCurrentTime]);
+
+  // Sync ambient volume and enabled state
+  useEffect(() => {
+    if (ambientRef.current) {
+      ambientRef.current.volume = ambientEnabled ? ambientVolume : 0;
+    }
+  }, [ambientVolume, ambientEnabled]);
+
+  // Drift correction: keep ambient in sync with voice (chapter mode only)
+  useEffect(() => {
+    if (driftIntervalRef.current) {
+      clearInterval(driftIntervalRef.current);
+      driftIntervalRef.current = null;
+    }
+
+    if (playbackMode === 'chapters' && playbackState === 'playing') {
+      driftIntervalRef.current = setInterval(() => {
+        const voice = audioRef.current;
+        const ambient = ambientRef.current;
+        if (!voice || !ambient || !ambient.src || ambient.readyState < 2) return;
+        
+        const drift = Math.abs(voice.currentTime - ambient.currentTime);
+        if (drift > 0.05) { // 50ms tolerance
+          ambient.currentTime = voice.currentTime;
+        }
+      }, 500);
+    }
+
+    return () => {
+      if (driftIntervalRef.current) {
+        clearInterval(driftIntervalRef.current);
+        driftIntervalRef.current = null;
+      }
+    };
+  }, [playbackMode, playbackState]);
 
   // Handle progressive playback end (subchunk finished)
   const handleProgressiveEnd = useCallback(async () => {
@@ -205,7 +264,7 @@ export function useProgressiveAudioPlayback() {
     }
   }, [currentBook, playbackState, setPlaybackState]);
 
-  // Load chapter audio (normal playback)
+  // Load chapter audio (normal playback) with ambient track
   const loadChapterAudio = useCallback(async (chapterIndex: number) => {
     if (!currentBook || !audioRef.current) return;
     
@@ -217,6 +276,8 @@ export function useProgressiveAudioPlayback() {
       if (playbackState === 'playing') {
         audioRef.current.play();
       }
+      // Load ambient for cached chapter too
+      loadAmbientForChapter(chapterIndex);
       return;
     }
     
@@ -246,6 +307,9 @@ export function useProgressiveAudioPlayback() {
         audioRef.current.play();
       }
       
+      // Load ambient (fire-and-forget, non-blocking)
+      loadAmbientForChapter(chapterIndex);
+      
     } catch (error) {
       console.error('Failed to load chapter:', error);
       setPlaybackState('error');
@@ -274,11 +338,50 @@ export function useProgressiveAudioPlayback() {
     return () => clearInterval(interval);
   }, [playbackMode, currentBook, highestReadyChapter, setHighestReadyChapter]);
 
-  // Handle play/pause state changes
+  // Load ambient track for a chapter (non-blocking)
+  const loadAmbientForChapter = useCallback(async (chapterIndex: number) => {
+    if (!currentBook || !ambientRef.current) return;
+    
+    try {
+      const ready = await isAmbientReady(currentBook.title, chapterIndex);
+      if (!ready) {
+        console.log(`🔊 Ambient: Not ready for chapter ${chapterIndex}`);
+        return;
+      }
+      
+      const ambientUrl = getChapterAmbientUrl(currentBook.title, chapterIndex);
+      const ambient = ambientRef.current;
+      ambient.src = ambientUrl;
+      ambient.volume = ambientEnabled ? ambientVolume : 0;
+      ambient.currentTime = 0;
+      
+      // Wait for the ambient to be loadable, then sync with voice
+      ambient.addEventListener('canplay', () => {
+        if (audioRef.current && !audioRef.current.paused && ambientEnabled) {
+          // Sync ambient time to voice time (they should start together)
+          ambient.currentTime = audioRef.current.currentTime;
+          ambient.play().catch(() => {
+            console.log(`🔊 Ambient: Autoplay blocked for chapter ${chapterIndex}`);
+          });
+        }
+      }, { once: true });
+      
+      // Trigger load
+      ambient.load();
+      
+      console.log(`🔊 Ambient: Loaded for chapter ${chapterIndex}`);
+    } catch (err) {
+      // Non-fatal
+      console.log(`🔊 Ambient: Failed to load for chapter ${chapterIndex}:`, err);
+    }
+  }, [currentBook, ambientEnabled, ambientVolume]);
+
+  // Handle play/pause state changes (sync voice + ambient)
   useEffect(() => {
     if (!audioRef.current) return;
     
     const audio = audioRef.current;
+    const ambient = ambientRef.current;
     
     if (playbackState === 'playing') {
       if (audio.src) {
@@ -286,6 +389,10 @@ export function useProgressiveAudioPlayback() {
           console.error('Failed to play audio:', err);
           setPlaybackState('paused');
         });
+        // Sync ambient
+        if (ambient?.src && ambientEnabled) {
+          ambient.play().catch(() => { /* non-fatal */ });
+        }
       } else {
         // No source loaded, start playback
         if (playbackMode === 'progressive' && currentSubChunk) {
@@ -296,8 +403,16 @@ export function useProgressiveAudioPlayback() {
       }
     } else if (playbackState === 'paused') {
       audio.pause();
+      if (ambient) ambient.pause();
+    } else if (playbackState === 'stopped') {
+      audio.pause();
+      audio.currentTime = 0;
+      if (ambient) {
+        ambient.pause();
+        ambient.currentTime = 0;
+      }
     }
-  }, [playbackState, playbackMode, currentSubChunk, currentChapter, setPlaybackState, loadSubChunkAudio, loadChapterAudio]);
+  }, [playbackState, playbackMode, currentSubChunk, currentChapter, ambientEnabled, setPlaybackState, loadSubChunkAudio, loadChapterAudio]);
 
   // Start progressive playback for a new audiobook
   const startProgressivePlayback = useCallback(async (book: any, startSubChunk = { chapterIndex: 0, subChunkIndex: 0 }) => {

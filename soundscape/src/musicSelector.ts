@@ -1,25 +1,29 @@
 /**
  * Soundscape Module — Music Selector
  *
- * Hybrid two-pass music selection:
- *   1. Genre mapping: bookInfo.genre/tone/period → candidate music folders
- *   2. Embedding search: filename embedding similarity within candidates
+ * LLM-powered music selection:
+ *   1. LLM generates an ideal-track description from bookInfo + character registry
+ *   2. Embedding search across ALL music assets using the LLM description
  *
- * Music assets live in soundscape/assets/music/{genre}/*.ogg
- * They are NOT in the XLSX catalog — matching uses OGG filenames only.
+ * No static genre-to-folder mapping. The LLM has full creative control
+ * over what music style suits the book, producing a rich natural-language
+ * query that is embedded and cosine-compared against all 80 music track
+ * descriptions in the catalog.
+ *
+ * Music assets are loaded from the CSV catalog (Type='music').
+ * Rich descriptions from the catalog provide high-quality semantic matching.
  */
 
-import fs from 'fs';
-import path from 'path';
 import {
-  MUSIC_ASSETS_DIR,
-  GENRE_MUSIC_MAP,
-  DEFAULT_MUSIC_FOLDERS,
   MUSIC_EMBEDDINGS_PATH,
+  SCENE_ANALYSIS_MODEL,
 } from './config.js';
+import { GoogleAuth } from 'google-auth-library';
+import { loadMusicCatalog } from './catalogLoader.js';
 import {
   buildEmbeddingIndex,
   saveEmbeddingIndex,
+  loadEmbeddingIndex,
   getMusicIndex,
   setMusicIndex,
   searchEmbeddings,
@@ -32,100 +36,83 @@ import type {
 } from './types.js';
 
 // ========================================
-// Music asset scanning
+// Gemini LLM for music query generation
+// ========================================
+
+const llmAuth = new GoogleAuth({
+  scopes: ['https://www.googleapis.com/auth/cloud-platform'],
+});
+
+async function generateMusicQuery(bookInfo: BookInfo): Promise<string> {
+  const projectId = process.env.GOOGLE_CLOUD_PROJECT || 'calmbridge-2';
+  const location = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1';
+  const endpoint = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${SCENE_ANALYSIS_MODEL}:generateContent`;
+
+  const client = await llmAuth.getClient();
+  const token = await client.getAccessToken();
+
+  const prompt = `You are an audiobook music director. Based on the following book metadata, write a 2-3 sentence description of the IDEAL background music track for this audiobook's intro. Be specific about instrumentation, tempo, mood, and style. Do NOT mention the book title or characters — describe only the music itself.
+
+Book genre: ${bookInfo.genre || 'unknown'}
+Book tone: ${bookInfo.tone || 'neutral'}
+Book voice tone: ${bookInfo.voiceTone || 'neutral'}
+Book period: ${bookInfo.period || 'modern'}
+Book title: ${bookInfo.title || 'unknown'}
+Book author: ${bookInfo.author || 'unknown'}
+
+Respond with ONLY the music description, no other text. Example:
+"A sweeping orchestral piece with deep cellos and gentle woodwinds, building from a quiet mysterious opening to a majestic crescendo. Medieval atmosphere with modal harmonies and occasional harp arpeggios."`;
+
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token.token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.5,
+        maxOutputTokens: 256,
+        topP: 0.8,
+      },
+    }),
+    signal: AbortSignal.timeout(20000),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`Gemini music query error (${response.status}): ${err.substring(0, 300)}`);
+  }
+
+  const data = await response.json() as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  };
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+  if (!text) throw new Error('No text in Gemini music query response');
+
+  return text;
+}
+
+// ========================================
+// Music asset loading (from catalog)
 // ========================================
 
 /**
- * Scan music folders and build SoundAsset entries from OGG files.
- * Parses the filename to extract a human-readable description.
+ * Load music assets from the catalog, optionally filtered by folder (Category).
  *
- * @param folderFilter - If provided, only scan these specific folder names
+ * Category in the catalog corresponds to the music folder name
+ * (e.g. 'Orchestral', 'Celtic', 'Medieval').
+ *
+ * @param folderFilter - If provided, only return assets whose category matches
  */
 export function scanMusicAssets(folderFilter?: string[]): SoundAsset[] {
-  const assets: SoundAsset[] = [];
+  const allMusic = loadMusicCatalog();
 
-  if (!fs.existsSync(MUSIC_ASSETS_DIR)) {
-    console.warn(`⚠️ Music assets directory not found: ${MUSIC_ASSETS_DIR}`);
-    return assets;
-  }
+  if (!folderFilter) return allMusic;
 
-  const folders = fs.readdirSync(MUSIC_ASSETS_DIR, { withFileTypes: true })
-    .filter((d) => d.isDirectory())
-    .filter((d) => !folderFilter || folderFilter.includes(d.name));
-
-  for (const folder of folders) {
-    const folderPath = path.join(MUSIC_ASSETS_DIR, folder.name);
-    const files = fs.readdirSync(folderPath)
-      .filter((f) => f.toLowerCase().endsWith('.ogg'));
-
-    for (const file of files) {
-      const filePath = path.join(folderPath, file);
-      const label = filenameToLabel(file);
-      assets.push({
-        id: `music/${folder.name}/${file}`,
-        type: 'music',
-        filePath,
-        description: label,
-        keywords: label.split(' '),
-        genre: [folder.name.toLowerCase()],
-        mood: [],
-      });
-    }
-  }
-
-  return assets;
-}
-
-/**
- * Convert OGG filename to readable label for embedding.
- *
- * E.g. "autumn-leaves-ambient-harp-117800.ogg"
- *    → "autumn leaves ambient harp"
- */
-function filenameToLabel(filename: string): string {
-  return filename
-    .replace(/\.ogg$/i, '')     // remove extension
-    .replace(/[-_]/g, ' ')       // dashes/underscores → spaces
-    .replace(/\d{4,}/g, '')      // remove long numeric IDs
-    .replace(/\s+/g, ' ')        // collapse whitespace
-    .trim();
-}
-
-// ========================================
-// Genre-based folder selection (pass 1)
-// ========================================
-
-/**
- * Determine candidate music folders based on book metadata.
- * Checks genre, then tone, then period for matches.
- */
-export function resolveMusicFolders(bookInfo: BookInfo): string[] {
-  const candidates = new Set<string>();
-
-  // Try genre first
-  const genreKey = bookInfo.genre?.toLowerCase().replace(/\s+/g, ' ');
-  if (genreKey && GENRE_MUSIC_MAP[genreKey]) {
-    for (const f of GENRE_MUSIC_MAP[genreKey]) candidates.add(f);
-  }
-
-  // Try tone
-  const toneKey = bookInfo.tone?.toLowerCase();
-  if (toneKey && GENRE_MUSIC_MAP[toneKey]) {
-    for (const f of GENRE_MUSIC_MAP[toneKey]) candidates.add(f);
-  }
-
-  // Try period
-  const periodKey = bookInfo.period?.toLowerCase();
-  if (periodKey && GENRE_MUSIC_MAP[periodKey]) {
-    for (const f of GENRE_MUSIC_MAP[periodKey]) candidates.add(f);
-  }
-
-  // Fall back to defaults if nothing matched
-  if (candidates.size === 0) {
-    for (const f of DEFAULT_MUSIC_FOLDERS) candidates.add(f);
-  }
-
-  return Array.from(candidates);
+  const filterLower = new Set(folderFilter.map((f) => f.toLowerCase()));
+  return allMusic.filter((a) => filterLower.has((a.category ?? '').toLowerCase()));
 }
 
 // ========================================
@@ -141,6 +128,14 @@ export async function ensureMusicEmbeddingIndex(): Promise<EmbeddingIndex> {
   const cached = getMusicIndex();
   if (cached) return cached;
 
+  // Try loading from disk
+  const fromDisk = loadEmbeddingIndex(MUSIC_EMBEDDINGS_PATH);
+  if (fromDisk && fromDisk.entries.length > 0) {
+    console.log(`🎵 Loaded music embedding index from disk (${fromDisk.entries.length} entries)`);
+    setMusicIndex(fromDisk);
+    return fromDisk;
+  }
+
   // Build fresh
   console.log('🎵 Building music embedding index...');
   const allAssets = scanMusicAssets();
@@ -151,11 +146,11 @@ export async function ensureMusicEmbeddingIndex(): Promise<EmbeddingIndex> {
 
   const items = allAssets.map((a) => ({
     id: a.id,
-    text: `${a.genre.join(' ')} ${a.description}`,
+    text: a.description || a.id,
   }));
 
   const index = await buildEmbeddingIndex(items, (batch, total) => {
-    console.log(`  📊 Embedding batch ${batch}/${total}`);
+    console.log(`  📊 Music embedding ${batch}/${total}`);
   });
 
   // Persist and cache
@@ -169,88 +164,90 @@ export async function ensureMusicEmbeddingIndex(): Promise<EmbeddingIndex> {
 // ========================================
 
 /**
- * Select the best music track for a book intro.
+ * Select the best music track for a book intro using LLM-powered search.
  *
- * Two-pass approach:
- *   1. resolveMusicFolders() narrows candidate folders by genre/tone/period
- *   2. embeddings search within candidates using a mood-based query
+ * Approach:
+ *   1. LLM generates an ideal-track description from bookInfo
+ *   2. Embedding search across ALL music assets (no genre-map filtering)
  *
- * @param bookInfo - Book metadata (genre, tone, period)
- * @param moodQuery - Optional natural language query (e.g. "dark epic orchestral")
- *                    If not provided, auto-generated from bookInfo.
+ * @param bookInfo - Book metadata (genre, tone, period, title, author)
+ * @param moodQuery - Optional override query (skips LLM call)
  * @returns Best matching music track with reason
  */
 export async function selectMusicTrack(
   bookInfo: BookInfo,
   moodQuery?: string
 ): Promise<MusicSelectionResult> {
-  // Pass 1: narrow folders
-  const folders = resolveMusicFolders(bookInfo);
-  console.log(`🎵 Music selection — candidate folders: [${folders.join(', ')}]`);
+  // Get all music assets (no folder filtering)
+  const allAssets = scanMusicAssets();
 
-  // Get all assets in candidate folders
-  const candidateAssets = scanMusicAssets(folders);
+  if (allAssets.length === 0) {
+    throw new Error('No music assets available');
+  }
 
-  if (candidateAssets.length === 0) {
-    // Extreme fallback: pick any music file
-    const allAssets = scanMusicAssets();
-    if (allAssets.length === 0) {
-      throw new Error('No music assets available');
+  // If only one asset, return it
+  if (allAssets.length === 1) {
+    return {
+      asset: allAssets[0],
+      matchReason: 'only music track available',
+    };
+  }
+
+  // Ensure embedding index
+  const index = await ensureMusicEmbeddingIndex();
+
+  // Generate query: use LLM if no explicit query provided
+  let query: string;
+  let querySource: string;
+
+  if (moodQuery) {
+    query = moodQuery;
+    querySource = 'explicit';
+  } else {
+    try {
+      query = await generateMusicQuery(bookInfo);
+      querySource = 'LLM';
+      console.log(`🎵 LLM music query: "${query.substring(0, 120)}..."`);
+    } catch (llmErr) {
+      console.warn(`🎵 LLM music query failed, using metadata fallback:`, llmErr instanceof Error ? llmErr.message : llmErr);
+      query = buildMoodQuery(bookInfo);
+      querySource = 'metadata-fallback';
     }
+  }
+
+  console.log(`🔍 Music embedding search (${querySource}): "${query.substring(0, 100)}..."`);
+  const results = await searchEmbeddings(index, query, 3);
+
+  if (results.length === 0) {
+    // Embedding search returned nothing → pick random
     const random = allAssets[Math.floor(Math.random() * allAssets.length)];
     return {
       asset: random,
-      matchReason: 'random fallback (no genre match)',
-    };
-  }
-
-  // If only one candidate, just return it
-  if (candidateAssets.length === 1) {
-    return {
-      asset: candidateAssets[0],
-      matchReason: `only track in [${folders.join(', ')}]`,
-    };
-  }
-
-  // Pass 2: embedding search within candidates
-  const index = await ensureMusicEmbeddingIndex();
-
-  // Build filter set of candidate IDs
-  const candidateIds = new Set(candidateAssets.map((a) => a.id));
-
-  // Auto-generate query from book metadata if not provided
-  const query =
-    moodQuery ||
-    buildMoodQuery(bookInfo);
-
-  console.log(`🔍 Music embedding search: "${query}"`);
-  const results = await searchEmbeddings(index, query, 3, candidateIds);
-
-  if (results.length === 0) {
-    // Embedding search returned nothing → pick random from candidates
-    const random = candidateAssets[Math.floor(Math.random() * candidateAssets.length)];
-    return {
-      asset: random,
-      matchReason: `random from [${folders.join(', ')}] (embedding search empty)`,
+      matchReason: `random fallback (embedding search empty)`,
     };
   }
 
   // Find the SoundAsset for the top result
   const bestId = results[0].id;
-  const bestAsset = candidateAssets.find((a) => a.id === bestId);
+  const bestAsset = allAssets.find((a) => a.id === bestId);
 
   if (!bestAsset) {
-    // Should not happen, but fallback
-    const random = candidateAssets[Math.floor(Math.random() * candidateAssets.length)];
+    const random = allAssets[Math.floor(Math.random() * allAssets.length)];
     return {
       asset: random,
       matchReason: 'fallback (asset not found after search)',
     };
   }
 
+  // Log top 3 for debugging
+  for (let i = 0; i < Math.min(3, results.length); i++) {
+    const a = allAssets.find((x) => x.id === results[i].id);
+    console.log(`  🎵 #${i + 1}: score=${results[i].score.toFixed(3)} — ${a?.description?.substring(0, 80) || results[i].id}`);
+  }
+
   return {
     asset: bestAsset,
-    matchReason: `embedding match (score=${results[0].score.toFixed(3)}) in [${folders.join(', ')}]`,
+    matchReason: `LLM-guided embedding match (score=${results[0].score.toFixed(3)}, query=${querySource})`,
     score: results[0].score,
   };
 }
@@ -273,47 +270,3 @@ function buildMoodQuery(bookInfo: BookInfo): string {
   return parts.join(' ');
 }
 
-/**
- * Select a different music track for a specific chapter intro,
- * potentially varying from the book-level theme.
- *
- * @param bookInfo - Book metadata
- * @param chapterTitle - Chapter title for contextual matching
- * @param excludeIds - IDs to exclude (e.g. already-used tracks)
- */
-export async function selectChapterMusic(
-  bookInfo: BookInfo,
-  chapterTitle: string,
-  excludeIds?: Set<string>
-): Promise<MusicSelectionResult> {
-  const folders = resolveMusicFolders(bookInfo);
-  const candidateAssets = scanMusicAssets(folders)
-    .filter((a) => !excludeIds || !excludeIds.has(a.id));
-
-  if (candidateAssets.length === 0) {
-    // Fall back to full selection
-    return selectMusicTrack(bookInfo, chapterTitle);
-  }
-
-  const index = await ensureMusicEmbeddingIndex();
-  const candidateIds = new Set(candidateAssets.map((a) => a.id));
-
-  // Use chapter title as query for contextual matching
-  const query = `${chapterTitle} ${bookInfo.genre} ${bookInfo.tone} instrumental`;
-  const results = await searchEmbeddings(index, query, 1, candidateIds);
-
-  if (results.length === 0) {
-    const random = candidateAssets[Math.floor(Math.random() * candidateAssets.length)];
-    return {
-      asset: random,
-      matchReason: `random for chapter "${chapterTitle}"`,
-    };
-  }
-
-  const bestAsset = candidateAssets.find((a) => a.id === results[0].id)!;
-  return {
-    asset: bestAsset,
-    matchReason: `chapter match "${chapterTitle}" (score=${results[0].score.toFixed(3)})`,
-    score: results[0].score,
-  };
-}

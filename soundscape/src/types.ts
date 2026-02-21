@@ -11,9 +11,9 @@
 // Sound Asset Types
 // ========================================
 
-export type SoundAssetType = 'music' | 'ambient';
+export type SoundAssetType = 'music' | 'ambient' | 'sfx';
 
-/** A single sound file from the library (ambient SFX or music track) */
+/** A single sound file from the library (ambient, SFX, or music track) */
 export interface SoundAsset {
   id: string;
   type: SoundAssetType;
@@ -52,6 +52,10 @@ export interface BookInfo {
   voiceTone: string;
   period: string;
   locked: boolean;
+  /** Book title (optional, used by LLM music selector) */
+  title?: string;
+  /** Book author (optional, used by LLM music selector) */
+  author?: string;
 }
 
 /** Character from character_registry.json */
@@ -96,8 +100,10 @@ export interface SceneAnalysis {
   soundElements: string[];
   /** Overall intensity 0-1 (quiet/calm → loud/intense) */
   intensity: number;
-  /** Free-text search query for embedding-based asset matching */
-  searchQuery: string;
+  /** English search queries for ambient asset matching */
+  searchSnippets: string[];
+  /** English search queries for SFX asset matching (short one-shot sounds like doors, footsteps, etc.) */
+  sfxQueries: string[];
 }
 
 /** Complete soundscape plan for an entire book */
@@ -181,11 +187,6 @@ export interface EmbeddingSearchResult {
 // Music Selection
 // ========================================
 
-/** Genre-to-music-folder mapping for deterministic first-pass selection */
-export interface GenreMusicMap {
-  [bookGenre: string]: string[];
-}
-
 /** Result of music selection */
 export interface MusicSelectionResult {
   asset: SoundAsset;
@@ -223,17 +224,6 @@ export interface SoundscapePreferences {
   soundscapeMusicEnabled?: boolean;
   soundscapeAmbientEnabled?: boolean;
   soundscapeThemeId?: string;
-}
-
-/** Result of processing one chapter through the soundscape pipeline */
-export interface ChapterSoundscapeResult {
-  chapterIndex: number;
-  /** Path to ambient-mixed chapter WAV (or original if no ambient) */
-  ambientMixPath: string | null;
-  /** Path to intro WAV (only for chapters that get intros) */
-  introPath: string | null;
-  /** Final output path after all layers merged */
-  finalPath: string;
 }
 
 // ========================================

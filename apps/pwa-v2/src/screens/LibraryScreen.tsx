@@ -41,7 +41,7 @@ const demoBook: Book = {
  */
 export function LibraryScreen() {
   const { addBook, removeBook, sortBy, setSortBy, searchQuery, setSearchQuery, getFilteredBooks } = useLibraryStore();
-  const { setCurrentBook, setCurrentChapter, openFullPlayer, showMiniPlayer } = usePlayerStore();
+  const { setCurrentBook, setCurrentChapter, openFullPlayer, showMiniPlayer, play } = usePlayerStore();
   const [showSearch, setShowSearch] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [generatingBooks, setGeneratingBooks] = useState<Map<string, number>>(new Map());
@@ -123,7 +123,7 @@ export function LibraryScreen() {
 
   const filteredBooks = getFilteredBooks();
 
-  // Cover click = open FullPlayer with the book
+  // Cover click = open FullPlayer with the book and auto-play
   const handleCoverPress = (book: Book) => {
     setCurrentBook(book);
     if (book.chapters.length > 0) {
@@ -133,14 +133,15 @@ export function LibraryScreen() {
     }
     showMiniPlayer();
     openFullPlayer();
+    play();
   };
 
-  // Chapter click = select chapter in MiniPlayer (do NOT open FullPlayer)
+  // Chapter click = select chapter in MiniPlayer and auto-play
   const handleChapterPress = (book: Book, chapter: Chapter) => {
     setCurrentBook(book);
     setCurrentChapter(chapter);
     showMiniPlayer();
-    // Note: Do NOT call openFullPlayer() - same behavior as row click
+    play();
   };
 
   const loadDemoBook = () => {

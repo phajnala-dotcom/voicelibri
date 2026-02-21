@@ -1,6 +1,4 @@
 import { GoogleAuth } from 'google-auth-library';
-import { FileWriter } from 'wav';
-import { Readable } from 'stream';
 
 interface TTSConfig {
   projectId: string;
@@ -18,57 +16,107 @@ export interface SpeakerConfig {
 // Note: TTS functions return Buffer directly (simplified - no metadata extraction needed)
 
 /**
+ * Map short language codes to BCP-47 format required by Cloud TTS API.
+ * Cloud TTS VoiceSelectionParams.languageCode is REQUIRED.
+ */
+const LANG_CODE_TO_BCP47: Record<string, string> = {
+  'sk': 'sk-SK',
+  'cs': 'cs-CZ',
+  'en': 'en-US',
+  'de': 'de-DE',
+  'ru': 'ru-RU',
+  'pl': 'pl-PL',
+  'hr': 'hr-HR',
+  'zh': 'cmn-CN',
+  'nl': 'nl-NL',
+  'fr': 'fr-FR',
+  'hi': 'hi-IN',
+  'it': 'it-IT',
+  'ja': 'ja-JP',
+  'ko': 'ko-KR',
+  'pt': 'pt-BR',
+  'es': 'es-ES',
+  'uk': 'uk-UA',
+};
+
+/**
+ * Convert language code to BCP-47 format.
+ * Handles short codes ('sk') and full BCP-47 codes ('sk-SK').
+ */
+function toBCP47(langCode: string): string {
+  if (langCode.includes('-')) return langCode;
+  return LANG_CODE_TO_BCP47[langCode.toLowerCase()] || `${langCode}-${langCode.toUpperCase()}`;
+}
+
+/**
+ * Resolve BCP-47 language code for TTS API (required field).
+ * Priority: explicit param > TARGET_LANGUAGE global > BOOK_METADATA.language > fallback 'en-US'
+ */
+function resolveLanguageCode(explicitCode?: string): string {
+  if (explicitCode) return toBCP47(explicitCode);
+  const targetLang = (global as any).TARGET_LANGUAGE;
+  if (targetLang) return toBCP47(targetLang);
+  const bookLang = (global as any).BOOK_METADATA?.language;
+  if (bookLang) return toBCP47(bookLang);
+  return 'en-US'; // safe fallback
+}
+
+/**
  * Gemini TTS model to use
  * TTS model configured via environment variable
  */
 const TTS_MODEL = process.env.TTS_MODEL || 'gemini-2.5-flash-tts';
 
 /**
- * Creates a WAV file header and combines it with PCM audio data
- * @param pcmBuffer - Raw PCM audio data from Vertex AI
- * @returns Complete WAV file as Buffer
+ * Resolves the Cloud Text-to-Speech API endpoint based on location.
+ * 
+ * Cloud TTS API endpoint format per official docs:
+ *   - Global: texttospeech.googleapis.com
+ *   - Regional: {REGION}-texttospeech.googleapis.com
+ * 
+ * Supported regions for Gemini TTS: global, us, eu
+ * We map Vertex AI region names to Cloud TTS region names.
  */
-function createWavBuffer(pcmBuffer: Buffer): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    
-    // Create WAV writer with Vertex AI default settings
-    // Use platform-specific null device (Windows: 'nul', Unix: '/dev/null')
-    const nullDevice = process.platform === 'win32' ? 'nul' : '/dev/null';
-    const writer = new FileWriter(nullDevice, {
-      sampleRate: 24000,  // Vertex AI default sample rate
-      channels: 1,        // Mono
-      bitDepth: 16,       // 16-bit PCM
-    });
+function getTtsEndpoint(location: string): string {
+  // Map Vertex AI locations to Cloud TTS regions
+  // Cloud TTS supports: global, us, eu, northamerica-northeast1
+  // Vertex AI uses: us-central1, europe-west1, etc.
+  const regionMap: Record<string, string> = {
+    'us-central1': 'us',
+    'us-east1': 'us',
+    'us-east4': 'us',
+    'us-east5': 'us',
+    'us-south1': 'us',
+    'us-west1': 'us',
+    'us-west4': 'us',
+    'europe-west1': 'eu',
+    'europe-west4': 'eu',
+    'europe-central2': 'eu',
+    'europe-north1': 'eu',
+    'europe-southwest1': 'eu',
+    'northamerica-northeast1': 'northamerica-northeast1',
+    'global': 'global',
+  };
 
-    // Capture all data chunks
-    writer.on('data', (chunk: Buffer) => {
-      chunks.push(chunk);
-    });
-
-    writer.on('finish', () => {
-      const wavBuffer = Buffer.concat(chunks);
-      resolve(wavBuffer);
-    });
-
-    writer.on('error', (err: Error) => {
-      reject(err);
-    });
-
-    // Write PCM data
-    writer.write(pcmBuffer);
-    writer.end();
-  });
+  const ttsRegion = regionMap[location] || 'us';
+  if (ttsRegion === 'global') {
+    return 'https://texttospeech.googleapis.com';
+  }
+  return `https://${ttsRegion}-texttospeech.googleapis.com`;
 }
+
+
 
 export class TTSClient {
   private projectId: string;
   private location: string;
+  private ttsBaseUrl: string;
   private auth: GoogleAuth;
 
   constructor(config: TTSConfig) {
     this.projectId = config.projectId;
     this.location = config.location;
+    this.ttsBaseUrl = getTtsEndpoint(config.location);
     // GoogleAuth will automatically use GOOGLE_APPLICATION_CREDENTIALS env var
     this.auth = new GoogleAuth({
       scopes: ['https://www.googleapis.com/auth/cloud-platform'],
@@ -76,15 +124,19 @@ export class TTSClient {
   }
 
   /**
-   * Synthesizes text to audio using Gemini TTS via Vertex AI REST API
-   * Single-speaker mode using voiceConfig
+   * Synthesizes text to audio using Cloud Text-to-Speech API (Gemini TTS)
+   * Single-speaker mode using voice name
+   * 
+   * Uses the Cloud TTS API with LINEAR16 encoding for lossless PCM quality.
+   * Returns WAV buffer (with header) — downstream pipeline handles WAV→OGG conversion
+   * at chapter consolidation for optimal single-encode quality.
    * 
    * @param text - The text to synthesize
    * @param voiceName - The Gemini voice name to use (e.g., 'Algieba', 'Puck', 'Zephyr')
    * @param style - Voice style modifier: 'normal', 'whisper', 'thought', 'letter'
    * @param speechStyle - Optional custom speech style instruction (natural sentence like "Speak slowly with gravelly voice.")
    * @param languageCode - Optional language code to force (e.g., 'cs-CZ') - used for single-word texts to prevent misdetection
-   * @returns Buffer containing audio data (WAV format)
+   * @returns Buffer containing audio data (WAV LINEAR16 format)
    */
   async synthesizeText(
     text: string, 
@@ -93,7 +145,7 @@ export class TTSClient {
     speechStyle?: string,
     languageCode?: string
   ): Promise<Buffer> {
-    const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/${this.projectId}/locations/${this.location}/publishers/google/models/${TTS_MODEL}:generateContent`;
+    const endpoint = `${this.ttsBaseUrl}/v1/text:synthesize`;
 
     // Get access token
     const client = await this.auth.getClient();
@@ -103,17 +155,10 @@ export class TTSClient {
       throw new Error('Failed to get access token');
     }
 
-    // Format speech instructions according to official Gemini TTS multi-speaker documentation
-    // https://ai.google.dev/gemini-api/docs/speech-generation#multi-speaker
-    // 
-    // Correct format:
-    // [Speech style directive without period, ending with colon]
-    // SPEAKER: Text to speak
-    //
-    // Example:
-    // Read clearly and professionally:
-    // NARRATOR: "The story begins..."
-    let styledText = text;
+    // Cloud TTS API has separate `text` and `prompt` fields in SynthesisInput.
+    // `text`: the actual text to speak (passed unedited to TTS)
+    // `prompt`: style/voice instructions (system instruction for controllable models)
+    let promptText: string | undefined;
     
     // Check word count (after removing punctuation)
     const cleanText = text.replace(/["„"'«»‹›,\.!?;:—–-]/g, '').trim();
@@ -121,60 +166,49 @@ export class TTSClient {
     const isShortText = wordCount <= 3;
     
     if (speechStyle) {
-      // Use speech style directive directly (already has action verb like "Read", "Narrate", "Speak")
-      // Remove trailing period, ensure ends with colon
-      const directive = speechStyle.replace(/\.$/, '').trim();
-      styledText = `${directive}\n${text}`;
-    } else if (!speechStyle && !isShortText) {
+      // Use speech style directive directly as prompt
+      promptText = speechStyle.replace(/\.$/, '').trim();
+    } else if (!isShortText) {
       // Apply basic style presets (only for >3 words)
       switch (style) {
         case 'whisper':
-          styledText = `Speak in a hushed whisper:\n${text}`;
+          promptText = 'Speak in a hushed whisper';
           break;
         case 'thought':
-          styledText = `Speak as an internal thought:\n${text}`;
+          promptText = 'Speak as an internal thought';
           break;
         case 'letter':
-          styledText = `Read aloud:\n${text}`;
+          promptText = 'Read aloud';
           break;
         case 'normal':
         default:
-          // No directive for normal style
-          styledText = text;
+          // No prompt for normal style
           break;
       }
-    } else {
-      // Short text (≤3 words): use raw text to allow TTS auto language detection
-      styledText = text;
     }
 
-    // Build speech config with optional language override
-    const speechConfig: any = {
-      voice_config: {
-        prebuilt_voice_config: {
-          voice_name: voiceName
-        }
-      }
-    };
-    
-    // Add language code if provided (for single-word texts to prevent misdetection)
-    if (languageCode) {
-      speechConfig.language_code = languageCode;
-      console.log(`  🔤 TTS language_code set to: ${languageCode}`);
+    // Build SynthesisInput per Cloud TTS API spec
+    const input: any = { text };
+    if (promptText) {
+      input.prompt = promptText;
     }
 
-    const requestBody = {
-      contents: {
-        role: 'user',
-        parts: {
-          text: styledText
-        }
-      },
-      generation_config: {
-        response_modalities: ['AUDIO'],
-        speech_config: speechConfig
-      }
+    // Build VoiceSelectionParams per Cloud TTS API spec
+    // languageCode is REQUIRED by the Cloud TTS API
+    const resolvedLang = resolveLanguageCode(languageCode);
+    const voice: any = {
+      name: voiceName,
+      modelName: TTS_MODEL,
+      languageCode: resolvedLang,
     };
+    console.log(`  \uD83D\uDD24 TTS language_code: ${resolvedLang}${languageCode ? ' (explicit)' : ' (auto-resolved)'}`);
+
+    // AudioConfig: LINEAR16 (lossless PCM) — WAV→OGG conversion happens at chapter consolidation
+    const audioConfig = {
+      audioEncoding: 'LINEAR16',
+    };
+
+    const requestBody = { input, voice, audioConfig };
 
     const maxRetries = 3;
     let lastError: Error | null = null;
@@ -209,40 +243,29 @@ export class TTSClient {
 
         if (!response.ok) {
           const errorText = await response.text();
-          console.error('Vertex AI API Error:', errorText);
+          console.error('Cloud TTS API Error:', errorText);
           
           // Retry on 500 errors (server-side issues)
           if (response.status >= 500 && attempt < maxRetries) {
-            lastError = new Error(`Vertex AI API returned ${response.status}: ${errorText}`);
+            lastError = new Error(`Cloud TTS API returned ${response.status}: ${errorText}`);
             continue;
           }
           
-          throw new Error(`Vertex AI API returned ${response.status}: ${errorText}`);
+          throw new Error(`Cloud TTS API returned ${response.status}: ${errorText}`);
         }
 
+        // Cloud TTS API returns { audioContent: "<base64 encoded LINEAR16 WAV>" }
         const jsonResponse: any = await response.json();
-        const audioData = jsonResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-        // ...existing code...
+        const audioContent = jsonResponse.audioContent;
         
-        if (!audioData) {
-          // Check for safety block
-          const finishReason = jsonResponse.candidates?.[0]?.finishReason;
-          if (finishReason === 'SAFETY' && attempt < maxRetries) {
-            console.warn('  ⚠️ TTS blocked by safety filter, retrying...');
-            lastError = new Error('Safety filter blocked response');
-            continue;
-          }
-          
+        if (!audioContent) {
           console.error('Full response:', JSON.stringify(jsonResponse, null, 2));
-          throw new Error('No audio content received from Vertex AI API');
+          throw new Error('No audioContent received from Cloud TTS API');
         }
 
-        console.log(`🎵 Audio data received, converting to WAV...`);
-        const pcmBuffer = Buffer.from(audioData, 'base64');
-        console.log(`📦 PCM buffer size: ${pcmBuffer.length} bytes`);
-        
-        const wavBuffer = await createWavBuffer(pcmBuffer);
-        console.log(`✅ WAV conversion complete: ${wavBuffer.length} bytes`);
+        // LINEAR16 returns WAV with header — lossless, ready for sub-chunk storage
+        const wavBuffer = Buffer.from(audioContent, 'base64');
+        console.log(`✅ WAV audio received: ${wavBuffer.length} bytes (LINEAR16 from API)`);
         
         return wavBuffer;
       } catch (error) {
@@ -258,7 +281,7 @@ export class TTSClient {
           continue;
         }
         
-        console.error('❌ Vertex AI TTS Error:', error);
+        console.error('❌ Cloud TTS Error:', error);
         throw new Error(`Failed to synthesize text: ${lastError.message}`);
       }
     }
@@ -270,7 +293,7 @@ export class TTSClient {
   /**
    * Synthesizes multi-speaker text to audio using Gemini TTS
    * 
-   * Uses the official multiSpeakerVoiceConfig for true multi-voice synthesis
+   * Uses the Cloud TTS API multiSpeakerVoiceConfig for true multi-voice synthesis
    * in a SINGLE API call (up to 2 speakers per call per API limitation).
    * 
    * Text format must use "Speaker: text" format, e.g.:
@@ -279,7 +302,7 @@ export class TTSClient {
    * 
    * @param text - Text with speaker labels
    * @param speakers - Array of speaker configurations (max 2)
-   * @returns Buffer containing audio data (WAV format)
+   * @returns Buffer containing audio data (WAV LINEAR16 format)
    */
   async synthesizeMultiSpeaker(
     text: string,
@@ -293,7 +316,7 @@ export class TTSClient {
       throw new Error('At least one speaker configuration is required');
     }
 
-    const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/${this.projectId}/locations/${this.location}/publishers/google/models/${TTS_MODEL}:generateContent`;
+    const endpoint = `${this.ttsBaseUrl}/v1/text:synthesize`;
 
     const client = await this.auth.getClient();
     const accessToken = await client.getAccessToken();
@@ -302,55 +325,37 @@ export class TTSClient {
       throw new Error('Failed to get access token');
     }
 
-    // Build multi-speaker voice config
+    // Build multi-speaker voice config per Cloud TTS API spec
+    // Uses speakerAlias (label in text) and speakerId (voice name)
     const speakerVoiceConfigs = speakers.map(s => ({
-      speaker: s.speaker,
-      voice_config: {
-        prebuilt_voice_config: {
-          voice_name: s.voiceName
-        }
-      }
+      speakerAlias: s.speaker,
+      speakerId: s.voiceName,
     }));
 
-    // According to official Gemini TTS docs:
-    // - TTS models do NOT support systemInstruction field
-    // - Style/voice guidance must be embedded IN the prompt text itself
-    // - Keep it short and direct to avoid slowing down generation
-    
-    // Build speaker mapping for the prompt
+    // Cloud TTS API has a dedicated `prompt` field for style instructions
+    // This is separate from the text and goes into SynthesisInput.prompt
     const speakerList = speakers.map(s => s.speaker).join(', ');
-    
-    // Two-part instruction: 1) Voice switching rule  2) Artistic delivery
-    const directorsNotes = `VOICE RULE: SWITCH VOICE IMMEDIATELY AT EACH SPEAKER LABEL! Labels: ${speakerList}
-STYLE: Read as a world-class voice artist with immersive, expressive, yet natural elocution, rich variety of expressive means, expressing the speakers emotions, story events and environment by highly adaptive prosody.
+    const promptText = `VOICE RULE: SWITCH VOICE IMMEDIATELY AT EACH SPEAKER LABEL! Labels: ${speakerList}\nSTYLE: Read as a world-class voice artist with immersive, expressive, yet natural elocution, rich variety of expressive means, expressing the speakers emotions, story events and environment by highly adaptive prosody.`;
 
-`;
-    
-    const textWithGuidance = directorsNotes + text;
-
+    // Build request per Cloud TTS API spec
+    // languageCode is REQUIRED by the Cloud TTS API
+    const resolvedLang = resolveLanguageCode();
+    console.log(`  \uD83D\uDD24 Multi-speaker TTS language_code: ${resolvedLang}`);
     const requestBody = {
-      contents: {
-        role: 'user',
-        parts: {
-          text: textWithGuidance
-        }
+      input: {
+        text: text,
+        prompt: promptText,
       },
-      generation_config: {
-        response_modalities: ['AUDIO'],
-        speech_config: {
-          multi_speaker_voice_config: {
-            speaker_voice_configs: speakerVoiceConfigs
-          }
-        }
-      }
-      // Safety settings - requires monthly invoiced billing to use
-      // See: https://cloud.google.com/billing/docs/how-to/invoiced-billing
-      // safety_settings: [
-      //   { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_ONLY_HIGH' },
-      //   { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' },
-      //   { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' },
-      //   { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_ONLY_HIGH' }
-      // ]
+      voice: {
+        languageCode: resolvedLang,
+        modelName: TTS_MODEL,
+        multiSpeakerVoiceConfig: {
+          speakerVoiceConfigs: speakerVoiceConfigs,
+        },
+      },
+      audioConfig: {
+        audioEncoding: 'LINEAR16',
+      },
     };
 
     const maxRetries = 3;
@@ -383,37 +388,29 @@ STYLE: Read as a world-class voice artist with immersive, expressive, yet natura
 
         if (!response.ok) {
           const errorText = await response.text();
-          console.error('Vertex AI Multi-Speaker TTS Error:', errorText);
+          console.error('Cloud TTS Multi-Speaker Error:', errorText);
           
           // Retry on 500 errors
           if (response.status >= 500 && attempt < maxRetries) {
-            lastError = new Error(`Vertex AI API returned ${response.status}: ${errorText}`);
+            lastError = new Error(`Cloud TTS API returned ${response.status}: ${errorText}`);
             continue;
           }
           
-          throw new Error(`Vertex AI API returned ${response.status}: ${errorText}`);
+          throw new Error(`Cloud TTS API returned ${response.status}: ${errorText}`);
         }
 
+        // Cloud TTS API returns { audioContent: "<base64 encoded LINEAR16 WAV>" }
         const jsonResponse: any = await response.json();
-        const audioData = jsonResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-        // ...existing code...
+        const audioContent = jsonResponse.audioContent;
 
-        if (!audioData) {
-          // Check for safety block
-          const finishReason = jsonResponse.candidates?.[0]?.finishReason;
-          if (finishReason === 'SAFETY' && attempt < maxRetries) {
-            console.warn('  ⚠️ Multi-speaker TTS blocked by safety filter, retrying...');
-            lastError = new Error('Safety filter blocked response');
-            continue;
-          }
-          
+        if (!audioContent) {
           console.error('Full response:', JSON.stringify(jsonResponse, null, 2));
-          throw new Error('No audio content received from multi-speaker TTS');
+          throw new Error('No audioContent received from multi-speaker TTS');
         }
 
-        const pcmBuffer = Buffer.from(audioData, 'base64');
-        const wavBuffer = await createWavBuffer(pcmBuffer);
-        console.log(`✅ Multi-speaker audio: ${wavBuffer.length} bytes`);
+        // LINEAR16 returns WAV with header — lossless, ready for sub-chunk storage
+        const wavBuffer = Buffer.from(audioContent, 'base64');
+        console.log(`✅ Multi-speaker WAV audio: ${wavBuffer.length} bytes (LINEAR16 from API)`);
 
         return wavBuffer;
       } catch (error) {
@@ -424,13 +421,12 @@ STYLE: Read as a world-class voice artist with immersive, expressive, yet natura
           lastError.message.includes('500') ||
           lastError.message.includes('timeout') ||
           lastError.message.includes('ECONNRESET') ||
-          lastError.message.includes('fetch failed') ||
-          lastError.message.includes('Safety filter')
+          lastError.message.includes('fetch failed')
         )) {
           continue;
         }
         
-        console.error('❌ Multi-speaker TTS Error:', error);
+        console.error('❌ Multi-speaker Cloud TTS Error:', error);
         throw new Error(`Multi-speaker synthesis failed: ${lastError.message}`);
       }
     }
@@ -476,7 +472,7 @@ export async function synthesizeText(
  * 
  * @param text - Text with speaker labels matching speaker configs
  * @param speakers - Speaker configurations (max 2)
- * @returns WAV audio buffer
+ * @returns WAV LINEAR16 audio buffer
  */
 export async function synthesizeMultiSpeaker(
   text: string,

@@ -65,7 +65,18 @@ export async function getAudiobooks(): Promise<AudiobookMetadata[]> {
   const response = await fetch(`${API_BASE_URL}/audiobooks`);
   if (!response.ok) throw new Error('Failed to fetch audiobooks');
   const data = await response.json();
-  return data.audiobooks;
+  // Backend returns wrapper objects {title, metadata, progress, tempChunksCount}
+  // Unwrap to flat AudiobookMetadata, merging generation status from progress
+  return (data.audiobooks ?? []).map((item: any) => {
+    const meta = item.metadata;
+    if (!meta) return null;
+    return {
+      ...meta,
+      generationStatus: item.progress?.status === 'completed' ? 'completed'
+        : item.progress?.status ? 'in-progress'
+        : meta.generationStatus ?? 'not-started',
+    } as AudiobookMetadata;
+  }).filter(Boolean) as AudiobookMetadata[];
 }
 
 /**
@@ -179,6 +190,25 @@ export async function deleteAudiobook(bookTitle: string): Promise<{ success: boo
  */
 export function getChapterAudioUrl(bookTitle: string, chapterIndex: number): string {
   return `${API_BASE_URL}/audiobooks/${encodeURIComponent(bookTitle)}/chapters/${chapterIndex}`;
+}
+
+/**
+ * Get chapter ambient audio URL (independent ambient track)
+ */
+export function getChapterAmbientUrl(bookTitle: string, chapterIndex: number): string {
+  return `${API_BASE_URL}/audiobooks/${encodeURIComponent(bookTitle)}/chapters/${chapterIndex}/ambient`;
+}
+
+/**
+ * Check if ambient track exists for a chapter
+ */
+export async function isAmbientReady(bookTitle: string, chapterIndex: number): Promise<boolean> {
+  try {
+    const response = await fetch(getChapterAmbientUrl(bookTitle, chapterIndex), { method: 'HEAD' });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 /**

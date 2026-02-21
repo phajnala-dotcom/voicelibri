@@ -33,11 +33,9 @@ export type {
   EmbeddingEntry,
   EmbeddingIndex,
   EmbeddingSearchResult,
-  GenreMusicMap,
   MusicSelectionResult,
   SoundscapePipelineOptions,
   SoundscapePreferences,
-  ChapterSoundscapeResult,
   FfmpegResult,
 } from './types.js';
 
@@ -50,8 +48,6 @@ export {
   AMBIENT_EMBEDDINGS_PATH,
   MUSIC_EMBEDDINGS_PATH,
   AMBIENT_DEFAULT_DB,
-  GENRE_MUSIC_MAP,
-  DEFAULT_KEYWORD_MAP,
   EMBEDDING_MODEL,
   EMBEDDING_CONCURRENCY,
   SCENE_ANALYSIS_MODEL,
@@ -59,7 +55,7 @@ export {
 } from './config.js';
 
 // FFmpeg
-export { runFfmpeg } from './ffmpegRunner.js';
+export { runFfmpeg, getAudioDuration } from './ffmpegRunner.js';
 
 // Embeddings
 export {
@@ -67,6 +63,7 @@ export {
   saveEmbeddingIndex,
   loadEmbeddingIndex,
   searchEmbeddings,
+  searchEmbeddingsBatch,
   searchEmbeddingsWithVector,
   getAmbientIndex,
   setAmbientIndex,
@@ -77,6 +74,8 @@ export {
 // Catalog
 export {
   loadCatalog,
+  loadMusicCatalog,
+  loadSfxCatalog,
   clearCatalogCache,
   getAssetsByCategory,
   getAssetById,
@@ -85,9 +84,7 @@ export {
 // Music selection
 export {
   scanMusicAssets,
-  resolveMusicFolders,
   selectMusicTrack,
-  selectChapterMusic,
   ensureMusicEmbeddingIndex,
 } from './musicSelector.js';
 
@@ -101,7 +98,9 @@ export {
 // Asset resolver
 export {
   ensureAmbientEmbeddingIndex,
+  ensureSfxEmbeddingIndex,
   resolveAmbientAsset,
+  resolveSfxAssets,
   resolveAllChapterAssets,
   resolveByKeyword,
 } from './assetResolver.js';
@@ -123,8 +122,5 @@ export {
 
 // Audio mixer
 export {
-  mixAmbientWithVoice,
   prependIntro,
-  processChapter,
-  processAllChapters,
 } from './audioMixer.js';
