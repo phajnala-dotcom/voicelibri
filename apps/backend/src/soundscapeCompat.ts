@@ -16,7 +16,10 @@
  *   - applySoundscapeToChapter() — called by audiobookWorker after consolidation
  *   - resolveChapterAudioPath() — called by index.ts for audio streaming
  *   - getAmbientAudioPath() — returns path to separate ambient track
- *   - getSoundscapeThemeOptions() — called by index.ts for theme picker UI
+ *   - getIntroAudioPath() — returns path to standalone intro audio
+ *   - startEarlyIntroGeneration() — early intro generation (fire-and-forget)
+ *   - generateAmbientBed() — ambient-bed-only OGG for progressive playback
+ *   - prepareEarlyAmbient() — orchestrates early ambient bed during TTS
  */
 
 import fs from 'fs';
@@ -24,16 +27,24 @@ import path from 'path';
 import { isSoundscapeEnabled, INTRO_NARRATOR_VOICE } from '../../../soundscape/src/config.js';
 import { loadCatalog } from '../../../soundscape/src/catalogLoader.js';
 import { initIntroGenerator, generateIntro, buildBookIntroSpec, buildChapterIntroSpec } from '../../../soundscape/src/introGenerator.js';
-import { generateAmbientTrack } from '../../../soundscape/src/ambientLayer.js';
+import { generateSubchunkAmbientTrack, concatenateSubchunkAmbientTracks } from '../../../soundscape/src/ambientLayer.js';
 import { selectMusicTrack } from '../../../soundscape/src/musicSelector.js';
-import { resolveByKeyword, resolveAmbientAsset, resolveSfxAssets } from '../../../soundscape/src/assetResolver.js';
+import { resolveByKeyword, resolveAmbientAsset, resolveSfxEvents, resolveSceneSegmentAssets } from '../../../soundscape/src/assetResolver.js';
 import { analyzeChapterScene, buildFallbackScene } from '../../../soundscape/src/llmDirector.js';
-import { getAudioDuration } from '../../../soundscape/src/ffmpegRunner.js';
-import type { SoundscapePreferences, BookInfo } from '../../../soundscape/src/types.js';
+import { getAudioDuration, detectSilenceGaps, runFfmpeg } from '../../../soundscape/src/ffmpegRunner.js';
+import {
+  buildSubchunkSegmentInfos,
+  mapSfxEventsToSubchunks,
+  groupMappedEventsBySubchunk,
+  buildPlacedSfxEvents,
+  calculateSfxOffsetFromGaps,
+} from '../../../soundscape/src/subchunkSoundscape.js';
+import type { SoundscapePreferences, BookInfo, SceneAnalysis, SceneSegment, SoundAsset } from '../../../soundscape/src/types.js';
 
 import { synthesizeText } from './ttsClient.js';
-import { loadAudiobookMetadata } from './audiobookManager.js';
+import { loadAudiobookMetadata, getSubChunkPath } from './audiobookManager.js';
 import { estimateAudioDuration } from './tempChunkManager.js';
+import type { TwoSpeakerChunk } from './twoSpeakerChunker.js';
 import { ChapterTranslator } from './chapterTranslator.js';
 
 // Initialize the intro generator with backend deps (once)
@@ -152,22 +163,241 @@ function normalizeTargetLanguage(raw?: string | null): string | null {
 }
 
 // ========================================
+// Alt 4: Early ambient bed cache
+// ========================================
+
+/**
+ * Module-level cache for early ambient analysis results.
+ * Keyed by `${bookTitle}:${chapterIndex}`.
+ * Populated by prepareEarlyAmbient(), consumed by applySoundscapeToChapter().
+ */
+const earlyAmbientCache = new Map<string, {
+  scene: SceneAnalysis;
+  segmentAssets: Array<{ asset: SoundAsset | null; score: number }>;
+}>();
+
+// ========================================
+// Alt 4: generateAmbientBed
+// ========================================
+
+/**
+ * Generate an ambient-bed-only OGG track for a chapter using estimated duration.
+ * No silence gaps or SFX — just the ambient environment with scene crossfades.
+ *
+ * Used for chapter 1 during progressive TTS: the ambient bed plays alongside
+ * voice subchunks. After chapter consolidation, applySoundscapeToChapter()
+ * regenerates the full ambient with gap-based SFX placement.
+ *
+ * Duration estimation: ~150ms per character (average TTS speech rate).
+ *
+ * @param options.bookTitle     - Book title
+ * @param options.chapterIndex  - Chapter index
+ * @param options.chapterPath   - Expected chapter OGG path (used to derive ambient path)
+ * @param options.chapterText   - Full chapter text (for duration estimation + segment mapping)
+ * @param options.scene         - Pre-computed SceneAnalysis
+ * @param options.segmentAssets - Pre-resolved per-segment ambient assets
+ * @returns Path to generated ambient OGG, or null if generation failed
+ */
+export async function generateAmbientBed(options: {
+  bookTitle: string;
+  chapterIndex: number;
+  chapterPath: string;
+  chapterText: string;
+  scene: SceneAnalysis;
+  segmentAssets: Array<{ asset: SoundAsset | null; score: number }>;
+}): Promise<string | null> {
+  if (!isSoundscapeEnabled()) return null;
+
+  const ambientPath = getAmbientTrackPath(options.chapterPath);
+
+  // Already exists — skip (either bed or full version)
+  if (fs.existsSync(ambientPath)) return ambientPath;
+
+  const estimatedDurationMs = options.chapterText.length * 150;
+
+  // Q3: intensity-adjusted volume (base -3 dB for audible ambient, adjusted by scene intensity)
+  const volumeDb = -3 - (1 - options.scene.intensity) * 3;
+
+  // Build ambient segments from scene segments + resolved assets
+  // Q1: skip pushing a segment if its asset.filePath equals the previous segment's
+  const ambientSegments: Array<{ asset: SoundAsset; startMs: number }> = [];
+  let prevAssetPath: string | null = null;
+
+  for (let i = 0; i < options.scene.sceneSegments.length; i++) {
+    const seg = options.scene.sceneSegments[i];
+    const asset = options.segmentAssets[i]?.asset;
+    if (!asset || !fs.existsSync(asset.filePath)) continue;
+
+    // Q1: skip consecutive duplicate assets
+    if (asset.filePath === prevAssetPath) continue;
+    prevAssetPath = asset.filePath;
+
+    const startMs = i === 0
+      ? 0
+      : Math.round((seg.charIndex / options.chapterText.length) * estimatedDurationMs);
+
+    ambientSegments.push({ asset, startMs });
+  }
+
+  if (ambientSegments.length === 0) {
+    console.log(`  🔊 Ambient bed: No ambient segments resolved for chapter ${options.chapterIndex}`);
+    return null;
+  }
+
+  try {
+    const result = await generateSubchunkAmbientTrack(
+      ambientSegments,
+      estimatedDurationMs,
+      volumeDb,
+      ambientPath,
+      null // No SFX for ambient bed
+    );
+
+    if (result.code === 0) {
+      // Validate file has meaningful audio content via volumedetect (not just file size)
+      try {
+        const volResult = await runFfmpeg(['-i', ambientPath, '-af', 'volumedetect', '-f', 'null', '-']);
+        const meanMatch = volResult.stderr.match(/mean_volume:\s*(-?[\d.]+)\s*dB/);
+        const meanVolume = meanMatch ? parseFloat(meanMatch[1]) : 0;
+        if (meanVolume < -55) {
+          console.log(`  🔊 Ambient bed: Effectively silent (mean ${meanVolume.toFixed(1)} dB) — removing`);
+          try { fs.unlinkSync(ambientPath); } catch { /* ignore */ }
+          return null;
+        }
+      } catch { /* volumedetect failed — keep the file */ }
+      console.log(`  ✅ Ambient bed: Generated for chapter ${options.chapterIndex} (${(estimatedDurationMs / 1000).toFixed(1)}s estimated)`);
+      return ambientPath;
+    } else {
+      console.warn(`  ⚠️ Ambient bed: ffmpeg failed for chapter ${options.chapterIndex}: ${result.stderr.substring(0, 200)}`);
+      return null;
+    }
+  } catch (err) {
+    console.warn(`  ⚠️ Ambient bed: Generation failed for chapter ${options.chapterIndex}:`, err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+// ========================================
+// Alt 4: prepareEarlyAmbient
+// ========================================
+
+/**
+ * Prepare ambient bed for a chapter during progressive TTS.
+ * Runs scene analysis + asset resolution + ambient bed generation.
+ * Designed to be called fire-and-forget as soon as chapter text is known.
+ *
+ * Caches scene analysis and resolved assets for later use by
+ * applySoundscapeToChapter() (which will regenerate with full SFX).
+ */
+export async function prepareEarlyAmbient(options: {
+  bookTitle: string;
+  chapterIndex: number;
+  chapterPath: string;
+  chapterText: string;
+}): Promise<void> {
+  if (!isSoundscapeEnabled()) return;
+
+  ensureInitialized();
+
+  const cacheKey = `${options.bookTitle}:${options.chapterIndex}`;
+
+  // Already cached — skip
+  if (earlyAmbientCache.has(cacheKey)) return;
+
+  // Build bookInfo from character registry (same pattern as applySoundscapeToChapter)
+  const bookInfo: BookInfo = {
+    genre: 'unknown', tone: 'neutral', voiceTone: 'neutral', period: 'modern', locked: false,
+  };
+  const bookDir = path.dirname(options.chapterPath);
+  const registryPath = path.join(bookDir, 'character_registry.json');
+  if (fs.existsSync(registryPath)) {
+    try {
+      const reg = JSON.parse(fs.readFileSync(registryPath, 'utf-8'));
+      if (reg.bookInfo) Object.assign(bookInfo, reg.bookInfo);
+    } catch { /* ignore */ }
+  }
+
+  // Scene analysis
+  let scene: SceneAnalysis;
+  try {
+    console.log(`  🔊 Early ambient: Running scene analysis for chapter ${options.chapterIndex}...`);
+    scene = await analyzeChapterScene(options.chapterIndex, options.chapterText, bookInfo);
+    console.log(`  🔊 Early ambient: env="${scene.sceneSegments[0]?.environment ?? 'unknown'}" sfxEvents=${scene.sfxEvents.length}`);
+  } catch (llmErr) {
+    console.warn(`  🔊 Early ambient: LLM analysis failed, using fallback:`, llmErr instanceof Error ? llmErr.message : llmErr);
+    scene = buildFallbackScene(options.chapterIndex, options.chapterText, bookInfo);
+  }
+
+  // Resolve ambient assets for all scene segments
+  let segmentAssets: Array<{ asset: SoundAsset | null; score: number }> = [];
+  try {
+    const resolved = await resolveSceneSegmentAssets(scene.sceneSegments);
+    segmentAssets = resolved.map(r => ({ asset: r.asset, score: r.score }));
+    console.log(`  🔍 Early ambient: ${segmentAssets.filter(r => r.asset).length}/${segmentAssets.length} segments matched`);
+  } catch (err) {
+    console.warn(`  ⚠️ Early ambient: Asset resolution failed:`, err instanceof Error ? err.message : err);
+    // Fallback: keyword-resolve the dominant segment only
+    const catalog = loadCatalog();
+    const dominantSnippets = scene.sceneSegments[0]?.searchSnippets ?? [];
+    const fallbackAsset = resolveByKeyword(dominantSnippets, catalog);
+    segmentAssets = scene.sceneSegments.map((_, i) => ({
+      asset: i === 0 ? fallbackAsset : null,
+      score: 0,
+    }));
+  }
+
+  // Store in cache for later use by applySoundscapeToChapter
+  earlyAmbientCache.set(cacheKey, { scene, segmentAssets });
+
+  // Generate ambient bed
+  const result = await generateAmbientBed({
+    bookTitle: options.bookTitle,
+    chapterIndex: options.chapterIndex,
+    chapterPath: options.chapterPath,
+    chapterText: options.chapterText,
+    scene,
+    segmentAssets,
+  });
+
+  if (result) {
+    console.log(`  ✅ Early ambient: Bed ready for chapter ${options.chapterIndex}`);
+  } else {
+    console.log(`  ⚠️ Early ambient: No bed generated for chapter ${options.chapterIndex}`);
+  }
+}
+
+// ========================================
 // Compat: applySoundscapeToChapter
 // ========================================
 
 /**
- * Apply soundscape to a single chapter — backward-compatible API.
+ * Apply soundscape to a single chapter.
+ *
+ * When `subChunks` is provided (Step 2 pipeline):
+ *   ─ Runs the per-subchunk ambient+SFX path (Steps 2.2–2.6):
+ *     1. Scene analysis (LLM or cached)
+ *     2. Ambient asset resolution
+ *     3. SFX events resolution (per-event, charIndex preserved)
+ *     4. Map SFX events → subchunks (proportional charIndex mapping)
+ *     5. For each subchunk: get actual TTS duration, calc SFX offsetMs,
+ *        generate subchunk_N_M_ambient.ogg
+ *     6. Concat all subchunk ambient OGGs → chapter_N_ambient.ogg
+ *
+ * When `subChunks` is absent (legacy path):
+ *   ─ Falls back to the chapter-level ambient (ambient bed only, no SFX).
  *
  * Architecture: voice and ambient are SEPARATE independent OGG files.
  *   - Voice chapter: {chapter}.ogg (unchanged)
- *   - Ambient track: {chapter}_ambient.ogg (independent, same duration as voice + pre/post roll)
- *   - Intro: prepended to voice only → {chapter}_soundscape.ogg
+ *   - Ambient track: {chapter}_ambient.ogg (independent)
+ *   - Intro: {chapter}_intro.ogg (standalone, served as chapter 0)
  */
 export async function applySoundscapeToChapter(options: {
   bookTitle: string;
   chapterIndex: number;
   chapterPath: string;
   chapterText: string;
+  /** TTS subchunks for this chapter — enables per-subchunk SFX timing (Step 2) */
+  subChunks?: TwoSpeakerChunk[];
   preferences?: SoundscapePreferences;
 }): Promise<string> {
   if (!isSoundscapeEnabled()) {
@@ -188,128 +418,93 @@ export async function applySoundscapeToChapter(options: {
   const introPath = getIntroPath(options.chapterPath);
   const ambientPath = getAmbientTrackPath(options.chapterPath);
 
-  // ── Ambient track (separate, independent OGG — NOT mixed with voice) ──
+  // ── Ambient track ──
+  // Alt 4: Delete existing ambient bed before regenerating with full SFX
+  if (ambientEnabled && fs.existsSync(ambientPath)) {
+    console.log(`  🔊 Ambient: Deleting existing ambient bed to regenerate with full SFX`);
+    fs.unlinkSync(ambientPath);
+  }
+  const cacheKey = `${options.bookTitle}:${options.chapterIndex}`;
   if (ambientEnabled && !fs.existsSync(ambientPath)) {
     try {
-      console.log(`  🔊 Ambient: Starting for chapter ${options.chapterIndex}...`);
+      // Check early ambient cache first (populated by prepareEarlyAmbient)
+      const cached = earlyAmbientCache.get(cacheKey);
 
-      // Load book info from character registry
       const bookInfo: BookInfo = {
-        genre: 'unknown',
-        tone: 'neutral',
-        voiceTone: 'neutral',
-        period: 'modern',
-        locked: false,
+        genre: 'unknown', tone: 'neutral', voiceTone: 'neutral', period: 'modern', locked: false,
       };
-
       const bookDir = path.dirname(options.chapterPath);
       const registryPath = path.join(bookDir, 'character_registry.json');
       if (fs.existsSync(registryPath)) {
         try {
           const reg = JSON.parse(fs.readFileSync(registryPath, 'utf-8'));
-          if (reg.bookInfo) {
-            Object.assign(bookInfo, reg.bookInfo);
-          }
+          if (reg.bookInfo) Object.assign(bookInfo, reg.bookInfo);
         } catch { /* ignore */ }
       }
 
-      console.log(`  🔊 Ambient: bookInfo = ${JSON.stringify(bookInfo)}`);
-
-      // Use LLM scene analysis for language-agnostic scene extraction
-      // Falls back to keyword-based if LLM call fails
-      let scene;
-      try {
-        console.log(`  🔊 Ambient: Running LLM scene analysis...`);
-        scene = await analyzeChapterScene(
-          options.chapterIndex,
-          options.chapterText,
-          bookInfo
-        );
-        console.log(`  🔊 Ambient: LLM scene: env="${scene.environment}" sounds=[${scene.soundElements.join(',')}] snippets=${scene.searchSnippets.length}`);
-      } catch (llmErr) {
-        console.warn(`  🔊 Ambient: LLM analysis failed, using keyword fallback:`, llmErr instanceof Error ? llmErr.message : llmErr);
-        scene = buildFallbackScene(options.chapterIndex, options.chapterText, bookInfo);
-        console.log(`  🔊 Ambient: Fallback scene: env="${scene.environment}" sounds=[${scene.soundElements.join(',')}]`);
+      let scene: SceneAnalysis;
+      if (cached) {
+        console.log(`  🔊 Ambient: Using cached scene analysis for chapter ${options.chapterIndex}`);
+        scene = cached.scene;
+      } else {
+        try {
+          console.log(`  🔊 Ambient: Running LLM scene analysis for chapter ${options.chapterIndex}...`);
+          scene = await analyzeChapterScene(options.chapterIndex, options.chapterText, bookInfo);
+          console.log(`  🔊 Ambient: env="${scene.sceneSegments[0]?.environment ?? 'unknown'}" sfxEvents=${scene.sfxEvents.length}`);
+        } catch (llmErr) {
+          console.warn(`  🔊 Ambient: LLM analysis failed, using fallback:`, llmErr instanceof Error ? llmErr.message : llmErr);
+          scene = buildFallbackScene(options.chapterIndex, options.chapterText, bookInfo);
+        }
       }
 
-      // Resolve best matching ambient asset via embedding search
+      // Resolve ambient asset (using dominant scene segment for chapter-level check)
       let ambientAsset = null;
       let resolveMethod = 'none';
+      const dominantSnippets = scene.sceneSegments[0]?.searchSnippets ?? [];
       try {
-        const result = await resolveAmbientAsset(scene);
+        const result = await resolveAmbientAsset(dominantSnippets, `chapter ${options.chapterIndex}`);
         ambientAsset = result?.asset ?? null;
-        if (ambientAsset) {
-          resolveMethod = `embedding (score=${result!.score.toFixed(3)})`;
-        }
+        if (ambientAsset) resolveMethod = `embedding (score=${result!.score.toFixed(3)})`;
       } catch (embErr) {
-        console.log(`  🔊 Ambient: Embedding search failed: ${embErr instanceof Error ? embErr.message : embErr}`);
         const catalog = loadCatalog();
-        ambientAsset = resolveByKeyword(scene, catalog);
+        ambientAsset = resolveByKeyword(dominantSnippets, catalog);
         if (ambientAsset) resolveMethod = 'keyword-fallback';
       }
 
-      if (!ambientAsset) {
-        console.log(`  🔊 Ambient: No matching asset found — skipping ambient layer`);
-      } else if (!fs.existsSync(ambientAsset.filePath)) {
-        console.log(`  🔊 Ambient: Asset found but file missing: ${ambientAsset.filePath}`);
+      if (!ambientAsset || !fs.existsSync(ambientAsset.filePath)) {
+        console.log(`  🔊 Ambient: No usable asset — skipping ambient layer`);
       } else {
-        console.log(`  🔊 Ambient: Resolved via ${resolveMethod}: "${ambientAsset.description?.substring(0, 80)}" (${ambientAsset.id})`);
-        console.log(`  🔊 Ambient: File: ${ambientAsset.filePath} (${ambientAsset.durationSec?.toFixed(1) ?? '?'}s)`);
+        console.log(`  🔊 Ambient: Resolved via ${resolveMethod}: "${ambientAsset.description?.substring(0, 80)}"`);
 
-        // Resolve SFX assets to overlay into the ambient track (multiple per chapter)
-        let sfxAssets: import('../../../soundscape/src/types.js').SoundAsset[] = [];
-        try {
-          const sfxResults = await resolveSfxAssets(scene);
-          if (sfxResults.length > 0) {
-            sfxAssets = sfxResults.map(r => r.asset);
-            for (const r of sfxResults) {
-              console.log(`  🎯 SFX: Resolved "${r.asset.description?.substring(0, 60)}" (score=${r.score.toFixed(3)})`);
-            }
-          } else {
-            console.log(`  🎯 SFX: No matching SFX found for this chapter`);
-          }
-        } catch (sfxErr) {
-          console.log(`  🎯 SFX: Resolution failed (non-critical): ${sfxErr instanceof Error ? sfxErr.message : sfxErr}`);
-        }
-
-        // Get exact voice duration via ffprobe (not heuristic)
-        const speechDurationSec = await getAudioDuration(options.chapterPath);
-        const speechDurationMs = speechDurationSec * 1000;
-        console.log(`  🔊 Ambient: Voice duration = ${speechDurationSec.toFixed(1)}s (ffprobe)`);
-
-        if (speechDurationMs > 0) {
-          // Generate ambient (+ optional SFX overlay) as INDEPENDENT OGG file
-          const ambientResult = await generateAmbientTrack(
-            ambientAsset,
-            speechDurationMs,
-            -6,
+        if (options.subChunks && options.subChunks.length > 0) {
+          // Per-subchunk ambient + SFX pipeline
+          await generateChapterSoundscapeFromSubchunks({
+            scene,
+            ambientVolumeDb: -3,
+            chapterPath: options.chapterPath,
             ambientPath,
-            sfxAssets.length > 0 ? sfxAssets : null
-          );
-
-          if (ambientResult.code === 0) {
-            const ambientDuration = await getAudioDuration(ambientPath);
-            console.log(`  ✅ Ambient: Generated separate track → ${path.basename(ambientPath)} (${ambientDuration.toFixed(1)}s)`);
-          } else {
-            console.error(`  ❌ Ambient: Generation failed`);
-          }
+            bookTitle: options.bookTitle,
+            chapterIndex: options.chapterIndex,
+            subChunks: options.subChunks,
+            chapterText: options.chapterText,
+          });
         } else {
-          console.warn(`  🔊 Ambient: Could not determine voice duration — skipping`);
+          console.log(`  🔊 Ambient: No subchunks available — skipping ambient (subchunks required)`);
         }
       }
     } catch (error) {
       console.error('⚠️ Ambient generation failed, continuing without:', error);
     }
+
+    // Clean up cache entry after use
+    earlyAmbientCache.delete(cacheKey);
   }
 
   // ── Intro ──
   if (musicEnabled && !fs.existsSync(introPath)) {
     if (options.chapterIndex === 1) {
-      // Chapter 1 intro is generated synchronously before chapter TTS starts
-      // — if we reach here, it means the early generation was skipped or failed
       console.warn('  🎵 Chapter 1 intro not found — was expected from early generation');
     } else {
-      // Chapters 2+: generate chapter intro inline
       try {
         const metadata = loadAudiobookMetadata(options.bookTitle);
         const chapterTitle = metadata?.chapters?.[options.chapterIndex - 1]?.title
@@ -317,12 +512,9 @@ export async function applySoundscapeToChapter(options: {
         const introLanguage = normalizeTargetLanguage(
           (global as any).TARGET_LANGUAGE || metadata?.language || null
         );
-
         const bookInfo: BookInfo = {
-          genre: 'unknown', tone: 'neutral', voiceTone: 'neutral',
-          period: 'modern', locked: false,
+          genre: 'unknown', tone: 'neutral', voiceTone: 'neutral', period: 'modern', locked: false,
         };
-
         const bookDir = path.dirname(options.chapterPath);
         const registryPath = path.join(bookDir, 'character_registry.json');
         if (fs.existsSync(registryPath)) {
@@ -331,29 +523,258 @@ export async function applySoundscapeToChapter(options: {
             if (reg.bookInfo) Object.assign(bookInfo, reg.bookInfo);
           } catch { /* ignore */ }
         }
-
         bookInfo.title = metadata?.title ?? options.bookTitle;
         bookInfo.author = metadata?.author ?? undefined;
-
         const musicResult = await selectMusicTrack(bookInfo);
         const introSpec = buildChapterIntroSpec(options.chapterIndex, chapterTitle);
-
-        await generateIntro(
-          introSpec,
-          musicResult.asset,
-          INTRO_NARRATOR_VOICE,
-          introPath,
-          introLanguage
-        );
+        await generateIntro(introSpec, musicResult.asset, INTRO_NARRATOR_VOICE, introPath, introLanguage);
       } catch (error) {
         console.warn('⚠️ Intro generation failed:', error);
       }
     }
   }
 
-  // Intro stays as standalone _intro.ogg — served separately as chapter 0.
-  // Voice chapter stays clean (no concat). Ambient is also independent.
   return options.chapterPath;
+}
+
+// ========================================
+// Step 2: Per-subchunk soundscape orchestration
+// ========================================
+
+/**
+ * Generate the chapter ambient track using the per-subchunk SFX pipeline.
+ *
+ * For each TTS subchunk:
+ *   1. Resolve per-segment ambient assets via resolveSceneSegmentAssets()
+ *   2. Detect silence gaps in the subchunk WAV via detectSilenceGaps()
+ *   3. Map scene segments (charIndex) → silence gap offsets for ambient changes
+ *   4. Map SFX events → silence gap offsets; apply no-layering, no-boundary-crossing,
+ *      no-ambient-crossfade-overlap constraints
+ *   5. Generate subchunk_N_M_ambient.ogg (multi-ambient + timed SFX)
+ * After all subchunks: concat → chapter_N_ambient.ogg (with 2s fade-in/out)
+ *
+ * @internal — called from applySoundscapeToChapter when subChunks are provided
+ */
+async function generateChapterSoundscapeFromSubchunks(options: {
+  scene: SceneAnalysis;
+  ambientVolumeDb: number;
+  chapterPath: string;
+  ambientPath: string;
+  bookTitle: string;
+  chapterIndex: number;
+  subChunks: TwoSpeakerChunk[];
+  chapterText: string;
+}): Promise<void> {
+  const {
+    scene, ambientVolumeDb,
+    chapterPath, ambientPath, bookTitle, chapterIndex, subChunks, chapterText,
+  } = options;
+
+  console.log(`  🎯 Per-subchunk soundscape: ${subChunks.length} subchunks, ${scene.sceneSegments.length} scene segment(s), ${scene.sfxEvents.length} SFX events`);
+
+  // Resolve per-segment ambient assets (once for whole chapter)
+  let segmentAssets: Array<{ segment: SceneSegment; asset: SoundAsset | null; score: number }> = [];
+  try {
+    segmentAssets = await resolveSceneSegmentAssets(scene.sceneSegments);
+    console.log(`  🔍 Scene segments resolved: ${segmentAssets.filter((r) => r.asset).length}/${segmentAssets.length} matched`);
+  } catch (err) {
+    console.warn(`  ⚠️ Scene segment resolution failed, using fallback keyword:`, err instanceof Error ? err.message : err);
+    // Fallback: keyword-resolve the dominant segment only
+    const catalog = loadCatalog();
+    const dominantSnippets = scene.sceneSegments[0]?.searchSnippets ?? [];
+    const fallbackAsset = resolveByKeyword(dominantSnippets, catalog);
+    segmentAssets = scene.sceneSegments.map((seg, i) => ({
+      segment: seg,
+      asset: i === 0 ? fallbackAsset : null,
+      score: 0,
+    }));
+  }
+
+  // Build subchunk segment infos (character boundaries)
+  const segmentInfos = buildSubchunkSegmentInfos(subChunks);
+
+  // Map SFX events to subchunks using proportional charIndex
+  const mappedSfxEvents = mapSfxEventsToSubchunks(scene.sfxEvents, chapterText.length, segmentInfos);
+  const sfxEventsBySubchunk = groupMappedEventsBySubchunk(mappedSfxEvents);
+
+  // Resolve SFX assets for all events (batch embedding search)
+  let sfxAssetMap = new Map<string, { asset: SoundAsset; score: number }>();
+  if (scene.sfxEvents.length > 0) {
+    try {
+      const resolved = await resolveSfxEvents(scene.sfxEvents);
+      for (const r of resolved) {
+        if (r.asset) {
+          sfxAssetMap.set(r.sfxEvent.query, { asset: r.asset, score: r.score });
+          console.log(`  🎯 SFX: "${r.sfxEvent.description.substring(0, 50)}" → "${r.asset.description?.substring(0, 40)}" (score=${r.score.toFixed(3)})`);
+        } else {
+          console.log(`  🎯 SFX: "${r.sfxEvent.description.substring(0, 50)}" → no match`);
+        }
+      }
+    } catch (sfxErr) {
+      console.log(`  🎯 SFX: Resolution failed (non-critical): ${sfxErr instanceof Error ? sfxErr.message : sfxErr}`);
+    }
+  }
+
+  // Pre-fetch SFX asset durations (for no-boundary-crossing constraint)
+  const sfxDurations = new Map<string, number>();
+  for (const { asset } of sfxAssetMap.values()) {
+    if (!sfxDurations.has(asset.filePath)) {
+      try {
+        const durSec = await getAudioDuration(asset.filePath);
+        sfxDurations.set(asset.filePath, Math.round(durSec * 1000));
+      } catch { /* ignore — 0 means no duration check */ }
+    }
+  }
+
+  // Generate per-subchunk ambient OGGs
+  const subchunkAmbientPaths: string[] = [];
+  const chapterDir = path.dirname(chapterPath);
+
+  for (const info of segmentInfos) {
+    const subchunkAmbientPath = path.join(
+      chapterDir,
+      `chapter_${chapterIndex}_sub${info.subchunkIndex}_ambient.ogg`
+    );
+
+    // Skip if already generated (resume support)
+    if (fs.existsSync(subchunkAmbientPath)) {
+      subchunkAmbientPaths.push(subchunkAmbientPath);
+      continue;
+    }
+
+    // Get actual TTS duration and silence gaps for this subchunk
+    const subchunkWavPath = getSubChunkPath(bookTitle, chapterIndex, info.subchunkIndex);
+    let subchunkDurationMs = 0;
+    let silenceGaps: Array<{ startSec: number; endSec: number; midpointMs: number }> = [];
+
+    if (fs.existsSync(subchunkWavPath)) {
+      try {
+        const durSec = await getAudioDuration(subchunkWavPath);
+        subchunkDurationMs = durSec * 1000;
+        silenceGaps = await detectSilenceGaps(subchunkWavPath);
+        // Q4: Filter out gaps shorter than 200ms
+        silenceGaps = silenceGaps.filter(g => (g.endSec - g.startSec) >= 0.2);
+        console.log(`    Subchunk ${info.subchunkIndex}: ${durSec.toFixed(1)}s, ${silenceGaps.length} silence gaps`);
+      } catch {
+        subchunkDurationMs = info.charCount * 150; // fallback estimate
+      }
+    }
+
+    if (subchunkDurationMs <= 0) {
+      console.warn(`  ⚠️ Subchunk ${chapterIndex}:${info.subchunkIndex} has no duration — skipping ambient`);
+      continue;
+    }
+
+    // Determine which scene segments are active for this subchunk
+    const subchunkStartChar = info.cumulativeCharStart;
+    const subchunkEndChar = info.cumulativeCharStart + info.charCount;
+    const totalSubchunkChars = segmentInfos.reduce((s, si) => s + si.charCount, 0);
+
+    // Compute ambient segments for this subchunk:
+    // Find the scene segment active at the start of this subchunk (highest charIndex ≤ subchunkStartChar,
+    // remapped from chapterText space to subchunk char space).
+    // Any scene segments that start *within* this subchunk are ambient change points.
+    const ambientSegmentsForSubchunk: Array<{ asset: SoundAsset; startMs: number }> = [];
+
+    // Determine which chapter-level scene is active at the start of this subchunk
+    // by mapping subchunkStartChar through the chapterText proportion
+    const subchunkStartProportion = totalSubchunkChars > 0 ? subchunkStartChar / totalSubchunkChars : 0;
+    const subchunkStartChapterChar = Math.round(subchunkStartProportion * chapterText.length);
+
+    // Active segment at subchunk start: highest charIndex in sceneSegments that is ≤ subchunkStartChapterChar
+    let activeSegmentIndex = 0;
+    for (let si = 0; si < scene.sceneSegments.length; si++) {
+      if (scene.sceneSegments[si].charIndex <= subchunkStartChapterChar) {
+        activeSegmentIndex = si;
+      }
+    }
+
+    // Start with the active segment at startMs=0
+    const firstSegAsset = segmentAssets[activeSegmentIndex]?.asset;
+    if (firstSegAsset) {
+      ambientSegmentsForSubchunk.push({ asset: firstSegAsset, startMs: 0 });
+    }
+
+    // Find any scene segments that begin within this subchunk
+    for (let si = activeSegmentIndex + 1; si < scene.sceneSegments.length; si++) {
+      const seg = scene.sceneSegments[si];
+      // Map seg.charIndex from chapter space to subchunk char space proportion
+      const segProportion = chapterText.length > 0 ? seg.charIndex / chapterText.length : 0;
+      const segSubchunkChar = Math.round(segProportion * totalSubchunkChars);
+
+      if (segSubchunkChar < subchunkStartChar || segSubchunkChar >= subchunkEndChar) continue;
+
+      // This segment starts within this subchunk — map to a silence gap
+      const localCharIndex = segSubchunkChar - subchunkStartChar;
+      const segOffsetMs = calculateSfxOffsetFromGaps(localCharIndex, info.charCount, silenceGaps);
+      if (segOffsetMs === null) continue; // no suitable gap — skip this ambient change
+
+      const segAsset = segmentAssets[si]?.asset;
+      if (!segAsset) continue; // no match for this segment — skip change
+
+      // Q1: skip if same asset as previous segment (avoids dip-and-return crossfade artifact)
+      const prevAsset = ambientSegmentsForSubchunk[ambientSegmentsForSubchunk.length - 1];
+      if (prevAsset && segAsset.filePath === prevAsset.asset.filePath) continue;
+
+      ambientSegmentsForSubchunk.push({ asset: segAsset, startMs: segOffsetMs });
+    }
+
+    // Fall back to at least one ambient segment (if none could be placed)
+    if (ambientSegmentsForSubchunk.length === 0) {
+      console.warn(`  ⚠️ Subchunk ${chapterIndex}:${info.subchunkIndex}: no ambient segments resolved — skipping ambient`);
+      continue;
+    }
+
+    // Ambient change offsets for SFX exclusion check
+    const ambientChangeOffsets = ambientSegmentsForSubchunk
+      .filter((_, i) => i > 0)
+      .map((seg) => seg.startMs);
+
+    // Build placed SFX events for this subchunk
+    const eventsForThis = sfxEventsBySubchunk.get(info.subchunkIndex) ?? [];
+    const placedSfx = buildPlacedSfxEvents(
+      eventsForThis,
+      sfxAssetMap,
+      info.charCount,
+      subchunkDurationMs,
+      silenceGaps,
+      ambientChangeOffsets,
+      sfxDurations
+    );
+
+    const result = await generateSubchunkAmbientTrack(
+      ambientSegmentsForSubchunk,
+      subchunkDurationMs,
+      ambientVolumeDb,
+      subchunkAmbientPath,
+      placedSfx.length > 0 ? placedSfx : null
+    );
+
+    if (result.code === 0) {
+      subchunkAmbientPaths.push(subchunkAmbientPath);
+    } else {
+      console.warn(`  ⚠️ Subchunk ${chapterIndex}:${info.subchunkIndex} ambient failed — skipping`);
+    }
+  }
+
+  if (subchunkAmbientPaths.length === 0) {
+    console.warn(`  ⚠️ No subchunk ambient tracks generated — ambient track skipped`);
+    return;
+  }
+
+  // Concatenate subchunk ambient OGGs → chapter ambient (with 2s fade-in/out)
+  const concatResult = await concatenateSubchunkAmbientTracks(subchunkAmbientPaths, ambientPath);
+  if (concatResult.code === 0) {
+    const dur = await getAudioDuration(ambientPath);
+    console.log(`  ✅ Chapter ambient: ${path.basename(ambientPath)} (${dur.toFixed(1)}s, ${subchunkAmbientPaths.length} subchunks)`);
+
+    // Clean up per-subchunk ambient files
+    for (const p of subchunkAmbientPaths) {
+      try { fs.unlinkSync(p); } catch { /* ignore */ }
+    }
+  } else {
+    console.error(`  ❌ Chapter ambient concat failed`);
+  }
 }
 
 // ========================================
@@ -382,6 +803,10 @@ export function getAmbientAudioPath(chapterPath: string): string | null {
   return fs.existsSync(ambientPath) ? ambientPath : null;
 }
 
+// ========================================
+// Compat: getIntroAudioPath
+// ========================================
+
 /**
  * Get the path to the standalone intro audio for a chapter.
  * Returns null if intro doesn't exist.
@@ -390,18 +815,6 @@ export function getIntroAudioPath(chapterPath: string): string | null {
   if (!isSoundscapeEnabled()) return null;
   const introPath = getIntroPath(chapterPath);
   return fs.existsSync(introPath) ? introPath : null;
-}
-
-// ========================================
-// Compat: getSoundscapeThemeOptions
-// ========================================
-
-export function getSoundscapeThemeOptions(
-  _text: string,
-  _maxOptions: number = 5
-): Array<{ id: string; label: string; score: number }> {
-  console.warn('⚠️ getSoundscapeThemeOptions() is deprecated — use musicSelector.selectMusicTrack() instead');
-  return [];
 }
 
 export type { SoundscapePreferences };

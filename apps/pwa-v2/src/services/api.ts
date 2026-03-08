@@ -157,7 +157,9 @@ export async function generateAudiobook(options: {
 }
 
 /**
- * Get generation progress for audiobook
+ * Get generation progress for audiobook.
+ * Tries audiobookWorker progress first, falls back to dramatization status
+ * (used when generation was triggered via /api/book/select flow).
  */
 export async function getGenerationProgress(bookTitle: string): Promise<{
   bookTitle: string;
@@ -166,9 +168,44 @@ export async function getGenerationProgress(bookTitle: string): Promise<{
   status: string;
   progress: number;
 }> {
+  // Try worker progress endpoint first
   const response = await fetch(`${API_BASE_URL}/audiobooks/${encodeURIComponent(bookTitle)}/progress`);
-  if (!response.ok) throw new Error('Failed to fetch progress');
-  return response.json();
+  if (response.ok) {
+    return response.json();
+  }
+
+  // Fallback: use dramatization status endpoint (selectBook flow)
+  try {
+    const dramResponse = await fetch(`${API_BASE_URL}/dramatization/status`);
+    if (dramResponse.ok) {
+      const dramStatus = await dramResponse.json();
+      const totalChapters = dramStatus.totalChapters || 1;
+      const completedChapters = dramStatus.completedChapters || 0;
+      const isComplete = dramStatus.phase === 'complete' || 
+        (!dramStatus.isActive && completedChapters >= totalChapters);
+      const progress = totalChapters > 0 
+        ? Math.round((completedChapters / totalChapters) * 100) 
+        : 0;
+      return {
+        bookTitle,
+        totalChapters,
+        chaptersGenerated: completedChapters,
+        status: isComplete ? 'completed' : 'in-progress',
+        progress,
+      };
+    }
+  } catch {
+    // Both endpoints failed
+  }
+
+  // If both fail, return a default in-progress response
+  return {
+    bookTitle,
+    totalChapters: 0,
+    chaptersGenerated: 0,
+    status: 'in-progress',
+    progress: 0,
+  };
 }
 
 /**

@@ -85,25 +85,63 @@ export interface CharacterRegistry {
 // Scene Analysis (LLM Director output)
 // ========================================
 
+/**
+ * A single scene segment within a chapter's soundscape timeline.
+ * The LLM Director produces 1–6 segments per chapter; each marks where a
+ * new environment begins (first segment always has charIndex = 0).
+ */
+export interface SceneSegment {
+  /** Character offset where this scene begins (0 for first segment) */
+  charIndex: number;
+  /** Primary environment description (e.g. 'forest', 'castle interior') */
+  environment: string;
+  /** English search queries for ambient asset matching */
+  searchSnippets: string[];
+  /** Mood descriptors for this segment */
+  moods: string[];
+}
+
+/**
+ * A single SFX event with precise placement information.
+ *
+ * `charIndex` is the character offset within the chapter text where the
+ * sound event occurs. Mapped to a silence gap at render time via
+ * `calculateSfxOffsetFromGaps()` in subchunkSoundscape.ts.
+ */
+export interface SfxEvent {
+  /** English search query for SFX catalog matching (e.g. 'door slamming wood') */
+  query: string;
+  /** Character offset in the chapter text where this sound occurs */
+  charIndex: number;
+  /** Human-readable description of what the sound is (for logging/debugging) */
+  description: string;
+}
+
 /** LLM-generated scene analysis for a single chapter */
 export interface SceneAnalysis {
   chapterIndex: number;
-  /** Primary environment (e.g. 'forest', 'castle interior', 'city street') */
-  environment: string;
   /** Time of day (e.g. 'night', 'dawn', 'midday') */
   timeOfDay: string;
   /** Weather if applicable (e.g. 'rain', 'storm', 'clear') */
   weather: string;
-  /** Mood descriptors for ambient matching */
+  /** Mood descriptors for the dominant chapter scene */
   moods: string[];
   /** Specific sound elements mentioned (e.g. 'crackling fire', 'horses') */
   soundElements: string[];
   /** Overall intensity 0-1 (quiet/calm → loud/intense) */
   intensity: number;
-  /** English search queries for ambient asset matching */
-  searchSnippets: string[];
-  /** English search queries for SFX asset matching (short one-shot sounds like doors, footsteps, etc.) */
-  sfxQueries: string[];
+  /**
+   * Fine-grained ambient timeline: 1–6 ordered scene segments, each with
+   * its own environment and search queries. First segment always has charIndex = 0.
+   * Used for multi-scene ambient generation within a single subchunk.
+   */
+  sceneSegments: SceneSegment[];
+  /**
+   * SFX events with character-index placement in the chapter text.
+   * Each event's charIndex is mapped to a silence gap midpoint at render time
+   * via `calculateSfxOffsetFromGaps()` in subchunkSoundscape.ts.
+   */
+  sfxEvents: SfxEvent[];
 }
 
 /** Complete soundscape plan for an entire book */
@@ -234,4 +272,11 @@ export interface FfmpegResult {
   code: number;
   stdout: string;
   stderr: string;
+}
+
+/** A detected silence gap from ffmpeg silencedetect */
+export interface SilenceGap {
+  startSec: number;
+  endSec: number;
+  midpointMs: number;
 }

@@ -28,8 +28,10 @@ import {
 import type {
   SoundAsset,
   SceneAnalysis,
+  SceneSegment,
   ChapterSoundscapePlan,
   EmbeddingIndex,
+  SfxEvent,
 } from './types.js';
 
 // ========================================
@@ -93,29 +95,32 @@ function buildEmbeddingText(asset: SoundAsset): string {
 // ========================================
 
 /**
- * Resolve a single SceneAnalysis to the best matching ambient asset.
+ * Resolve the best matching ambient asset for an array of English search snippets.
  *
- * Embeds all searchSnippets concurrently, collects top-K results from each,
- * then picks the asset with the highest score across all snippets.
+ * Embeds all snippets concurrently, collects top-K results from each, then picks
+ * the asset with the highest score. Prefers longer-duration assets among top
+ * candidates (within score delta ≤0.02) to reduce audible looping.
  *
- * @param scene - LLM-generated scene analysis with direct text snippets
- * @param topK - Number of candidates to consider per snippet
- * @returns Best matching SoundAsset or null if nothing suitable
+ * @param searchSnippets - English search queries describing the ambient soundscape
+ * @param logContext     - Human-readable label for log messages (e.g. "chapter 3 seg 0")
+ * @param topK           - Candidates to consider per snippet
+ * @returns Best matching SoundAsset with score, or null if nothing suitable
  */
 export async function resolveAmbientAsset(
-  scene: SceneAnalysis,
+  searchSnippets: string[],
+  logContext: string = 'unknown',
   topK: number = 5
 ): Promise<{ asset: SoundAsset; score: number } | null> {
   const index = await ensureAmbientEmbeddingIndex();
   const catalog = loadCatalog();
 
-  if (scene.searchSnippets.length === 0) {
-    console.warn(`⚠️ No search snippets for chapter ${scene.chapterIndex}`);
+  if (searchSnippets.length === 0) {
+    console.warn(`⚠️ No search snippets for ${logContext}`);
     return null;
   }
 
   // Embed all snippets concurrently and search
-  const batchResults = await searchEmbeddingsBatch(index, scene.searchSnippets, topK);
+  const batchResults = await searchEmbeddingsBatch(index, searchSnippets, topK);
 
   // Aggregate: find the best-scoring asset across all snippets
   const assetScores = new Map<string, number>();
@@ -168,7 +173,7 @@ export async function resolveAmbientAsset(
   }
 
   if (!bestCandidate) {
-    console.warn(`⚠️ All matched assets have missing files for chapter ${scene.chapterIndex}`);
+    console.warn(`⚠️ All matched assets have missing files for ${logContext}`);
     return null;
   }
 
@@ -210,9 +215,12 @@ export async function resolveAllChapterAssets(
   const plans: ChapterSoundscapePlan[] = [];
 
   for (const scene of scenes) {
-    console.log(`🔍 Resolving ambient for chapter ${scene.chapterIndex}: ${scene.searchSnippets.length} snippet(s)`);
+    // Use the dominant segment (first) for chapter-level plan
+    const dominantSegment = scene.sceneSegments[0];
+    const snippets = dominantSegment?.searchSnippets ?? [];
+    console.log(`🔍 Resolving ambient for chapter ${scene.chapterIndex}: ${snippets.length} snippet(s)`);
 
-    const match = await resolveAmbientAsset(scene);
+    const match = await resolveAmbientAsset(snippets, `chapter ${scene.chapterIndex}`);
 
     if (match) {
       console.log(`  ✓ Matched: ${match.asset.description.substring(0, 80)} (score=${match.score.toFixed(3)})`);
@@ -241,12 +249,12 @@ export async function resolveAllChapterAssets(
  * Used when embedding index is unavailable or for rapid prototyping.
  */
 export function resolveByKeyword(
-  scene: SceneAnalysis,
+  searchSnippets: string[],
   catalog: SoundAsset[]
 ): SoundAsset | null {
   // Collect all words from all snippets
   const queryWords = new Set(
-    scene.searchSnippets.flatMap((s) => s.toLowerCase().split(/\s+/))
+    searchSnippets.flatMap((s) => s.toLowerCase().split(/\s+/))
   );
 
   let bestAsset: SoundAsset | null = null;
@@ -277,6 +285,54 @@ export function resolveByKeyword(
 // ========================================
 // SFX embedding index + resolution
 // ========================================
+
+/**
+ * Resolve an ambient asset for each scene segment.
+ *
+ * Reuses `resolveAmbientAsset()` per segment. Segments that cannot be matched
+ * above the embedding threshold return `asset: null` (silence for that segment).
+ *
+ * @param sceneSegments - Ordered scene segments from SceneAnalysis.sceneSegments
+ * @returns Per-segment results: `{ segment, asset, score }` — asset may be null
+ */
+export async function resolveSceneSegmentAssets(
+  sceneSegments: SceneSegment[]
+): Promise<Array<{ segment: SceneSegment; asset: SoundAsset | null; score: number }>> {
+  if (sceneSegments.length === 0) return [];
+
+  // Ensure index is ready
+  await ensureAmbientEmbeddingIndex();
+
+  const results: Array<{ segment: SceneSegment; asset: SoundAsset | null; score: number }> = [];
+
+  for (let i = 0; i < sceneSegments.length; i++) {
+    const segment = sceneSegments[i];
+    const logContext = `segment ${i} (env: ${segment.environment.substring(0, 40)})`;
+
+    if (segment.searchSnippets.length === 0) {
+      console.warn(`⚠️ No search snippets for ${logContext} — skipping ambient`);
+      results.push({ segment, asset: null, score: 0 });
+      continue;
+    }
+
+    try {
+      const match = await resolveAmbientAsset(segment.searchSnippets, logContext);
+      if (match) {
+        console.log(`  ✓ Segment ${i}: "${match.asset.description.substring(0, 60)}" (score=${match.score.toFixed(3)})`);
+        results.push({ segment, asset: match.asset, score: match.score });
+      } else {
+        console.log(`  ✗ Segment ${i}: no match above threshold — silence for this segment`);
+        results.push({ segment, asset: null, score: 0 });
+      }
+    } catch (err) {
+      console.warn(`⚠️ Segment ${i} ambient resolution failed:`, err instanceof Error ? err.message : err);
+      results.push({ segment, asset: null, score: 0 });
+    }
+  }
+
+  return results;
+}
+
 
 /**
  * Ensure the SFX embedding index exists.
@@ -317,51 +373,39 @@ export async function ensureSfxEmbeddingIndex(): Promise<EmbeddingIndex> {
 }
 
 /**
- * Resolve up to N SFX assets from the scene's sfxQueries.
- * Uses the same embedding search approach as ambient, but against SFX catalog.
- * No duration preference (SFX are short one-shot sounds).
+ * Resolve a SoundAsset from the SFX catalog for each SfxEvent.
  *
- * @param scene - Scene analysis with sfxQueries
- * @param maxResults - Maximum SFX assets to return (default 2)
- * @returns Array of matching SFX assets with scores
+ * Each event's `query` string is embedded and matched against the SFX catalog.
+ * Events that score below the relevance threshold or whose file is missing are
+ * returned with `asset: null` so callers can skip them cleanly.
+ *
+ * @param sfxEvents - SFX events from SceneAnalysis (each carrying a `query` and `charIndex`)
+ * @returns Per-event results: `{ sfxEvent, asset, score }` — asset may be null if unresolved
  */
-export async function resolveSfxAssets(
-  scene: SceneAnalysis
-): Promise<Array<{ asset: SoundAsset; score: number }>> {
-  if (!scene.sfxQueries || scene.sfxQueries.length === 0) {
-    return [];
-  }
+export async function resolveSfxEvents(
+  sfxEvents: SfxEvent[]
+): Promise<Array<{ sfxEvent: SfxEvent; asset: SoundAsset | null; score: number }>> {
+  if (sfxEvents.length === 0) return [];
 
   const index = await ensureSfxEmbeddingIndex();
   const catalog = loadSfxCatalog();
 
-  const batchResults = await searchEmbeddingsBatch(index, scene.sfxQueries, 3);
+  // Batch-embed all unique queries in one call
+  const queries = sfxEvents.map((e) => e.query);
+  const batchResults = await searchEmbeddingsBatch(index, queries, 3);
 
-  // Aggregate: best score per asset across all queries
-  const assetScores = new Map<string, number>();
-  for (const br of batchResults) {
-    for (const result of br.results) {
-      const existing = assetScores.get(result.id) ?? 0;
-      if (result.score > existing) {
-        assetScores.set(result.id, result.score);
-      }
+  return sfxEvents.map((sfxEvent, i) => {
+    // Top-1 result for this query
+    const topResult = batchResults[i]?.results[0];
+    if (!topResult || topResult.score < 0.5) {
+      return { sfxEvent, asset: null, score: 0 };
     }
-  }
 
-  // Sort by score descending — return ALL assets above score threshold (no artificial limit)
-  const ranked = [...assetScores.entries()].sort((a, b) => b[1] - a[1]);
-  const results: Array<{ asset: SoundAsset; score: number }> = [];
+    const asset = catalog.find((a) => a.id === topResult.id) ?? null;
+    if (!asset || !fs.existsSync(asset.filePath)) {
+      return { sfxEvent, asset: null, score: topResult.score };
+    }
 
-  for (const [assetId, score] of ranked) {
-    const asset = catalog.find((a) => a.id === assetId);
-    if (!asset) continue;
-    if (!fs.existsSync(asset.filePath)) continue;
-
-    // Minimum score threshold for SFX relevance
-    if (score < 0.5) break;
-
-    results.push({ asset, score });
-  }
-
-  return results;
+    return { sfxEvent, asset, score: topResult.score };
+  });
 }

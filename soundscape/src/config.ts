@@ -142,11 +142,4 @@ export const EMBEDDING_CONCURRENCY = 5;
 /** Model for scene analysis */
 export const SCENE_ANALYSIS_MODEL = 'gemini-2.5-flash';
 
-// ========================================
-// Music genre mapping (DEPRECATED)
-// ========================================
 
-// NOTE: GENRE_MUSIC_MAP, DEFAULT_MUSIC_FOLDERS, and DEFAULT_KEYWORD_MAP
-// have been removed. Music selection now uses LLM-generated queries
-// with embedding search across all music assets (see musicSelector.ts).
-// Ambient asset matching uses LLM scene analysis (see llmDirector.ts).

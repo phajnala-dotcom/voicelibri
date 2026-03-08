@@ -37,6 +37,7 @@ import {
   consolidateChapterSmart,
   consolidateChapterFromSubChunks,
   deleteAllTempChunks,
+  deleteChapterSubChunks,
   stopPreDramatization,
   generateSubChunksParallel,
   subChunkExists,
@@ -62,7 +63,7 @@ import {
   deleteAudiobook,
   type AudiobookMetadata,
 } from './audiobookManager.js';
-import { resolveChapterAudioPath, getAmbientAudioPath, getIntroAudioPath, getSoundscapeThemeOptions, applySoundscapeToChapter, startEarlyIntroGeneration } from './soundscapeCompat.js';
+import { resolveChapterAudioPath, getAmbientAudioPath, getIntroAudioPath, applySoundscapeToChapter, startEarlyIntroGeneration, prepareEarlyAmbient } from './soundscapeCompat.js';
 import { 
   extractEpubChapters, 
   detectTextChapters, 
@@ -132,7 +133,7 @@ const __dirname = path.dirname(__filename);
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = Number(process.env.PORT) || 3001;
 
 // Middleware
 app.use(cors());
@@ -181,11 +182,13 @@ async function applySoundscapeForChapter(
   try {
     const metadata = loadAudiobookMetadata(bookTitle);
     const chapterText = CHAPTER_DRAMATIZED.get(chapterNum) ?? BOOK_CHAPTERS[chapterNum]?.text ?? '';
+    const subChunks = CHAPTER_SUBCHUNKS.get(chapterNum);
     await applySoundscapeToChapter({
       bookTitle,
       chapterIndex: chapterNum,
       chapterPath,
       chapterText,
+      subChunks,
       preferences: metadata?.userPreferences,
     });
   } catch (error) {
@@ -239,7 +242,8 @@ function trackSubChunkPlayed(
     const chapterTitle = BOOK_CHAPTERS[chapterNum]?.title;
     if (isChapterConsolidated(bookTitle, chapterNum, chapterTitle)) {
       console.log(`🗑️  Cleaning up sub-chunks for chapter ${chapterNum}...`);
-
+      const deletedCount = deleteChapterSubChunks(bookTitle, chapterNum);
+      console.log(`   Deleted ${deletedCount} sub-chunk files`);
     } else {
       console.log(`⏳ Chapter ${chapterNum} not yet consolidated, keeping sub-chunks`);
     }
@@ -996,11 +1000,13 @@ async function startBackgroundDramatization(
             console.error(`   ⚠️ Failed to save character registry:`, saveErr);
           }
           
-          // Generate intro for chapter 1 (sequential — completes before chapter TTS starts)
+          // Generate intro for chapter 1 (fire-and-forget — runs parallel to chapter TTS)
           if (chapterNum === 1) {
             const ch1Title = BOOK_CHAPTERS[1]?.title;
             const ch1Path = getChapterPath(bookTitle, 1, ch1Title);
-            await startEarlyIntroGeneration({ bookTitle, chapterPath: ch1Path });
+            startEarlyIntroGeneration({ bookTitle, chapterPath: ch1Path }).catch(err =>
+              console.warn('⚠️ Early intro generation failed:', err)
+            );
           }
           
           // Convert registry characters to CharacterProfile[] for hybrid tagger
@@ -1121,6 +1127,14 @@ async function startBackgroundDramatization(
           dramatizationStatus.currentOperation = `Generating audio for chapter ${chapterNum}`;
           dramatizationStatus.lastActivityAt = Date.now();
           
+          // Fire-and-forget: prepare ambient bed for progressive playback
+          prepareEarlyAmbient({
+            bookTitle,
+            chapterIndex: chapterNum,
+            chapterPath: getChapterPath(bookTitle, chapterNum, chapter.title),
+            chapterText: chapter.text,
+          }).catch(err => console.warn('⚠️ Early ambient prep failed (non-critical):', err));
+          
           const chapterParallelism = 3; // Uniform parallelism for all chapters
           await generateSubChunksParallel(
             bookTitle,
@@ -1148,8 +1162,11 @@ async function startBackgroundDramatization(
             const chapterPath = await consolidateChapterFromSubChunks(bookTitle, chapterNum, chapterTitle);
             await applySoundscapeForChapter(bookTitle, chapterNum, chapterPath);
             console.log(`   📦 Chapter ${chapterNum} consolidated successfully`);
-            // NOTE: Sub-chunks are NOT deleted here - they are kept for playback
-            // Cleanup happens via trackSubChunkPlayed() after chapter is fully played
+            // Clean up temp sub-chunks now that chapter is consolidated
+            const deletedCount = deleteChapterSubChunks(bookTitle, chapterNum);
+            if (deletedCount > 0) {
+              console.log(`   🗑️  Cleaned up ${deletedCount} temp sub-chunks for chapter ${chapterNum}`);
+            }
           } catch (consErr) {
             console.error(`   ⚠️ Chapter ${chapterNum} consolidation failed:`, consErr);
           }
@@ -1189,6 +1206,15 @@ async function startBackgroundDramatization(
           // Generate TTS even for fallback
           const bookTitle = sanitizeBookTitle(BOOK_METADATA?.title || CURRENT_BOOK_FILE || 'Unknown');
           console.log(`   🎤 Generating TTS for chapter ${chapterNum} (fallback)...`);
+          
+          // Fire-and-forget: prepare ambient bed for progressive playback
+          prepareEarlyAmbient({
+            bookTitle,
+            chapterIndex: chapterNum,
+            chapterPath: getChapterPath(bookTitle, chapterNum, chapter.title),
+            chapterText: chapter.text,
+          }).catch(err => console.warn('⚠️ Early ambient prep failed (non-critical):', err));
+          
           const chapterParallelism = 3; // Uniform parallelism for all chapters
           await generateSubChunksParallel(
             bookTitle,
@@ -1213,8 +1239,11 @@ async function startBackgroundDramatization(
             const chapterPath = await consolidateChapterFromSubChunks(bookTitle, chapterNum, chapterTitle);
             await applySoundscapeForChapter(bookTitle, chapterNum, chapterPath);
             console.log(`   📦 Chapter ${chapterNum} consolidated (fallback) successfully`);
-            // NOTE: Sub-chunks are NOT deleted here - they are kept for playback
-            // Cleanup happens via trackSubChunkPlayed() after chapter is fully played
+            // Clean up temp sub-chunks now that chapter is consolidated
+            const deletedCount = deleteChapterSubChunks(bookTitle, chapterNum);
+            if (deletedCount > 0) {
+              console.log(`   🗑️  Cleaned up ${deletedCount} temp sub-chunks for chapter ${chapterNum}`);
+            }
           } catch (consErr) {
             console.error(`   ⚠️ Chapter ${chapterNum} consolidation failed:`, consErr);
           }
@@ -1570,6 +1599,21 @@ app.post('/api/book/select', async (req: Request, res: Response) => {
     
     res.json({
       success: true,
+      // Top-level fields matching BookSelectResult (same format as /api/book/from-text)
+      title: BOOK_METADATA.title,
+      author: BOOK_METADATA.author,
+      audiobookTitle: bookTitle,
+      chapters: BOOK_CHAPTERS.filter((ch: any, i: number) => i > 0 && ch !== null).map((ch: any, i: number) => ({
+        index: i + 1,
+        title: ch.title,
+        subChunkStart: 0,
+        subChunkCount: 10, // Estimated
+      })),
+      _internal: {
+        totalChunks: BOOK_INFO.totalChunks,
+        durationSeconds: BOOK_INFO.estimatedDuration,
+      },
+      // Legacy nested format (kept for backward compatibility)
       book: {
         filename: CURRENT_BOOK_FILE,
         format: BOOK_FORMAT,
@@ -3144,62 +3188,16 @@ app.get('/api/audiobooks/:bookTitle/preferences', (req: Request, res: Response) 
 });
 
 /**
- * Get soundscape theme options for an audiobook
- * 
+ * Soundscape theme picker — removed (themes are now auto-selected by the LLM Director)
+ *
  * GET /api/audiobooks/:bookTitle/soundscape/themes
+ * @deprecated — returns 410 Gone
  */
-app.get('/api/audiobooks/:bookTitle/soundscape/themes', (req: Request, res: Response) => {
-  try {
-    const { bookTitle } = req.params;
-    const metadata = loadAudiobookMetadata(bookTitle);
-
-    if (!metadata?.sourceFile) {
-      return res.status(404).json({
-        error: 'Audiobook not found',
-        message: `Audiobook "${bookTitle}" does not exist or has no source file`,
-      });
-    }
-
-    const bookPath = path.join(ASSETS_DIR, metadata.sourceFile);
-    if (!fs.existsSync(bookPath)) {
-      return res.status(404).json({
-        error: 'Book not found',
-        message: `File not found: ${metadata.sourceFile}`,
-      });
-    }
-
-    const ext = path.extname(metadata.sourceFile).toLowerCase();
-    let sampleText = '';
-
-    if (ext === '.epub') {
-      const epubBuffer = fs.readFileSync(bookPath);
-      const chapters = extractEpubChapters(epubBuffer);
-      const firstChapter = chapters[0]?.text ?? '';
-      sampleText = firstChapter.slice(0, 20000);
-    } else if (ext === '.txt') {
-      const bookText = fs.readFileSync(bookPath, 'utf-8');
-      const chapters = bookText.includes('Chapter') || bookText.includes('CHAPTER')
-        ? detectTextChapters(bookText)
-        : createSingleChapter(bookText, 'Full Text');
-      const firstChapter = chapters[0]?.text ?? '';
-      sampleText = firstChapter.slice(0, 20000);
-    }
-
-    const themes = getSoundscapeThemeOptions(sampleText, 5);
-
-    res.json({
-      themes,
-      selectedThemeId: metadata.userPreferences?.soundscapeThemeId ?? null,
-      musicEnabled: metadata.userPreferences?.soundscapeMusicEnabled ?? true,
-      ambientEnabled: metadata.userPreferences?.soundscapeAmbientEnabled ?? true,
-    });
-  } catch (error) {
-    console.error('✗ Error retrieving soundscape themes:', error);
-    res.status(500).json({
-      error: 'Failed to retrieve soundscape themes',
-      message: error instanceof Error ? error.message : 'Unknown error',
-    });
-  }
+app.get('/api/audiobooks/:bookTitle/soundscape/themes', (_req: Request, res: Response) => {
+  return res.status(410).json({
+    error: 'Gone',
+    message: 'Soundscape theme picker has been removed. Scene environments are now detected automatically by the LLM Director.',
+  });
 });
 
 // ========================================

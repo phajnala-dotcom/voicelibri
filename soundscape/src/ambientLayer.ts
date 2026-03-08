@@ -1,256 +1,309 @@
 /**
  * Soundscape Module — Ambient Layer
  *
- * Creates per-chapter ambient OGG with optional SFX overlay:
- *   1. Loops resolved ambient asset to cover chapter duration + pre/post-roll
- *   2. Optionally overlays multiple SFX one-shots (no looping, no cross-subchunk)
- *      — each SFX placed at a distinct timeline position (max 1 concurrent)
- *   3. Applies loudnorm, volume, fade-in/out
- *   4. Outputs a single _ambient.ogg served independently from voice
+ * Creates per-subchunk ambient OGG with optional multi-scene ambient crossfades
+ * and precisely-timed SFX overlays.
  *
- * SFX is treated the same as ambient — mixed into the same output file,
- * not a separate layer. Only difference: SFX is not looped and is short.
+ * Per-subchunk ambient generation with gap-based SFX timing:
+ *   generateSubchunkAmbientTrack() — handles 1–N ambient segments with crossfades
+ *
+ * After all subchunk OGGs are written:
+ *   concatenateSubchunkAmbientTracks() — concat + chapter-level fade-in/out
  */
 
 import fs from 'fs';
 import path from 'path';
 import {
   AMBIENT_DEFAULT_DB,
-  AMBIENT_FADE_MS,
-  AMBIENT_PRE_ROLL_MS,
-  AMBIENT_POST_ROLL_MS,
   AUDIO_SAMPLE_RATE,
   AUDIO_CHANNELS,
   AUDIO_CODEC,
 } from './config.js';
-import { runFfmpeg } from './ffmpegRunner.js';
+import { runFfmpeg, getAudioDuration } from './ffmpegRunner.js';
 import type {
   SoundAsset,
-  ChapterSoundscapePlan,
   FfmpegResult,
 } from './types.js';
 
 // ========================================
-// Ambient WAV generation
+// Step 2.5 — Per-subchunk Ambient + SFX Generation
 // ========================================
 
-/** Volume boost for SFX relative to ambient (SFX should be audible above ambient bed) */
+/** Volume boost for SFX relative to the ambient bed */
 const SFX_VOLUME_BOOST_DB = 6;
 
+/** Crossfade duration between adjacent ambient segments (seconds) */
+const AMBIENT_CROSSFADE_SEC = 0.5;
+
+/** Short boundary fade at the subchunk edges to hide concat seams (seconds) */
+const BOUNDARY_FADE_SEC = 0.05;
+
 /**
- * Generate a standalone ambient OGG for a chapter, optionally with SFX overlays.
+ * Generate an ambient OGG track for a single TTS subchunk.
  *
- * The ambient track is:
- *   - Looped infinitely (`-stream_loop -1`)
- *   - Trimmed to speechDuration + pre-roll + post-roll
- *   - Normalized with loudnorm (target I=-20, TP=-2, LRA=11)
- *   - Volume-adjusted per plan.ambientVolumeDb
- *   - Faded in/out at edges
+ * Supports multiple ambient segments with 500 ms crossfades between them,
+ * and optional precisely-timed SFX overlays.
  *
- * When SFX assets are provided, they are overlaid (amixed) into the
- * ambient track — each played once (no looping), placed at evenly spaced
- * positions throughout the chapter so max 1 SFX plays at a time.
- * This produces a single _ambient.ogg containing both ambient bed + SFX.
+ * `ambientSegments` is an ordered array where each entry’s `startMs` marks
+ * when that ambient environment begins within the subchunk. The first segment
+ * always has startMs = 0. Subsequent segment startMs values correspond to
+ * silence-gap midpoints returned by `calculateSfxOffsetFromGaps()`.
  *
- * @param ambientAsset - Resolved ambient OGG file
- * @param speechDurationMs - Duration of the voice chapter WAV
- * @param volumeDb - Target volume adjustment in dB
- * @param outputPath - Where to write the ambient OGG
- * @param sfxAssets - Optional array of SFX assets to overlay (one-shot sounds)
+ * Crossfade logic (500 ms):
+ *   - Segment A: fade out over last 500 ms before the switch point
+ *   - Segment B: fade in over first 500 ms after the switch point
+ *   - Both overlap for 500 ms; amix combines them
+ *   - Only 1 ambient plays at any moment (except the 500 ms crossfade window)
+ *
+ * @param ambientSegments    - Ordered ambient assets with their subchunk-relative startMs
+ * @param subchunkDurationMs - Actual TTS duration of the subchunk in milliseconds
+ * @param volumeDb           - Target ambient volume in dB
+ * @param outputPath         - Where to write the output OGG
+ * @param sfxEvents          - Optional precisely-timed SFX to overlay
  * @returns FfmpegResult
  */
-export async function generateAmbientTrack(
-  ambientAsset: SoundAsset,
-  speechDurationMs: number,
+export async function generateSubchunkAmbientTrack(
+  ambientSegments: Array<{ asset: SoundAsset; startMs: number }>,
+  subchunkDurationMs: number,
   volumeDb: number,
   outputPath: string,
-  sfxAssets?: SoundAsset[] | null
+  sfxEvents?: Array<{ offsetMs: number; asset: SoundAsset; description: string }> | null
 ): Promise<FfmpegResult> {
-  const fadeInSec = AMBIENT_FADE_MS / 1000;
-  const fadeOutSec = AMBIENT_FADE_MS / 1000;
+  if (ambientSegments.length === 0) {
+    return { code: 1, stdout: '', stderr: 'No ambient segments provided' };
+  }
 
-  const totalDurationSec = Math.max(
-    (speechDurationMs + AMBIENT_PRE_ROLL_MS + AMBIENT_POST_ROLL_MS) / 1000,
-    0.5
-  );
+  const totalDurationSec = Math.max(subchunkDurationMs / 1000, 0.1);
+  const validSfx = sfxEvents?.filter((e) => e != null && e.asset != null) ?? [];
+  const sfxVolumeDb = volumeDb + SFX_VOLUME_BOOST_DB;
 
-  // Fade-out starts before the total end, leaving room for fade
-  const fadeOutStart = Math.max(
-    (speechDurationMs + AMBIENT_PRE_ROLL_MS + (AMBIENT_POST_ROLL_MS - AMBIENT_FADE_MS)) / 1000,
-    0
-  );
+  // Sort segments by startMs (caller should already provide them sorted)
+  const segments = [...ambientSegments].sort((a, b) => a.startMs - b.startMs);
 
-  // Filter out empty arrays
-  const validSfx = sfxAssets?.filter(a => a != null) ?? [];
-
-  let args: string[];
-
-  if (validSfx.length > 0) {
-    // ── Ambient + multiple SFX overlay via filter_complex ──
-    // Distribute SFX evenly across the chapter duration so they don't overlap
-    const sfxVolumeDb = volumeDb + SFX_VOLUME_BOOST_DB;
-    const preRollSec = AMBIENT_PRE_ROLL_MS / 1000;
-    // Usable range for SFX placement: after pre-roll+2s to fadeOutStart-2s
-    const sfxStartBound = preRollSec + 2;
-    const sfxEndBound = Math.max(fadeOutStart - 2, sfxStartBound + 1);
-    const sfxSpan = sfxEndBound - sfxStartBound;
-
-    // Calculate evenly distributed offsets for each SFX
-    const sfxOffsets: number[] = [];
-    if (validSfx.length === 1) {
-      sfxOffsets.push(Math.min(sfxStartBound, totalDurationSec * 0.2));
-    } else {
-      for (let i = 0; i < validSfx.length; i++) {
-        const offset = sfxStartBound + (sfxSpan * i) / (validSfx.length - 1);
-        sfxOffsets.push(offset);
-      }
+  // Build ffmpeg input args:
+  //   - One looping input per unique ambient asset (segments may share an asset)
+  //   - One input per SFX
+  const inputArgs: string[] = [];
+  // Track input indices per asset path to avoid duplicate stream_loop inputs
+  const assetInputIndex = new Map<string, number>();
+  for (const seg of segments) {
+    if (!assetInputIndex.has(seg.asset.filePath)) {
+      assetInputIndex.set(seg.asset.filePath, inputArgs.length / 4); // groups of 4 tokens
+      inputArgs.push('-stream_loop', '-1', '-i', seg.asset.filePath);
     }
+  }
+  const sfxInputStartIndex = inputArgs.length / 4;
+  for (const sfx of validSfx) {
+    inputArgs.push('-i', sfx.asset.filePath);
+  }
 
-    // Build ffmpeg inputs: ambient (index 0) + each SFX (index 1..N)
-    const inputArgs: string[] = [
-      '-stream_loop', '-1',
-      '-i', ambientAsset.filePath,
-    ];
-    for (const sfx of validSfx) {
-      inputArgs.push('-i', sfx.filePath);
-    }
+  // Build filter_complex
+  let filterComplex = '';
+  const ambMixLabels: string[] = [];
 
-    // Build filter_complex
-    // [0] ambient: normalize, volume, fade
-    let filterComplex =
-      `[0:a]loudnorm=I=-20:TP=-2:LRA=11,` +
-      `volume=${volumeDb}dB,` +
-      `afade=t=in:st=0:d=${fadeInSec},` +
-      `afade=t=out:st=${fadeOutStart}:d=${fadeOutSec}[amb];`;
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    const inputIdx = assetInputIndex.get(seg.asset.filePath)!;
+    const isFirst = i === 0;
+    const isLast = i === segments.length - 1;
 
-    // Each SFX input: normalize, volume boost, delay to its offset
-    const mixInputLabels = ['[amb]'];
-    for (let i = 0; i < validSfx.length; i++) {
-      const inputIdx = i + 1;
-      const offsetMs = Math.round(sfxOffsets[i] * 1000);
-      const label = `sfx${i}`;
-      filterComplex +=
-        `[${inputIdx}:a]loudnorm=I=-20:TP=-2:LRA=11,` +
-        `volume=${sfxVolumeDb}dB,` +
-        `adelay=${offsetMs}|${offsetMs}[${label}];`;
-      mixInputLabels.push(`[${label}]`);
-    }
+    // Segment time range within the subchunk
+    // Start slightly before the nominal switchpoint to allow crossfade overlap
+    const contentStartMs = isFirst ? 0 : seg.startMs - AMBIENT_CROSSFADE_SEC * 1000;
+    const contentEndMs = isLast
+      ? subchunkDurationMs
+      : segments[i + 1].startMs + AMBIENT_CROSSFADE_SEC * 1000;
+    const contentDurationSec = Math.max((contentEndMs - contentStartMs) / 1000, 0.01);
 
-    // Mix all streams together (ambient + all SFX)
+    const fadeInSec = isFirst ? BOUNDARY_FADE_SEC : AMBIENT_CROSSFADE_SEC;
+    const fadeOutStart = Math.max(contentDurationSec - (isLast ? BOUNDARY_FADE_SEC : AMBIENT_CROSSFADE_SEC), 0);
+    const fadeOutSec = isLast ? BOUNDARY_FADE_SEC : AMBIENT_CROSSFADE_SEC;
+
+    const label = `amb${i}`;
+    // L1: Use simple volume correction based on catalog LUFS — target -16 LUFS (near voice level)
+    // volumeDb then provides the offset below voice (e.g., -3 dB → effective -19 LUFS)
+    const lufsCorrection = seg.asset.loudnessLUFS != null ? `volume=${(-16 - seg.asset.loudnessLUFS).toFixed(1)}dB,` : '';
     filterComplex +=
-      `${mixInputLabels.join('')}amix=inputs=${mixInputLabels.length}:duration=first:dropout_transition=2[out]`;
+      `[${inputIdx}:a]` +
+      `${lufsCorrection}` +
+      `volume=${volumeDb}dB,` +
+      `atrim=0:end=${contentDurationSec.toFixed(6)},` +
+      `afade=t=in:st=0:d=${fadeInSec},` +
+      `afade=t=out:st=${fadeOutStart.toFixed(6)}:d=${fadeOutSec},` +
+      `adelay=${contentStartMs.toFixed(0)}|${contentStartMs.toFixed(0)}` +
+      `[${label}];`;
+    ambMixLabels.push(`[${label}]`);
+  }
 
-    args = [
-      ...inputArgs,
-      '-filter_complex', filterComplex,
-      '-map', '[out]',
-      '-t', totalDurationSec.toString(),
-      '-ar', AUDIO_SAMPLE_RATE.toString(),
-      '-ac', AUDIO_CHANNELS.toString(),
-      '-c:a', AUDIO_CODEC,
-      outputPath,
-    ];
+  // SFX overlays
+  const sfxMixLabels: string[] = [];
+  for (let i = 0; i < validSfx.length; i++) {
+    const sfx = validSfx[i];
+    const inputIdx = sfxInputStartIndex + i;
+    const offsetMs = Math.max(0, sfx.offsetMs);
+    const sfxLabel = `sfx${i}`;
+    // L1: Use simple volume correction based on catalog LUFS — target -16 LUFS
+    const sfxLufsCorrection = sfx.asset?.loudnessLUFS != null ? `volume=${(-16 - sfx.asset.loudnessLUFS).toFixed(1)}dB,` : '';
+    filterComplex +=
+      `[${inputIdx}:a]` +
+      `${sfxLufsCorrection}` +
+      `volume=${sfxVolumeDb}dB,` +
+      `adelay=${offsetMs}|${offsetMs}` +
+      `[${sfxLabel}];`;
+    sfxMixLabels.push(`[${sfxLabel}]`);
+  }
 
-    const sfxDescs = validSfx.map((s, i) =>
-      `"${s.description?.substring(0, 30)}" @${sfxOffsets[i].toFixed(1)}s`
-    ).join(', ');
+  const allMixLabels = [...ambMixLabels, ...sfxMixLabels];
+  if (allMixLabels.length === 1) {
+    // Single stream — rename directly to output, no amix needed
+    const singleLabel = allMixLabels[0]; // e.g. '[amb0]' or '[sfx0]'
+    const labelContent = singleLabel.slice(1, -1); // e.g. 'amb0'
+    filterComplex = filterComplex.replace(`[${labelContent}];`, '[out];');
+    // Remove trailing semicolon
+    filterComplex = filterComplex.replace(/;\s*$/, '');
+  } else {
+    filterComplex +=
+      `${allMixLabels.join('')}amix=inputs=${allMixLabels.length}:duration=first:dropout_transition=2[out]`;
+  }
+
+  const args = [
+    ...inputArgs,
+    '-filter_complex', filterComplex,
+    '-map', '[out]',
+    '-t', totalDurationSec.toString(),
+    '-ar', AUDIO_SAMPLE_RATE.toString(),
+    '-ac', AUDIO_CHANNELS.toString(),
+    '-c:a', AUDIO_CODEC,
+    outputPath,
+  ];
+
+  if (segments.length > 1) {
     console.log(
-      `🌿 Generating ambient+${validSfx.length}×SFX track: ${totalDurationSec.toFixed(1)}s, ${volumeDb}dB ambient, SFX: [${sfxDescs}]`
+      `🎵 Subchunk ambient: ${totalDurationSec.toFixed(2)}s, ${segments.length} scenes, ` +
+      `${validSfx.length}×SFX, ${volumeDb}dB`
     );
   } else {
-    // ── Ambient only (no SFX) ──
-    args = [
-      '-stream_loop', '-1',
-      '-i', ambientAsset.filePath,
-      '-af',
-      `loudnorm=I=-20:TP=-2:LRA=11,` +
-      `volume=${volumeDb}dB,` +
-      `afade=t=in:st=0:d=${fadeInSec},` +
-      `afade=t=out:st=${fadeOutStart}:d=${fadeOutSec}`,
-      '-t', totalDurationSec.toString(),
-      '-ar', AUDIO_SAMPLE_RATE.toString(),
-      '-ac', AUDIO_CHANNELS.toString(),
-      '-c:a', AUDIO_CODEC,
-      outputPath,
-    ];
-
-    console.log(`🌿 Generating ambient track: ${totalDurationSec.toFixed(1)}s, ${volumeDb}dB`);
+    const sfxDesc = validSfx
+      .map((e) => `"${e.description.substring(0, 30)}" @${(e.offsetMs / 1000).toFixed(2)}s`)
+      .join(', ');
+    if (validSfx.length > 0) {
+      console.log(
+        `🎯 Subchunk ambient+${validSfx.length}×SFX: ${totalDurationSec.toFixed(2)}s | ${volumeDb}dB | SFX: [${sfxDesc}]`
+      );
+    } else {
+      console.log(`🌿 Subchunk ambient: ${totalDurationSec.toFixed(2)}s, ${volumeDb}dB`);
+    }
   }
 
   const result = await runFfmpeg(args);
 
   if (result.code !== 0) {
-    console.error(`✗ Ambient track generation failed: ${result.stderr.substring(0, 300)}`);
+    console.error(`✗ Subchunk ambient generation failed: ${result.stderr.substring(0, 300)}`);
   } else {
-    console.log(`✓ Ambient track ready: ${outputPath}`);
+    console.log(`✓ Subchunk ambient ready: ${outputPath}`);
   }
 
   return result;
 }
 
+// ========================================
+// Step 2.6 — Chapter Ambient Concatenation
+// ========================================
+
+/** Duration of chapter-level fade-in and fade-out (seconds) */
+const CHAPTER_FADE_SEC = 2;
+
 /**
- * Generate ambient tracks for all chapters that have resolved ambient assets.
- *
- * @param plans - Chapter soundscape plans (from assetResolver)
- * @param getChapterDurationMs - Function to get chapter voice duration in ms
- * @param outputDir - Directory for ambient WAV files
- * @returns Map of chapterIndex → ambient WAV path (only for successful chapters)
+ * Apply 2-second fade-in and 2-second fade-out to a chapter ambient OGG.
+ * @internal
  */
-export async function generateAllAmbientTracks(
-  plans: ChapterSoundscapePlan[],
-  getChapterDurationMs: (chapterIndex: number) => number,
-  outputDir: string
-): Promise<Map<number, string>> {
-  const results = new Map<number, string>();
-
-  // Ensure output directory exists
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true });
+async function applyChapterFades(inputPath: string, outputPath: string): Promise<FfmpegResult> {
+  const totalDurSec = await getAudioDuration(inputPath);
+  if (totalDurSec <= 0) {
+    // Can't determine duration — copy without fades
+    return runFfmpeg(['-i', inputPath, '-c', 'copy', outputPath]);
   }
-
-  for (const plan of plans) {
-    if (!plan.ambientAsset) {
-      console.log(`⏭️ No ambient asset for chapter ${plan.chapterIndex}`);
-      continue;
-    }
-
-    // Verify asset file exists
-    if (!fs.existsSync(plan.ambientAsset.filePath)) {
-      console.warn(`⚠️ Ambient file missing: ${plan.ambientAsset.filePath}`);
-      continue;
-    }
-
-    const outputPath = path.join(
-      outputDir,
-      `chapter_${plan.chapterIndex}_ambient.ogg`
-    );
-
-    // Skip if already generated
-    if (fs.existsSync(outputPath)) {
-      console.log(`⏭️ Ambient track already exists: chapter ${plan.chapterIndex}`);
-      results.set(plan.chapterIndex, outputPath);
-      continue;
-    }
-
-    const speechDurationMs = getChapterDurationMs(plan.chapterIndex);
-    if (speechDurationMs <= 0) {
-      console.warn(`⚠️ No speech duration for chapter ${plan.chapterIndex}, skipping ambient`);
-      continue;
-    }
-
-    const result = await generateAmbientTrack(
-      plan.ambientAsset,
-      speechDurationMs,
-      plan.ambientVolumeDb,
-      outputPath
-    );
-
-    if (result.code === 0) {
-      results.set(plan.chapterIndex, outputPath);
-    }
-  }
-
-  return results;
+  const fadeOutStart = Math.max(totalDurSec - CHAPTER_FADE_SEC, 0);
+  return runFfmpeg([
+    '-i', inputPath,
+    '-af',
+    `afade=t=in:st=0:d=${CHAPTER_FADE_SEC},afade=t=out:st=${fadeOutStart.toFixed(3)}:d=${CHAPTER_FADE_SEC}`,
+    '-ar', AUDIO_SAMPLE_RATE.toString(),
+    '-ac', AUDIO_CHANNELS.toString(),
+    '-c:a', AUDIO_CODEC,
+    outputPath,
+  ]);
 }
 
+/**
+ * Concatenate per-subchunk ambient OGG tracks into a single chapter ambient
+ * track, then apply a 2-second fade-in and 2-second fade-out.
+ *
+ * Uses ffmpeg concat demuxer (no re-encoding for concat step), then a second
+ * pass for the chapter-level fades.
+ *
+ * @param subchunkPaths - Ordered list of per-subchunk ambient OGG paths
+ * @param outputPath    - Final chapter ambient OGG path
+ * @returns FfmpegResult
+ */
+export async function concatenateSubchunkAmbientTracks(
+  subchunkPaths: string[],
+  outputPath: string
+): Promise<FfmpegResult> {
+  if (subchunkPaths.length === 0) {
+    return { code: 1, stdout: '', stderr: 'No subchunk paths provided' };
+  }
 
+  if (subchunkPaths.length === 1) {
+    // Single subchunk — re-encode with chapter fade-in/out
+    const result = await applyChapterFades(subchunkPaths[0], outputPath);
+    if (result.code === 0) {
+      console.log(`✓ Chapter ambient (1 subchunk) ready: ${outputPath}`);
+    }
+    return result;
+  }
+
+  const { default: fsDyn } = await import('fs');
+  const { default: pathDyn } = await import('path');
+  const osDyn = await import('os');
+
+  // Write concat list to a temp file (safe=0 allows absolute paths)
+  const concatListPath = pathDyn.join(osDyn.tmpdir(), `concat_ambient_${Date.now()}.txt`);
+  const concatContent = subchunkPaths
+    .map((p) => `file '${p.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`)
+    .join('\n');
+  fsDyn.writeFileSync(concatListPath, concatContent, 'utf8');
+
+  try {
+    // Step 1: concat all subchunks into a temp file
+    const concatTmpPath = pathDyn.join(osDyn.tmpdir(), `concat_ambient_tmp_${Date.now()}.ogg`);
+
+    const concatResult = await runFfmpeg([
+      '-f', 'concat',
+      '-safe', '0',
+      '-i', concatListPath,
+      '-c', 'copy',
+      concatTmpPath,
+    ]);
+
+    if (concatResult.code !== 0) {
+      console.error(`✗ Chapter ambient concat failed: ${concatResult.stderr.substring(0, 300)}`);
+      return concatResult;
+    }
+
+    // Step 2: apply chapter-level fade-in/out
+    const fadeResult = await applyChapterFades(concatTmpPath, outputPath);
+
+    try { fsDyn.unlinkSync(concatTmpPath); } catch { /* ignore */ }
+
+    if (fadeResult.code === 0) {
+      console.log(`✓ Chapter ambient (${subchunkPaths.length} subchunks) ready: ${outputPath}`);
+    } else {
+      console.error(`✗ Chapter ambient fade pass failed: ${fadeResult.stderr.substring(0, 300)}`);
+    }
+
+    return fadeResult;
+  } finally {
+    try { fsDyn.unlinkSync(concatListPath); } catch { /* ignore */ }
+  }
+}

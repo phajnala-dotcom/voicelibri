@@ -27,7 +27,7 @@ import {
 } from './audiobookManager.js';
 import { Chapter } from './bookChunker.js';
 import { ChunkInfo } from './chapterChunker.js';
-import { applySoundscapeToChapter } from './soundscapeCompat.js';
+
 
 // ========================================
 // Worker State & Queue
@@ -283,15 +283,6 @@ class AudiobookGenerationWorker extends EventEmitter {
       try {
         console.log(`  Consolidating chapter ${chapterIndex}: ${chunkIndices.length} chunks (${chunkIndices.join(', ')})`);
         const chapterPath = await consolidateChapterFromTemps(bookTitle, chapterIndex, chunkIndices);
-        const chapterText = chapterTextMap.get(chapterIndex) ?? '';
-        const metadata = loadAudiobookMetadata(bookTitle);
-        await applySoundscapeToChapter({
-          bookTitle,
-          chapterIndex,
-          chapterPath,
-          chapterText,
-          preferences: metadata?.userPreferences,
-        });
         consolidatedCount++;
         this.updateProgress(bookTitle, { chaptersConsolidated: consolidatedCount });
         console.log(`  ✓ Chapter ${chapterIndex} consolidated (${consolidatedCount}/${chapterChunks.size})`);

@@ -24,6 +24,7 @@ export type {
   BookInfo,
   CharacterEntry,
   CharacterRegistry,
+  SceneSegment,
   SceneAnalysis,
   BookSoundscapePlan,
   ChapterSoundscapePlan,
@@ -37,6 +38,8 @@ export type {
   SoundscapePipelineOptions,
   SoundscapePreferences,
   FfmpegResult,
+  SfxEvent,
+  SilenceGap,
 } from './types.js';
 
 // Config
@@ -55,7 +58,7 @@ export {
 } from './config.js';
 
 // FFmpeg
-export { runFfmpeg, getAudioDuration } from './ffmpegRunner.js';
+export { runFfmpeg, getAudioDuration, detectSilenceGaps } from './ffmpegRunner.js';
 
 // Embeddings
 export {
@@ -100,7 +103,8 @@ export {
   ensureAmbientEmbeddingIndex,
   ensureSfxEmbeddingIndex,
   resolveAmbientAsset,
-  resolveSfxAssets,
+  resolveSfxEvents,
+  resolveSceneSegmentAssets,
   resolveAllChapterAssets,
   resolveByKeyword,
 } from './assetResolver.js';
@@ -116,9 +120,23 @@ export {
 
 // Ambient layer
 export {
-  generateAmbientTrack,
-  generateAllAmbientTracks,
+  generateSubchunkAmbientTrack,
+  concatenateSubchunkAmbientTracks,
 } from './ambientLayer.js';
+
+// Subchunk soundscape mapper
+export {
+  buildSubchunkSegmentInfos,
+  mapSfxEventsToSubchunks,
+  groupMappedEventsBySubchunk,
+  buildPlacedSfxEvents,
+  calculateSfxOffsetFromGaps,
+} from './subchunkSoundscape.js';
+export type {
+  SubchunkSegmentInfo,
+  MappedSfxEvent,
+  PlacedSfxEvent,
+} from './subchunkSoundscape.js';
 
 // Audio mixer
 export {

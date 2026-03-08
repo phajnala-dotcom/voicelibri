@@ -4,7 +4,7 @@
  * Includes dual-player support: voice (master) + ambient (follower).
  */
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { usePlayerStore } from '../stores/playerStore';
 import {
   getChapterAudioUrl,
@@ -29,6 +29,8 @@ export function useProgressiveAudioPlayback() {
   const ambientRef = useRef<HTMLAudioElement | null>(null);
   const audioCacheRef = useRef<AudioCache>({});
   const driftIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const toastShownChaptersRef = useRef<Set<number>>(new Set());
+  const [soundscapeToast, setSoundscapeToast] = useState<string | null>(null);
   
   const {
     currentBook,
@@ -84,7 +86,9 @@ export function useProgressiveAudioPlayback() {
     };
 
     const handleCanPlayThrough = () => {
-      if (playbackState === 'loading') {
+      // Only set paused if we're explicitly in loading state AND not in auto-play flow
+      // (loadSubChunkAudio with autoPlay handles its own state transition)
+      if (playbackState === 'loading' && !audioRef.current?.dataset.autoPlay) {
         setPlaybackState('paused');
       }
     };
@@ -245,14 +249,30 @@ export function useProgressiveAudioPlayback() {
       // Cache the blob URL
       audioCacheRef.current[cacheKey] = blobUrl;
       
-      // Load and play
+      // Load voice
+      if (autoPlay) {
+        audioRef.current.dataset.autoPlay = 'true'; // Prevent handleCanPlayThrough interference
+      }
       audioRef.current.src = blobUrl;
+
+      // Step 10: Show soundscape toast if ambient is not ready yet (once per chapter)
+      if (ambientEnabled && !toastShownChaptersRef.current.has(chapterIndex)) {
+        isAmbientReady(currentBook.title, chapterIndex).then(ready => {
+          if (!ready) {
+            toastShownChaptersRef.current.add(chapterIndex);
+            setSoundscapeToast('✨ Creating your soundscape...');
+            setTimeout(() => setSoundscapeToast(null), 5000);
+          }
+        }).catch(() => { /* non-critical */ });
+      }
       
       if (autoPlay) {
         setPlaybackState('playing');
         audioRef.current.play().catch(err => {
           console.error('Failed to play subchunk:', err);
           setPlaybackState('error');
+        }).finally(() => {
+          delete audioRef.current?.dataset.autoPlay;
         });
       } else {
         setPlaybackState('paused');
@@ -317,6 +337,7 @@ export function useProgressiveAudioPlayback() {
   }, [currentBook, playbackState, setPlaybackState]);
 
   // Update highest ready chapter periodically during progressive mode
+  // Also handles ambient hot-swap (Step 11)
   useEffect(() => {
     if (playbackMode !== 'progressive' || !currentBook) return;
     
@@ -330,17 +351,43 @@ export function useProgressiveAudioPlayback() {
       } catch (error) {
         console.error('Error checking chapter readiness:', error);
       }
+
+      // Step 11: Ambient hot-swap — check if chapter ambient is ready during progressive playback
+      if (currentSubChunk && ambientRef.current) {
+        try {
+          const chapterIndex = currentSubChunk.chapterIndex;
+          const expectedAmbientUrl = getChapterAmbientUrl(currentBook.title, chapterIndex);
+          const currentAmbientSrc = ambientRef.current.src || '';
+
+          // Only check if we haven't already loaded the chapter ambient
+          if (!currentAmbientSrc.includes(`/chapters/${chapterIndex}/ambient`)) {
+            const ready = await isAmbientReady(currentBook.title, chapterIndex);
+            if (ready) {
+              ambientRef.current.src = expectedAmbientUrl;
+              if (audioRef.current) {
+                ambientRef.current.currentTime = audioRef.current.currentTime;
+              }
+              ambientRef.current.volume = ambientEnabled ? ambientVolume : 0;
+              if (audioRef.current && !audioRef.current.paused && ambientEnabled) {
+                ambientRef.current.play().catch(() => { /* autoplay blocked */ });
+              }
+              console.log('🔊 Ambient upgraded to full soundscape');
+            }
+          }
+        } catch {
+          // Non-critical
+        }
+      }
     };
     
     // Check every 3 seconds during progressive playback
     const interval = setInterval(checkChapterReadiness, 3000);
     
     return () => clearInterval(interval);
-  }, [playbackMode, currentBook, highestReadyChapter, setHighestReadyChapter]);
+  }, [playbackMode, currentBook, highestReadyChapter, setHighestReadyChapter, currentSubChunk, ambientEnabled, ambientVolume]);
 
   // Load ambient track for a chapter (non-blocking)
-  const loadAmbientForChapter = useCallback(async (chapterIndex: number) => {
-    if (!currentBook || !ambientRef.current) return;
+  const loadAmbientForChapter = useCallback(async (chapterIndex: number) => {    if (!currentBook || !ambientRef.current) return;
     
     try {
       const ready = await isAmbientReady(currentBook.title, chapterIndex);
@@ -385,22 +432,24 @@ export function useProgressiveAudioPlayback() {
     
     if (playbackState === 'playing') {
       if (audio.src) {
-        audio.play().catch(err => {
-          console.error('Failed to play audio:', err);
-          setPlaybackState('paused');
-        });
+        // Only call play() if audio is actually paused (avoid AbortError from double-play)
+        if (audio.paused) {
+          audio.play().catch(err => {
+            // Ignore AbortError (caused by rapid play/pause or src changes)
+            if (err.name === 'AbortError') return;
+            console.error('Failed to play audio:', err);
+            setPlaybackState('paused');
+          });
+        }
         // Sync ambient
-        if (ambient?.src && ambientEnabled) {
+        if (ambient?.src && ambientEnabled && ambient.paused) {
           ambient.play().catch(() => { /* non-fatal */ });
         }
-      } else {
-        // No source loaded, start playback
-        if (playbackMode === 'progressive' && currentSubChunk) {
-          loadSubChunkAudio(currentSubChunk.chapterIndex, currentSubChunk.subChunkIndex, { autoPlay: true });
-        } else if (playbackMode === 'chapters' && currentChapter) {
-          loadChapterAudio(currentChapter.index);
-        }
+      } else if (playbackMode === 'chapters' && currentChapter) {
+        // Chapter mode: load chapter audio directly
+        loadChapterAudio(currentChapter.index);
       }
+      // Progressive mode with no src: handled by auto-start useEffect (polling)
     } else if (playbackState === 'paused') {
       audio.pause();
       if (ambient) ambient.pause();
@@ -447,6 +496,21 @@ export function useProgressiveAudioPlayback() {
     }
   }, [setCurrentSubChunk, loadSubChunkAudio, setPlaybackState]);
 
+  // Auto-start progressive playback when store signals progressive mode
+  const progressiveStartedRef = useRef(false);
+  useEffect(() => {
+    if (playbackMode === 'progressive' && currentBook && currentSubChunk && !progressiveStartedRef.current) {
+      // Check that audio hasn't been loaded yet (avoid re-triggering on re-renders)
+      if (!audioRef.current?.src) {
+        progressiveStartedRef.current = true;
+        console.log('🔄 Auto-starting progressive playback...');
+        startProgressivePlayback(currentBook, currentSubChunk);
+      }
+    } else if (playbackMode !== 'progressive') {
+      progressiveStartedRef.current = false;
+    }
+  }, [playbackMode, currentBook, currentSubChunk]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Cleanup cached blob URLs
   useEffect(() => {
     return () => {
@@ -461,5 +525,6 @@ export function useProgressiveAudioPlayback() {
     startProgressivePlayback,
     loadSubChunkAudio,
     loadChapterAudio,
+    soundscapeToast,
   };
 }

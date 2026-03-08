@@ -1307,7 +1307,8 @@ export function deleteAllTempChunks(bookTitle: string): number {
   }
   
   const files = fs.readdirSync(tempDir);
-  const chunkFiles = files.filter(f => f.match(/^chunk_\d{3}\.wav$/));
+  // Match both old format (chunk_001.wav) and new format (subchunk_001_000.wav)
+  const chunkFiles = files.filter(f => f.match(/^(chunk_\d{3}|subchunk_\d{3}_\d{3})\.wav$/));
   
   for (const file of chunkFiles) {
     fs.unlinkSync(path.join(tempDir, file));

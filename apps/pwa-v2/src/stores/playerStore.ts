@@ -243,11 +243,14 @@ export const usePlayerStore = create<PlayerStore>()(
       setHighestReadyChapter: (chapterIndex) => set({ highestReadyChapter: chapterIndex }),
       
       startProgressivePlayback: (book) => {
+        const firstChapter = book.chapters[0];
+        const firstChapterIndex = firstChapter?.index ?? 1;
         set({
           currentBook: book,
-          currentChapter: book.chapters[0] || null,
+          currentChapter: firstChapter || null,
           playbackMode: 'progressive',
-          currentSubChunk: { chapterIndex: 0, subChunkIndex: 0 },
+          playbackState: 'playing',
+          currentSubChunk: { chapterIndex: firstChapterIndex, subChunkIndex: 0 },
           highestReadyChapter: 0,
           isMiniPlayerVisible: true,
         });

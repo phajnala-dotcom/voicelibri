@@ -16,3 +16,4 @@ reset.ps1
 .env.example
 apps/backend/.env
 apps/backend/.gcsakey.json
+dist/

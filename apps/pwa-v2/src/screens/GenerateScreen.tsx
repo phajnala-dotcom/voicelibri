@@ -215,9 +215,9 @@ export function GenerateScreen() {
           author: result.author || 'Unknown Author',
           totalDuration: result._internal?.durationSeconds || 0,
           chapters: result.chapters.map((ch: any, i: number) => ({
-            id: `ch-${i}`,
+            id: `ch-${ch.index ?? i}`,
             title: ch.title,
-            index: i,
+            index: ch.index ?? i,
             start: 0,
             end: 0,
             duration: 0,

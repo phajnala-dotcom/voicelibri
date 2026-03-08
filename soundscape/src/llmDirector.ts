@@ -20,7 +20,7 @@
 
 import { GoogleAuth } from 'google-auth-library';
 import { SCENE_ANALYSIS_MODEL } from './config.js';
-import type { SceneAnalysis, BookInfo } from './types.js';
+import type { SceneAnalysis, SceneSegment, BookInfo } from './types.js';
 
 // ========================================
 // Gemini API setup
@@ -88,88 +88,152 @@ export async function analyzeChapterScene(
   bookInfo: BookInfo
 ): Promise<SceneAnalysis> {
   const prompt = `You are a sound designer for audiobooks. Read the chapter text below (which may be in ANY language) and:
-1. Determine the ambient environment, time of day, weather, mood, and intensity.
-2. Write ENGLISH search queries that describe the ambient soundscape of the chapter's setting.
-   - These queries will be used to search an English-language sound effects catalog.
-   - Write each query as a natural English description of what the scene SOUNDS like.
-   - Focus on: room tone, environmental ambience, weather sounds, nature sounds, urban/rural atmosphere, mechanical sounds, crowd noise, silence.
-   - Be specific and concrete: "quiet suburban living room with distant traffic" is better than "indoor scene".
-   - Write 3-8 search queries, each 1-2 sentences, covering different sound aspects of the scene.
-3. Identify short, discrete SOUND EFFECTS (SFX) that occur as one-shot events in the chapter.
-   - SFX are short sounds (1-10 seconds): door slamming, footsteps, glass breaking, clock ticking, owl hooting, etc.
-   - Write 0-4 English search queries describing specific SFX heard in the scene.
-   - Only include SFX if the text clearly describes specific sound-producing actions or events.
+
+1. Identify 1–6 distinct SCENE SEGMENTS where the ambient environment changes.
+   - First segment always starts at charIndex 0.
+   - Each subsequent segment marks where a new environment begins (e.g. moving from forest to castle).
+   - If the whole chapter stays in one environment, output exactly 1 segment.
+   - For each segment write ENGLISH search queries describing what that scene SOUNDS like.
+     Be specific and concrete: "quiet forest at dusk with distant owl hooting" is better than "nature".
+     Write 3–6 search queries per segment.
+
+2. Identify short, discrete SOUND EFFECTS (SFX) that occur as one-shot events in the chapter.
+   - SFX are short sounds (1–10 seconds): door slamming, footsteps, glass breaking, thunder, owl hooting, etc.
+   - For each SFX event, find the CHARACTER INDEX (0-based) in the chapter text where that sound naturally occurs.
+   - Include as many SFX events as the text naturally warrants.
+     Only include events where the text CLEARLY describes a specific sound-producing action.
+     No SFX is better than a poorly matched SFX.
+
+3. Extract chapter-level metadata: time of day, weather, mood, sound elements, intensity.
 
 Book genre: ${bookInfo.genre}
 Book tone: ${bookInfo.tone}
 Book period: ${bookInfo.period}
 
-Chapter text:
+Chapter text (character count: ${chapterText.length}):
 ---
 ${chapterText}
 ---
 
 Respond with a JSON object (no markdown, no code fences) with these exact fields:
 {
-  "environment": "primary setting (e.g. 'dense forest', 'medieval castle interior', 'busy city street', 'quiet bedroom')",
   "timeOfDay": "time of day (e.g. 'night', 'dawn', 'midday', 'dusk', 'unknown')",
   "weather": "weather if relevant (e.g. 'rain', 'storm', 'snow', 'clear', 'none')",
-  "moods": ["array", "of", "mood", "descriptors"],
+  "moods": ["dominant", "mood", "descriptors", "for", "chapter"],
   "soundElements": ["specific", "sounds", "mentioned", "in", "the", "text"],
   "intensity": 0.5,
-  "searchSnippets": ["English search query describing ambient sound of the scene", "another English search query"],
-  "sfxQueries": ["English search query describing a specific short sound effect", "another SFX query"]
+  "sceneSegments": [
+    {
+      "charIndex": 0,
+      "environment": "primary setting in English (e.g. 'dense forest', 'medieval castle interior', 'busy city street')",
+      "searchSnippets": ["English search query describing ambient sound of this scene", "another English query"],
+      "moods": ["mood", "descriptors", "for", "this", "segment"]
+    }
+  ],
+  "sfxEvents": [
+    {
+      "query": "English search query for SFX catalog (e.g. 'wooden door slamming shut')",
+      "charIndex": 1234,
+      "description": "brief description of the sound event"
+    }
+  ]
 }
 
 ALL fields must be in ENGLISH regardless of the chapter text language.
-- environment: the dominant physical setting (in English)
 - timeOfDay: when the scene takes place
 - weather: relevant weather or "none"
-- moods: 2-4 mood words in English (e.g. "tense", "peaceful", "eerie", "melancholic")
-- soundElements: 3-6 specific sounds mentioned or implied, in English (e.g. "crackling fire", "horse hooves", "wind")
+- moods: 2–4 mood words for the dominant chapter atmosphere
+- soundElements: 3–6 specific sounds mentioned or implied in the text
 - intensity: 0.0 (very quiet/calm) to 1.0 (very loud/intense)
-- searchSnippets: array of 3-8 ENGLISH search queries describing what the scene sounds like. These are used to find matching ambient recordings. Be specific: include the environment type, key sounds, and atmosphere. Example: "Interior room tone from a quiet suburban house with distant traffic and muffled television sounds".
-- sfxQueries: array of 0-4 ENGLISH search queries for short one-shot sound effects. These match against SFX catalog items like door sounds, footsteps, mechanical clicks, animal calls. Example: "owl hooting at night in the distance". Use empty array [] if no clear SFX events in the text.`;
+- sceneSegments: 1–6 ordered scene objects. FIRST MUST HAVE charIndex=0.
+    charIndex: 0-based character offset in the chapter text where this scene BEGINS. Must be strictly increasing.
+    environment: dominant physical setting in English.
+    searchSnippets: 3–6 ENGLISH queries describing what this environment SOUNDS like.
+    moods: 2–3 mood words for this segment.
+- sfxEvents: objects, each with:
+    query: ENGLISH search query for the SFX catalog (short, concrete)
+    charIndex: integer — 0-based character offset where this sound occurs. Must be >= 0 and <= ${chapterText.length}.
+    description: short English description of why the sound occurs.
+  Use empty array [] if no clear SFX events exist in the text.`;
 
   const responseText = await callGemini(prompt);
 
   try {
     const parsed = JSON.parse(responseText);
+    const textLen = chapterText.length;
 
-    // Ensure searchSnippets is a non-empty string array
-    let snippets: string[] = [];
-    if (Array.isArray(parsed.searchSnippets)) {
-      snippets = parsed.searchSnippets
-        .filter((s: unknown) => typeof s === 'string' && s.trim().length > 0)
-        .map((s: string) => s.trim());
-    }
-    // Fallback: if LLM returned old searchQuery format, use it as a single snippet
-    if (snippets.length === 0 && typeof parsed.searchQuery === 'string' && parsed.searchQuery.trim()) {
-      snippets = [parsed.searchQuery.trim()];
-    }
-    // Last resort: use soundElements joined
-    if (snippets.length === 0 && Array.isArray(parsed.soundElements) && parsed.soundElements.length > 0) {
-      snippets = [parsed.soundElements.join(', ')];
+    // Parse sceneSegments
+    let sceneSegments: SceneSegment[] = [];
+    if (Array.isArray(parsed.sceneSegments) && parsed.sceneSegments.length > 0) {
+      sceneSegments = parsed.sceneSegments
+        .filter((s: unknown) =>
+          s != null &&
+          typeof (s as any).environment === 'string' &&
+          Array.isArray((s as any).searchSnippets) &&
+          (s as any).searchSnippets.length > 0
+        )
+        .map((s: any) => ({
+          charIndex: typeof s.charIndex === 'number' ? Math.max(0, Math.min(Math.round(s.charIndex), textLen - 1)) : 0,
+          environment: String(s.environment).trim() || 'unknown',
+          searchSnippets: (s.searchSnippets as unknown[])
+            .filter((q) => typeof q === 'string' && (q as string).trim().length > 0)
+            .map((q) => (q as string).trim()),
+          moods: Array.isArray(s.moods) ? s.moods.filter((m: unknown) => typeof m === 'string') : [],
+        }));
+
+      // Ensure charIndexes are strictly increasing; first must be 0
+      if (sceneSegments.length > 0) {
+        sceneSegments[0].charIndex = 0;
+        for (let i = 1; i < sceneSegments.length; i++) {
+          if (sceneSegments[i].charIndex <= sceneSegments[i - 1].charIndex) {
+            sceneSegments[i].charIndex = sceneSegments[i - 1].charIndex + 1;
+          }
+        }
+      }
     }
 
-    // Parse SFX queries
-    let sfxQueries: string[] = [];
-    if (Array.isArray(parsed.sfxQueries)) {
-      sfxQueries = parsed.sfxQueries
-        .filter((s: unknown) => typeof s === 'string' && s.trim().length > 0)
-        .map((s: string) => s.trim());
+    // Fallback: if no sceneSegments, synthesise one from top-level fields
+    if (sceneSegments.length === 0) {
+      const snippets: string[] = [];
+      if (Array.isArray(parsed.searchSnippets)) {
+        snippets.push(...parsed.searchSnippets.filter((s: unknown) => typeof s === 'string' && (s as string).trim()));
+      }
+      if (snippets.length === 0 && Array.isArray(parsed.soundElements) && parsed.soundElements.length > 0) {
+        snippets.push(parsed.soundElements.join(', '));
+      }
+      sceneSegments = [{
+        charIndex: 0,
+        environment: typeof parsed.environment === 'string' ? parsed.environment.trim() : 'unknown',
+        searchSnippets: snippets.length > 0 ? snippets : [`${bookInfo.genre} ${bookInfo.tone} ambient background`],
+        moods: Array.isArray(parsed.moods) ? parsed.moods : [],
+      }];
+    }
+
+    // Parse sfxEvents
+    let sfxEvents: import('./types.js').SfxEvent[] = [];
+    if (Array.isArray(parsed.sfxEvents)) {
+      sfxEvents = parsed.sfxEvents
+        .filter((e: unknown) =>
+          e != null &&
+          typeof (e as any).query === 'string' && (e as any).query.trim().length > 0 &&
+          typeof (e as any).charIndex === 'number'
+        )
+        .map((e: any) => ({
+          query: String(e.query).trim(),
+          charIndex: Math.max(0, Math.min(Math.round(e.charIndex), textLen - 1)),
+          description: typeof e.description === 'string' ? e.description.trim() : e.query.trim(),
+        }));
     }
 
     return {
       chapterIndex,
-      environment: parsed.environment || 'unknown',
       timeOfDay: parsed.timeOfDay || 'unknown',
       weather: parsed.weather || 'none',
       moods: Array.isArray(parsed.moods) ? parsed.moods : [],
       soundElements: Array.isArray(parsed.soundElements) ? parsed.soundElements : [],
       intensity: typeof parsed.intensity === 'number' ? Math.max(0, Math.min(1, parsed.intensity)) : 0.5,
-      searchSnippets: snippets,
-      sfxQueries,
+      sceneSegments,
+      sfxEvents,
     };
   } catch (parseError) {
     console.warn(`⚠️ Failed to parse scene analysis for chapter ${chapterIndex}, using fallback`);
@@ -200,7 +264,7 @@ export async function analyzeAllChapters(
       console.log(`🎬 Analyzing scene for chapter ${ch.index}...`);
       const scene = await analyzeChapterScene(ch.index, ch.text, bookInfo);
       results.push(scene);
-      console.log(`  ✓ ${scene.environment} | ${scene.timeOfDay} | ${scene.weather} | intensity=${scene.intensity}`);
+      console.log(`  ✓ ${scene.sceneSegments[0]?.environment ?? 'unknown'} | ${scene.timeOfDay} | ${scene.weather} | intensity=${scene.intensity} | segments=${scene.sceneSegments.length}`);
     } catch (err) {
       console.warn(`⚠️ Scene analysis failed for chapter ${ch.index}, using fallback:`, err);
       results.push(buildFallbackScene(ch.index, ch.text, bookInfo));
@@ -261,23 +325,26 @@ export function buildFallbackScene(
     }
   }
 
-  // Limit to 5 sound elements
   const elements = soundElements.slice(0, 5);
-
-  // Build English search queries from detected elements
   const searchSnippets = elements.length > 0
     ? [`${environment} ambient with ${elements.join(', ')}`]
     : [`${bookInfo.genre} ${bookInfo.tone} ambient background`];
 
+  const moods = [bookInfo.tone || 'neutral'];
+
   return {
     chapterIndex,
-    environment,
     timeOfDay: lower.includes('night') || lower.includes('midnight') ? 'night' : 'unknown',
     weather: lower.includes('rain') ? 'rain' : lower.includes('storm') ? 'storm' : 'none',
-    moods: [bookInfo.tone || 'neutral'],
+    moods,
     soundElements: elements,
     intensity: 0.5,
-    searchSnippets,
-    sfxQueries: [], // No SFX in fallback mode
+    sceneSegments: [{
+      charIndex: 0,
+      environment,
+      searchSnippets,
+      moods,
+    }],
+    sfxEvents: [], // No SFX events in fallback mode (no charIndex data available)
   };
 }
