@@ -15,3 +15,7 @@ reset.ps1
 .env.example
 apps/backend/.env
 apps/backend/.gcsakey.json
+
+# Consultation mirror - generated output
+mirror/output/
+mirror/discussions/
