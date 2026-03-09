@@ -87,6 +87,49 @@ Ak Gemini session key nevie, súbor sa nenačítal — treba:
 
 ---
 
+## Video konzultácia (nahrávaná práca s aplikáciou)
+
+Okrem kontextového súboru ti môžem poskytnúť aj **video nahrávky**
+z používania VoiceLibri aplikácie (screen recording + audio).
+
+Videá sa nachádzajú na Google Drive v priečinku
+`VoiceLibri/consultation-mirror/videos/`.
+
+### Inštrukcia pre video session
+
+```
+Nahral som ti video z mojej práce s VoiceLibri aplikáciou.
+Pozri si ho celé a potom mi povedz:
+
+1. Čo presne sa deje vo videu — aký workflow sleduješ?
+2. Aké UX problémy alebo neefektívnosti vidíš?
+3. Kde dochádza k chybám alebo neočakávanému správaniu?
+4. Čo by si navrhol zlepšiť?
+
+Pri odpovedi odkazuj na konkrétne časové značky vo videu
+(napr. "v 0:23 vidím, že...").
+```
+
+### Čo nahrávať
+
+| Scenár | Čo sledovať |
+|--------|------------|
+| **Generovanie audiobooku** | Pipeline flow, progress UI, chybové stavy |
+| **Prehrávanie audiobooku** | Player UX, loading, controls, transitions |
+| **Prehliadanie knižnice** | Navigation, knihy list, detail view |
+| **Upload ebooku** | File picker, spracovanie, error handling |
+| **Nastavenia** | Voice selection, jazyk, konfigurácia |
+| **Celkový workflow** | End-to-end: upload → generate → play |
+
+### Formát videa
+
+- **Preferovaný:** MP4 (H.264) — najlepšia kompatibilita s Gemini
+- **Max. dĺžka:** ~10 min na video (Gemini spracuje aj dlhšie, ale kratšie = lepšia analýza)
+- **Audio:** Zapni narátovanie — opisuj čo robíš a čo očakávaš
+- **Rozlíšenie:** Min. 720p, ideálne 1080p
+
+---
+
 ## Záver konzultácie
 
 Na konci konzultácie povedz:

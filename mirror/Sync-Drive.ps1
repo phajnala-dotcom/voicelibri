@@ -95,8 +95,17 @@ Write-Host "  Files:       $($files.Count)"
 Write-Host ""
 
 # Sync files to Drive
-Write-Host "Uploading to Google Drive..." -ForegroundColor Yellow
+Write-Host "Uploading context files to Google Drive..." -ForegroundColor Yellow
 rclone sync $SourceDir "${RemoteName}:${DriveFolderPath}" --progress --transfers 4
+
+# Sync videos if they exist
+$mirrorDir = Split-Path $SourceDir -Parent
+$videosDir = Join-Path $mirrorDir "videos"
+if ((Test-Path $videosDir) -and ((Get-ChildItem -Path $videosDir -File -Recurse).Count -gt 0)) {
+    Write-Host ""
+    Write-Host "Uploading video recordings..." -ForegroundColor Yellow
+    rclone sync $videosDir "${RemoteName}:${DriveFolderPath}/videos" --progress --transfers 2
+}
 
 if ($LASTEXITCODE -eq 0) {
     Write-Host ""

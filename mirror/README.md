@@ -72,9 +72,68 @@ mirror/
 ├── output/                       # (gitignored) Generované súbory
 │   ├── VOICELIBRI_CONTEXT.md
 │   └── GEMINI_INSTRUCTION_SK.md
-└── discussions/                  # (gitignored) Výstupy konzultácií
-    └── YYYY-MM-DD_topic.md
+├── discussions/                  # (gitignored) Výstupy konzultácií
+│   └── YYYY-MM-DD_topic.md
+└── videos/                       # (gitignored) Screen recordings z mobilnej app
+    └── YYYY-MM-DD_scenario.mp4
 ```
+
+## Video konzultácia (pripravené pre budúcnosť)
+
+Okrem textového kontextu systém podporuje aj **video nahrávky** z používania
+aplikácie, ktoré Gemini dokáže analyzovať.
+
+### Workflow
+
+```
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│  Mobile app  │────▶│  Screen      │────▶│  Google      │
+│  (VoiceLibri)│     │  Recording   │     │  Drive       │
+└──────────────┘     │  + Audio     │     │  /videos/    │
+                     └──────────────┘     └──────┬───────┘
+                                                 │
+                                                 ▼
+                     ┌──────────────┐     ┌──────────────┐
+                     │  GitHub      │◀────│  Gemini Live │
+                     │  Issues      │     │  (video +    │
+                     └──────────────┘     │   context)   │
+                                          └──────────────┘
+```
+
+### Ako nahrávať
+
+1. **Na iPhone/Android:** Zapni natívny screen recording
+2. **Komentuj** nahlas čo robíš a čo očakávaš (audio ide do nahrávky)
+3. **Zameraj sa** na jeden scenár per video (~5-10 min)
+4. **Ulož** ako MP4 do `mirror/videos/` alebo priamo na Google Drive
+
+### Odporúčané scenáre
+
+| Scenár | Popis |
+|--------|-------|
+| Generovanie audiobooku | Upload → dramatizácia → TTS → výsledok |
+| Prehrávanie | Player UI, controls, chapters, quality |
+| Knižnica | Browsing, search, detail |
+| Error states | Čo sa stane pri chybách, offline, timeout |
+
+### Použitie v konzultácii
+
+```powershell
+# Nahraj videá na Drive (manuálne alebo cez sync)
+.\Sync-Mirror.ps1           # Nahrá aj /videos/ ak existuje
+
+# V Gemini Live session:
+# "Pozri si video z môjho Drive v VoiceLibri/consultation-mirror/videos/"
+```
+
+Gemini analyzuje video a dokáže identifikovať UX problémy, workflow
+neefektívnosti, chybové stavy, a navrhnúť konkrétne zlepšenia
+s odkazmi na časové značky.
+
+> **Poznámka:** Videá nie sú commitované do gitu (gitignored).
+> Ukladajú sa lokálne alebo priamo na Google Drive.
+
+---
 
 ## Skripty — detaily
 

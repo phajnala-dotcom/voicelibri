@@ -76,6 +76,24 @@ if (Test-Path $templateSrc) {
     }
 }
 
+# Ensure videos directory exists (gitignored, for screen recordings)
+$videosDir = Join-Path $mirrorDir "videos"
+if (-not (Test-Path $videosDir)) {
+    New-Item -ItemType Directory -Path $videosDir -Force | Out-Null
+}
+
+# Check for videos to upload
+if (Test-Path $videosDir) {
+    $videoFiles = Get-ChildItem -Path $videosDir -File -Include *.mp4,*.mov,*.webm -Recurse
+    if ($videoFiles.Count -gt 0) {
+        Write-Host "  Found $($videoFiles.Count) video(s) for upload:" -ForegroundColor Cyan
+        foreach ($v in $videoFiles) {
+            $sizeMB = [math]::Round($v.Length / 1MB, 1)
+            Write-Host "    - $($v.Name) (${sizeMB} MB)" -ForegroundColor Gray
+        }
+    }
+}
+
 $outputFiles = Get-ChildItem -Path $outputDir -File
 Write-Host "  Output directory contains $($outputFiles.Count) file(s):" -ForegroundColor Cyan
 foreach ($f in $outputFiles) {

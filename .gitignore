@@ -16,6 +16,7 @@ reset.ps1
 apps/backend/.env
 apps/backend/.gcsakey.json
 
-# Consultation mirror - generated output
+# Consultation mirror - generated output & media
 mirror/output/
 mirror/discussions/
+mirror/videos/
