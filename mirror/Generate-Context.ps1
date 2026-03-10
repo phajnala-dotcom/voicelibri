@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    VoiceLibri Consultation Mirror — Context Snapshot Generator
+    VoiceLibri Consultation Mirror - Context Snapshot Generator
     Generates a single comprehensive Markdown file from key source files
     for use with Gemini Live voice consultation and NotebookLM.
 
@@ -72,7 +72,7 @@ $gitCommitDate = git -C $RepoRoot log -1 --format="%ci" 2>$null
 if (-not $gitCommitDate) { $gitCommitDate = "unknown" }
 
 # ============================================================================
-# KEY FILES SELECTION — Curated list of architecturally important files
+# KEY FILES SELECTION - Curated list of architecturally important files
 # ============================================================================
 
 # Categories with relative paths from repo root

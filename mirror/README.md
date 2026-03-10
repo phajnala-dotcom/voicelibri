@@ -75,7 +75,7 @@ mirror/
 ├── discussions/                  # (gitignored) Výstupy konzultácií
 │   └── YYYY-MM-DD_topic.md
 └── videos/                       # (gitignored) Screen recordings z mobilnej app
-    └── YYYY-MM-DD_scenario.mp4
+    └── YYYY-MM-DD_scenario.mov    # alebo .mp4, .webm, etc.
 ```
 
 ## Video konzultácia (pripravené pre budúcnosť)
@@ -102,10 +102,13 @@ aplikácie, ktoré Gemini dokáže analyzovať.
 
 ### Ako nahrávať
 
-1. **Na iPhone/Android:** Zapni natívny screen recording
+1. **Na iPhone/Android:** Zapni natívny screen recording (MOV na iPhone, MP4 na Android — oba fungujú)
 2. **Komentuj** nahlas čo robíš a čo očakávaš (audio ide do nahrávky)
-3. **Zameraj sa** na jeden scenár per video (~5-10 min)
-4. **Ulož** ako MP4 do `mirror/videos/` alebo priamo na Google Drive
+3. **Zameraj sa** na jeden scenár per video (5-15 min, max 1 hodina)
+4. **Ulož** do `mirror/videos/` alebo priamo na Google Drive
+
+> Gemini podporuje: MOV, MP4, WebM, AVI, MPEG, WMV, FLV, 3GPP.
+> **Žiadna konverzia nie je potrebná** — iPhone MOV/HEVC funguje priamo.
 
 ### Odporúčané scenáre
 

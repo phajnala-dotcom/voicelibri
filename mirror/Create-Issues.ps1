@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    VoiceLibri — GitHub Issue Creator from Gemini Consultation Outputs
+    VoiceLibri - GitHub Issue Creator from Gemini Consultation Outputs
 
 .DESCRIPTION
     Parses structured discussion output files (Markdown) from mirror/discussions/
@@ -35,15 +35,15 @@ $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = Split-Path -Parent $ScriptDir
 $DiscussionsDir = Join-Path $ScriptDir "discussions"
 
-# ── Helpers ──────────────────────────────────────────────────────────────────
+# -- Helpers ----------------------------------------------------------------
 
 function Write-Status($icon, $msg) { Write-Host "$icon $msg" }
-function Write-Ok($msg) { Write-Status "✓" $msg }
-function Write-Info($msg) { Write-Status "•" $msg }
-function Write-Warn($msg) { Write-Status "⚠" $msg }
-function Write-Err($msg) { Write-Status "✗" $msg }
+function Write-Ok($msg) { Write-Status "[OK]" $msg }
+function Write-Info($msg) { Write-Status "[..]" $msg }
+function Write-Warn($msg) { Write-Status "[!!]" $msg }
+function Write-Err($msg) { Write-Status "[XX]" $msg }
 
-# ── Prerequisite Check ───────────────────────────────────────────────────────
+# -- Prerequisite Check -----------------------------------------------------
 
 function Test-Prerequisites {
     if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
@@ -219,10 +219,10 @@ function Get-IssueTitle {
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 Write-Host ""
-Write-Host "╔══════════════════════════════════════════════════════╗"
-Write-Host "║  VoiceLibri — GitHub Issue Creator                   ║"
-Write-Host "║  From Gemini Consultation Outputs                    ║"
-Write-Host "╚══════════════════════════════════════════════════════╝"
+Write-Host "========================================================"
+Write-Host "  VoiceLibri - GitHub Issue Creator                     "
+Write-Host "  From Gemini Consultation Outputs                     "
+Write-Host "========================================================"
 Write-Host ""
 
 if (-not $DryRun) {
@@ -257,7 +257,7 @@ if ($InputFile) {
 }
 
 Write-Info "Files to process: $($filesToProcess.Count)"
-if ($DryRun) { Write-Warn "DRY RUN — no issues will be created" }
+if ($DryRun) { Write-Warn "DRY RUN - no issues will be created" }
 Write-Host ""
 
 $totalCreated = 0
@@ -265,7 +265,7 @@ $totalSkipped = 0
 
 foreach ($file in $filesToProcess) {
     $fileName = Split-Path -Leaf $file
-    Write-Host "── Processing: $fileName ──" -ForegroundColor Cyan
+    Write-Host "-- Processing: $fileName --" -ForegroundColor Cyan
 
     $parsed = Parse-DiscussionFile -FilePath $file
 
@@ -324,7 +324,7 @@ foreach ($file in $filesToProcess) {
 }
 
 # Summary
-Write-Host "── Summary ──" -ForegroundColor Cyan
+Write-Host "-- Summary --" -ForegroundColor Cyan
 if ($DryRun) {
     Write-Info "DRY RUN complete. $totalSkipped issues would be created."
 } else {

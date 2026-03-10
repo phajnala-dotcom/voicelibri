@@ -123,8 +123,22 @@ Pri odpovedi odkazuj na konkrétne časové značky vo videu
 
 ### Formát videa
 
-- **Preferovaný:** MP4 (H.264) — najlepšia kompatibilita s Gemini
-- **Max. dĺžka:** ~10 min na video (Gemini spracuje aj dlhšie, ale kratšie = lepšia analýza)
+Gemini podporuje tieto formáty (podľa oficiálnej dokumentácie Google):
+
+| Formát | MIME typ | Poznámka |
+|--------|----------|----------|
+| **MOV** | video/mov | iPhone natívny formát — funguje priamo |
+| **MP4** | video/mp4 | Univerzálny |
+| **WebM** | video/webm | Web formát |
+| **AVI** | video/avi | Windows |
+| **MPEG/MPG** | video/mpeg, video/mpg | Starší formát |
+| **WMV** | video/wmv | Windows Media |
+| **FLV** | video/x-flv | Flash |
+| **3GPP** | video/3gpp | Mobilný |
+
+- **iPhone 16 Pro:** Nahrávaj priamo, MOV/HEVC funguje bez konverzie
+- **Max. dĺžka:** Do 1 hodiny (1M context modely), odporúčané 5-15 min pre detailnú analýzu
+- **Max. veľkosť:** 2 GB (free) / 20 GB (paid)
 - **Audio:** Zapni narátovanie — opisuj čo robíš a čo očakávaš
 - **Rozlíšenie:** Min. 720p, ideálne 1080p
 

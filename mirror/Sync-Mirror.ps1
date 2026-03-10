@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Master sync script — generates context snapshot, uploads to Google Drive,
+    Master sync script - generates context snapshot, uploads to Google Drive,
     and optionally pushes to a GitHub mini-repo.
 
 .DESCRIPTION
@@ -37,7 +37,7 @@ $outputDir = Join-Path $mirrorDir "output"
 
 Write-Host ""
 Write-Host "================================================" -ForegroundColor Magenta
-Write-Host " VoiceLibri Consultation Mirror — Full Sync" -ForegroundColor Magenta
+Write-Host " VoiceLibri Consultation Mirror - Full Sync" -ForegroundColor Magenta
 Write-Host "================================================" -ForegroundColor Magenta
 Write-Host ""
 
@@ -67,7 +67,7 @@ if (Test-Path $geminiInstruction) {
 }
 
 # Copy discussion output template if not already in output
-$templateSrc = Join-Path $mirrorDir "templates" "DISCUSSION_OUTPUT_TEMPLATE.md"
+$templateSrc = Join-Path (Join-Path $mirrorDir "templates") "DISCUSSION_OUTPUT_TEMPLATE.md"
 if (Test-Path $templateSrc) {
     $templateDest = Join-Path $outputDir "DISCUSSION_OUTPUT_TEMPLATE.md"
     if (-not (Test-Path $templateDest)) {
@@ -84,7 +84,7 @@ if (-not (Test-Path $videosDir)) {
 
 # Check for videos to upload
 if (Test-Path $videosDir) {
-    $videoFiles = Get-ChildItem -Path $videosDir -File -Include *.mp4,*.mov,*.webm -Recurse
+    $videoFiles = Get-ChildItem -Path $videosDir -File -Include *.mp4,*.mov,*.webm,*.avi,*.mpeg,*.mpg,*.wmv,*.flv,*.3gpp -Recurse
     if ($videoFiles.Count -gt 0) {
         Write-Host "  Found $($videoFiles.Count) video(s) for upload:" -ForegroundColor Cyan
         foreach ($v in $videoFiles) {
@@ -103,7 +103,7 @@ foreach ($f in $outputFiles) {
 
 if ($GenerateOnly) {
     Write-Host ""
-    Write-Host "GenerateOnly mode — skipping uploads." -ForegroundColor Yellow
+    Write-Host "GenerateOnly mode - skipping uploads." -ForegroundColor Yellow
     Write-Host "Output: $outputDir" -ForegroundColor Green
     exit 0
 }
