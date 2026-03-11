@@ -1,0 +1,412 @@
+Komplexný architektonický rámec pre neurálnu syntézu soundscapov a sémantické vyhľadávanie zvukových asiet v literárnej produkcii VoiceLibri
+Integrácia pohlcujúcich zvukových prostredí do literárnej konzumácie predstavuje v súčasnosti zásadný posun v tom, ako je naratívny obsah vnímaný a spracovávaný ľudským mozgom. V kontexte digitálneho publikovania v roku 2026 už nestačí len jednoduchý prevod textu na reč (TTS). Moderný poslucháč vyžaduje plne realizované kinematické audioknihy, ktoré využívajú sofistikovanú orchestráciu ambientných textúr, foley zvukov a hudobných motívov. Súčasné systémové zlyhania v generovaní soundscapov v module VoiceLibri – konkrétne pretrvávanie nerelevantných asiet a nízka hustota zvukových efektov (SFX) napriek prítomnosti explicitných naratívnych háčikov (hooks) – pramenia z hlbokého nesúladu medzi sémantickou hĺbkou zdrojového textu a vyhľadávacími mechanizmami, ktoré riadia výber asiet. Nasledujúca analýza predkladá komplexný rámec na zvýšenie tematickej presnosti a bohatosti soundscapu, pričom využíva rozsiahlu knižnicu 20 000 zvukov prostredníctvom pokročilého neurálneho zarovnania (embedding alignment) a algoritmických mixážnych protokolov určených pre agentov v prostredí VS Code.
+
+Teoretické základy a psychológia pohlcujúceho zvuku v literatúre
+Psychologický vplyv zvukových kulís na poslucháča je hlboký a presahuje rámec čistej zábavy. Ovplyvňuje kognitívnu záťaž, emocionálne zapojenie a dlhodobé uchovanie informácií. Empirické dôkazy naznačujú, že kontextuálne zvolená hudba v pozadí a zvukové efekty môžu výrazne zvýšiť úroveň pozornosti a ponorenia sa do deja. Výskum využívajúci elektroencefalografiu (EEG) naznačuje, že prítomnosť hudby v pozadí koreluje so zvýšenými procesmi pozornosti v porovnaní s tichým rozprávaním, a to bez ohľadu na tempo hudby. To naznačuje, že primárnou úlohou soundscapu je ukotviť pozornosť poslucháča v naratívnom svete.   
+
+Štúdie uskutočnené v spolupráci s akademickými inštitúciami preukázali, že študenti konzumujúci „zvukovo obohatenú“ literatúru vykazujú vyššiu retenciu detailov a hlbšie pochopenie materiálu. Tento jav sa pripisuje teórii excitácie (arousal theory), kde auditívne stimuly poskytujú potrebný emocionálny náboj, vďaka čomu sú informácie zapamätateľnejšie. Existuje však kritické varovanie: princíp koherencie v multimediálnom učení uvádza, že nerelevantné alebo nesprávne zvolené zvuky môžu kognitívny proces brzdiť vytvorením nadbytočnej kognitívnej záťaže. Pre VoiceLibri to znamená, že tematická presnosť nie je len estetickou voľbou, ale kognitívnou nevyhnutnosťou.   
+
+Definícia naratívnych háčikov a ich význam pre automatizáciu
+V profesionálnom zvukovom dizajne je „háčik“ (hook) explicitný alebo implicitný spúšťač v texte, ktorý naznačuje špecifickú zvukovú udalosť. Napríklad veta opisujúca „ťažké dvere zabuchujúce sa v kamennej chodbe“ obsahuje viacero vrstiev údajov: subjekt (dvere), akciu (zabuchnutie) a prostredie (kamenná chodba). Súčasné automatizované systémy často zlyhávajú pri extrakcii týchto viacvrstvových detailov, čo vedie k generickým a chudobným výstupom. Cieľom moderného modulu soundscape je transformovať tieto literárne markery na detailný „zvukový plán“.   
+
+Kategória zvuku	Rola v naratívnom ponorení	Primárny spúšťač extrakcie
+Ambiencia	Stanovuje základnú náladu a priestorové nastavenie.	Opis lokality (napr. „temný les“).
+Foley	Zvyšuje realizmus prostredníctvom akcií postáv.	Slovesá pohybu (napr. „kroky na štrku“).
+Špecifické SFX	Punktuuje kľúčové udalosti alebo náhle zmeny.	Akčné háčiky (napr. „rozbitie skla“).
+Hudobné témy	Nastavuje žánrový a emocionálny tón segmentu.	Metadáta žánru a emocionálne kľúčové slová.
+Prechod od tradičného čítania jedným narátorom k kinematickej produkcii vyžaduje systematickú identifikáciu týchto kategórií priamo v zdrojovom texte. Súčasný problém VoiceLibri, kde je soundscape „chudobný“ napriek bohatosti textu, je výsledkom nízkej citlivosti extrakčného algoritmu na tieto háčiky.   
+
+Sémantická extrakcia: LLM ako inteligentný režisér zvuku
+Prvým krokom k zvýšeniu bohatosti soundscapu je implementácia pokročilej sémantickej extrakčnej vrstvy. Veľké jazykové modely (LLM) preukázali pozoruhodnú schopnosť extrakcie informácií v režime zero-shot a few-shot, čo ich robí ideálnymi na identifikáciu zvukových háčikov v komplexnej próze. Na rozdiel od jednoduchého párovania kľúčových slov dokážu LLM vykonávať „ko-reasoning“ medzi textovým kontextom a akustickými požiadavkami.   
+
+Metodológia extrakcie háčikov pomocou Prompt Engineeringu
+Na dosiahnutie vysokej hustoty SFX musí byť LLM inštruovaný, aby fungoval ako „filmový režisér“ alebo „majster zvuku“. Tento proces zahŕňa rozklad naratívnych segmentov na štyri piliere: subjekt, akcia, deskriptory a prostredie. Napríklad jednoduchý prompt pre „kroky“ môže vygenerovať generický zvuk, zatiaľ čo štruktúrovaný prompt zameraný na „pomalé, čvachtavé kroky ťažkých kožených čižiem v hustom blate“ poskytuje špecifické akustické parametre potrebné pre vysokoverné vyhľadávanie v knižnici.   
+
+Proces extrakcie možno optimalizovať pomocou techník Applied Prompt Engineering (APE) a Instruction Prompt Calibration (IPC). Tieto techniky zahŕňajú automatickú optimalizáciu promptov tak, aby LLM konzistentne identifikoval najhodnotnejšie háčiky. Výpočet skóre konzistencie naprieč viacerými výstupmi LLM umožňuje systému určiť, ktoré zvukové udalosti sú pre scénu najkritickejšie.   
+
+Pilier extrakcie	Funkcia v systéme VoiceLibri	Požiadavka na LLM
+Subjekt	Identifikuje zdroj zvuku.	Rozpoznávanie entít (Podstatné meno).
+Akcia	Určuje kinetickú povahu zvuku.	Extrakcia slovies (Akcia).
+Deskriptory	Poskytuje informácie o timbri a intenzite.	Analýza prídavných mien a prísloviek.
+Prostredie	Definuje profil dozvuku a ambientný profil.	Kontextuálna analýza scény.
+Využitím uvažovania založeného na LLM môže systém VoiceLibri identifikovať aj jemné háčiky, ktoré by tradičné NLP vynechalo, ako napríklad „slabý šelest otáčaných stránok“ alebo „vzdialené hučanie mesta“, ktoré ukotvujú scénu v realite.   
+
+Neurálne vyhľadávanie zvuku: CLAP a vektorové databázy
+Po extrakcii sémantických háčikov musí systém vyhľadať najrelevantnejšie asety z knižnice 20 000 súborov. Tradičné vyhľadávanie založené na metadátach je v audio produkcii úzkym hrdlom, pretože ľudské tagy sú často neúplné alebo postrádajú nuansy prirodzeného jazyka. Moderným riešením je preklenutie tejto „sémantickej priepasti“ pomocou modelu Contrastive Language-Audio Pre-training (CLAP).   
+
+Architektúra CLAP a spoločný embedding priestor
+CLAP je multimodálny rámec, ktorý sa učí mapovať zvuk aj text do spoločného vysokodimenzionálneho priestoru embeddingov. Skladá sa z dvoch samostatných kódovačov – zvukového (zvyčajne využívajúceho CNN alebo Transformer architektúry) a textového (zvyčajne založeného na modeli BERT).   
+
+Matematickým cieľom CLAP je maximalizovať kosínusovú podobnosť medzi embeddingmi zodpovedajúcich párov zvuk-text a minimalizovať ju pre nezhodné páry. Podobnosť je definovaná vzorcom:   
+
+CLAPScore= 
+∥A∥∥T∥
+A⋅T
+​
+ 
+Kde A predstavuje zvukový embedding a T textový embedding. Tento prístup umožňuje vyhľadávanie bez potreby manuálnych tagov; systém môže na dopyt „melancholický klavír so vzdialeným dažďom“ nájsť najbližšiu zhodu vo vektorovom priestore, aj keď tieto presné slová nie sú v metadátach súboru.   
+
+Škálovateľné vyhľadávanie s vektorovými databázami
+Pre správu knižnice s 20 000+ súbormi s odozvou v milisekundách musia byť embeddingy uložené v špecializovanej vektorovej databáze, ako sú Qdrant, Milvus alebo Chroma. Tieto databázy využívajú pokročilé indexovacie algoritmy ako HNSW (Hierarchical Navigable Small World) na vykonávanie rýchleho vyhľadávania približných najbližších susedov (ANN).   
+
+Vlastnosť databázy	Výhoda pre VoiceLibri	Príklad implementácie
+Vysokodimenzionálne úložisko	Uchováva 512- alebo 1024-dimenzionálne vektory.	
+Qdrant, Pinecone.
+
+Filtrovanie metadát	Umožňuje kombinovať vektorové vyhľadávanie s filtrami (napr. len „stereo“).	
+Milvus, Zilliz.
+
+Rýchlosť vyhľadávania	Milisekundová odozva aj pri desiatkach tisíc súborov.	
+Index HNSW.
+
+CRUD operácie	Jednoduchá aktualizácia a správa zvukovej knižnice.	
+ChromaDB.
+
+  
+Kombináciou CLAPu s vektorovou databázou sa modul soundscapu VoiceLibri posunie od „málo relevantných“ výsledkov k vysokej tematickej presnosti porovnaním „akustickej DNA“ zvukov so „sémantickým zámerom“ textu.   
+
+Zvyšovanie bohatosti soundscapu prostredníctvom vrstvenia a syntézy
+Bohatosť soundscapu sa nedosahuje jedným zvukovým súborom, ale strategickým vrstvením viacerých prvkov. Súčasný výstup VoiceLibri je „chudobný“ pravdepodobne preto, že so soundscapom narába ako s lineárnou sekvenciou namiesto viacvrstvovej kompozície.
+
+Logika dynamického vrstvenia
+Robustný soundscape vyžaduje súčasné prehrávanie aspoň troch vrstiev: základnej ambientnej „postele“, strednej vrstvy lokalizovaných foley/SFX zvukov a hornej vrstvy občasných hudobných akcentov. V prostredí Python poskytujú knižnice ako Pydub, Soundscapy a MoviePy programovú infraštruktúru na prekrývanie týchto súborov s presnými časovými posunmi.   
+
+Jedným z najúčinnejších spôsobov zvýšenia bohatosti je použitie „zvukových objektov“. Namiesto jedného dlhého súboru lesa by mal systém vrstviť základný zvuk vetra s náhodne generovanými zvukmi vtákov, šuchotom lístia a vzdialeným potokom. Tento granulárny prístup umožňuje vyššiu variabilitu a zabraňuje tomu, aby sa slučka stala repetitívnou.   
+
+Generatívna AI pre vypĺňanie medzier v knižnici
+V prípadoch, keď knižnica 20 000 zvukov neobsahuje špecifický alebo unikátny zvuk (napr. „futuristický laser prerezávajúci mokré drevo“), môžu medzery vyplniť generatívne modely ako Adobe Firefly, FALL-E alebo CassetteAI. Tieto modely dokážu vygenerovať vysokoverné audio z textových promptov v priebehu sekúnd, čím zabezpečia, že žiadny háčik v texte nezostane bez zvukovej odozvy. Model FALL-E od Gaudio Lab bol napríklad úspešne použitý na vytvorenie unikátnych zvukových objektov pre trilery, čím sa dosiahla kvalita nerozoznateľná od štúdiových nahrávok.   
+
+Algoritmická mixáž a psychoakustická čistota
+Bežným problémom automatizovaného generovania soundscapov je „zahmlenie“ (muddiness) – prekrývanie frekvencií, ktoré sťažuje zrozumiteľnosť hlasu narátora. Riešením pre VoiceLibri je implementácia profesionálnych mixážnych techník, ako sú „frekvenčné vyrezávanie“ (frequency carving) a „automatizovaný ducking“.
+
+Frekvenčné vyrezávanie pre zrozumiteľnosť hlasu
+Frekvenčné vyrezávanie je proces použitia ekvalizácie (EQ) na vytvorenie „akustického priestoru“ pre každý prvok. V kinematickom mixe hlas narátora zvyčajne dominuje v strednom pásme (približne 200 Hz až 5 kHz). Aplikovaním jemného útlmu v hudbe a ambiencii presne v týchto frekvenciách systém zabezpečí, že hlas zostane čistý bez toho, aby sa musela drasticky znižovať celková hlasitosť soundscapu.   
+
+Prvok mixu	Prioritné frekvencie	Odporúčaná EQ akcia
+Dialóg / Narácia	200 Hz - 5 kHz	Chránené pásmo; bez útlmu.
+Ambiencia	< 200 Hz (Basy) & > 8 kHz (Vzduch)	
+Low-pass a High-pass filtre.
+
+SFX / Foley	Závisí od subjektu.	Úzky bandpass filter na elimináciu konfliktov.
+Hudba v pozadí	Celé spektrum	
+„Diera“ na úrovni 1-3 kHz pre hlas.
+
+  
+Tento proces možno automatizovať pomocou knižníc SciPy a Librosa, ktoré umožňujú spektrálnu analýzu v reálnom čase a dynamickú aplikáciu filtrov. Výpočtom spektrálneho centroidu hlasu narátora môže systém dynamicky prispôsobovať EQ hudby v pozadí.   
+
+Automatizovaný ducking a dynamika
+Aby si soundscape zachoval naratívny dopad, musí reagovať na prítomnosť hlasu. „Ducking“ je technika, pri ktorej sa hlasitosť audia v pozadí zníži vždy, keď narátor hovorí. Pokročilejší prístup zahŕňa „frekvenčne citlivý ducking“, kde sa tlmia len konkurenčné frekvencie, čo umožňuje, aby energia a rytmus hudby pretrvávali aj počas reči.   
+
+Parameter duckingu	Odporúčaná hodnota	Účel
+Hĺbka útlmu	-3 dB až -6 dB	Jemné zníženie na zachovanie energie.
+Attack (Nástup)	50 ms - 100 ms	Plynulé stlmenie pred začiatkom reči.
+Release (Uvoľnenie)	200 ms - 500 ms	Prirodzený návrat hlasitosti po skončení vety.
+Threshold (Prah)	-30 dBFS	Citlivosť na detekciu hlasu narátora.
+Systém by mal tiež využívať normalizáciu na zabezpečenie konzistentnej vnímanej hlasitosti (meranej v LUFS) všetkých asiet pred ich zmiešaním, čo je kľúčové pri knižniciach s rôznym pôvodom nahrávok.   
+
+Temporálna presnosť a sekvenčné modelovanie zvukových udalostí
+Hlavným obmedzením súčasných modelov CLAP je ich „temporálna necitlivosť“. Štandardné modely často nedokážu rozlíšiť medzi „psom štekajúcim a potom mužom hovoriacim“ a „mužom hovoriacim a potom psom štekajúcim“. Pre bohatý soundscape je poradie udalostí kritické.   
+
+T-CLAP a sekvenčná syntéza
+Pokročilé modely ako T-CLAP (Temporal-enhanced CLAP) riešia tento problém využitím časovo orientovaných stratových funkcií na pochopenie poradia udalostí v texte aj audiu. V pipeline VoiceLibri to umožňuje systému umiestňovať SFX s vysokou presnosťou vzhľadom na naráciu. Ak text uvádza: „prešiel chodbou a potom svetlo bliklo,“ systém dokáže zabezpečiť, že zvuk bliknutia nastane presne po doznení posledného kroku.   
+
+Temporálnu synchronizáciu možno ďalej zjemniť pomocou „detekcie nástupu“ (onset detection) cez Librosa. Identifikáciou presného momentu, kedy narátor povie kľúčové slovo (napr. „Bum!“), môže systém spustiť zodpovedajúci SFX s milisekundovou presnosťou, čím vytvorí dojem ručne vytvoreného kinematického diela.   
+
+Validácia a kalibrácia s človekom v slučke (Human-in-the-Loop)
+Na zabezpečenie toho, že automatizovaný systém skutočne zlepšuje používateľskú skúsenosť, je potrebný robustný hodnotiaci rámec. Ten zahŕňa objektívne metriky aj subjektívnu spätnú väzbu.
+
+Objektívne metriky kvality
+Fréchet Audio Distance (FAD) je priemyselným štandardom pre kvantitatívne meranie kvality generovaného audia. Nižšie skóre FAD naznačuje, že generovaný soundscape je štatisticky blízky distribúcii reálnych štúdiových nahrávok. Okrem toho sa na validáciu sémantického zarovnania môžu použiť skóre podobnosti CLAP; ak podobnosť medzi generovaným segmentom a zdrojovým textom klesne pod prah (napr. 0,6), segment by mal byť označený na regeneráciu.   
+
+Metrika	Čo meria	Cieľová hodnota
+FAD	Distribučná vzdialenosť od reálneho audia.	Minimalizácia skóre.
+CLAP Similarity	Kosínusová podobnosť s textom.	
+Skóre > 0,6.
+
+SNR	Pomer signálu k šumu v mixe.	Vysoká čistota.
+MOS	Subjektívne Mean Opinion Score.	Skóre > 4.0.
+  
+Subjektívne hodnotenie a IPC
+Konečným arbitrom kvality je ľudské ucho. Využitím mechanizmu Instruction Prompt Calibration (IPC) môže VoiceLibri integrovať ľudské hodnotenia správnosti späť do cyklu ladenia promptov pre LLM. Tým sa vytvorí slučka posilňovaného učenia (RLHF), v ktorej sa systém časom naučí, ktoré typy soundscapov poslucháči považujú za najviac pohlcujúce a najmenej rušivé.   
+
+Architektúra agenta vo VS Code: MIRROR-20260311
+Cieľom tohto výskumu je vytvorenie inštrukcií pre agenta vo VS Code, ktorý tieto vylepšenia implementuje. V modernom vývojovom prostredí roku 2026 sa Markdown vyvinul z formátu dokumentácie na „verzovanú inštrukčnú vrstvu“, ktorá riadi správanie AI.   
+
+Rámec Agent Skills (Zručnosti agenta)
+Implementácia sa bude opierať o „Agent Skills“ – prenosné priečinky s inštrukciami, skriptami a zdrojmi, ktoré môže agent (ako GitHub Copilot) načítať na vykonávanie špecializovaných úloh. Špecifický súbor VL-MIRROR-20260311-0746_2.md bude slúžiť ako riadiace centrum pre agenta vo VS Code.   
+
+Komponent agenta	Zodpovednosť	Technologický stack
+Skill Extrakcie	Identifikácia SFX háčikov a prostredia.	
+LLM (GPT-4 / Claude) + APE.
+
+Skill Vyhľadávania	Vyhľadávanie v 20k knižnici a generovanie medzier.	
+CLAP + Qdrant + Firefly API.
+
+Skill Mixáže	Frekvenčné vyrezávanie a ducking.	
+Python (Pydub / Librosa / SciPy).
+
+Skill Validácie	Kontrola skóre FAD a CLAP similarity.	
+PyTorch + CLAP checkpoint.
+
+  
+Agent bude pracovať tak, že načíta literárny text, identifikuje háčiky pomocou Skillu Extrakcie, dopytuje vektorovú databázu cez Skill Vyhľadávania a následne vygeneruje Python skript, ktorý pomocou Pydub a Librosa zostaví finálny zvukový súbor so správnou dynamikou a priestorovým umiestnením.
+
+Pokročilá sonifikácia dát a kinematické motívy
+Na odlíšenie VoiceLibri od štandardných služieb audiokníh by mal systém preskúmať techniky „sonifikácie dát“ pre abstraktné naratívy. Transformáciou naratívnych metadát (napr. rastúce napätie v trileri) do hudobných parametrov (napr. zvyšujúca sa frekvencia jemného zvuku „tlkotu srdca“ alebo posun tóniny hudby v pozadí) môže systém vytvoriť „emocionálnu kotvu“.   
+
+Implementácia leitmotívov
+Použitie opakujúcich sa melódií alebo motívov môže v kritických momentoch vyvolať špecifické emócie. Agent by mal byť inštruovaný, aby priradil špecifické nástrojové vrstvy rôznym témam. Napríklad motív „osamelosti“ môže konzistentne spúšťať jemný klavír s dozvukom, zatiaľ čo motív „hrozby“ môže zahŕňať nízkofrekvenčný syntetizátorový dron a vzdialené dunenie.   
+
+Naratívna téma	Zvuková vrstva motívu	Požiadavka na timbre
+Napätie	Nízkofrekvenčný dron + Vzdialené údery.	
+Temný, Kovový, Dutý.
+
+Akcia	Rýchle perkusie + Dychové akcenty.	Agresívny, Jasný, Ostrý.
+Reflexia	Klavír s veľkým reverbom + Sláčiky.	Mäkký, Teplý, Éterický.
+Príroda	Vysokofrekvenčné švitorenie + Vietor.	Vzdušný, Organický, Široký.
+  
+Vrstvením týchto motívov nad základnú ambienciu dosiahne engine bohatosť, ktorá je potrebná pre prémiový zážitok poslucháča.
+
+Strategický plán implementácie
+Cesta k zvýšeniu tematickej presnosti a bohatosti soundscapu VoiceLibri je viacfázová. Začína digitalizáciou zvukovej knižnice do neurálneho vektorového priestoru a končí implementáciou v reálnom čase reagujúceho mixážneho enginu riadeného flotilou špecializovaných AI agentov.
+
+Fáza 1: Neurálne indexovanie a vektorizácia
+Prvotnou prioritou je spracovanie všetkých 20 000+ súborov cez kódovač CLAP. Každý súbor musí byť vektorizovaný a uložený v databáze ako Milvus alebo Qdrant spolu s pridruženými metadátami (trvanie, vzorkovacia frekvencia, pôvodné tagy). Tým sa eliminuje závislosť na nekvalitných metadátach a umožní sa dopytovanie v prirodzenom jazyku.   
+
+Fáza 2: Vylepšená extrakčná pipeline
+Implementácia stratégie Chain-of-Thought (CoT) pre LLM je nevyhnutná. Namiesto toho, aby sme model žiadali o „nájdenie zvukov“, agent by mal byť inštruovaný, aby:   
+
+Opísal fyzické prostredie scény.
+
+Uviedol každú kinetickú akciu opísanú v texte.
+
+Priradil „úroveň priority“ každému zvuku na základe jeho naratívneho významu.
+
+Generoval detailné akustické opisy pre každý zvuk pomocou štyroch pilierov (Subjekt, Akcia, Deskriptor, Prostredie).   
+
+Fáza 3: Algoritmický Assembler
+Záverečná fáza zahŕňa zostavenie „Assemblera“ pomocou Pydub a Librosa. Tento skript musí zabezpečiť:
+
+Dynamické prelínačky (cross-fades) medzi ambientnými stopami na zabránenie skokovým prechodom.   
+
+Frekvenčné vyrezávanie v pásme 1-3 kHz na ochranu čistoty hlasu.   
+
+Temporálne zarovnanie SFX na základe markerov z narácie.   
+
+Normalizáciu hlasitosti na -23 LUFS pre konzistentný zážitok naprieč zariadeniami.   
+
+Závery a strategický výhľad
+Prechod od „málo relevantného a chudobného“ soundscapu k plnohodnotnému kinematickému zážitku je vo svojej podstate problémom sémantického mapovania a inteligentnej orchestrácie asiet. VoiceLibri disponuje rozsiahlou knižnicou, ktorej potenciál je v súčasnosti brzdený zastaranými metódami vyhľadávania a nedostatočným vrstvením. Implementáciou neurálneho vyhľadávania cez CLAP, využitím LLM ako režisérov zvuku a aplikáciou pokročilých mixážnych techník v prostredí Python sa dosiahne stav, kedy soundscape nebude len pasívnym pozadím, ale aktívnym rozprávačom príbehu.
+
+Vytvorenie inštrukčného súboru VL-MIRROR-20260311-0746_2.md pre agenta vo VS Code poskytne vývojárom robustný rámec na automatizáciu tejto produkcie. Využitím kognitívnych benefitov zvukovo obohatenej literatúry – zvýšenej pozornosti, retencie a emocionálneho zapojenia – môže VoiceLibri definovať nový štandard v priemysle audiokníh. Budúcnosť platformy spočíva v jej schopnosti nielen čítať príbeh, ale konštruovať „divadlo v mysli“ prostredníctvom presných, vysokoverných a sémanticky bohatých auditívnych prostredí, ktoré sú neoddeliteľnou súčasťou literárneho diela.
+
+Tento report bol vypracovaný ako podklad pre implementáciu agentov v prostredí VS Code s cieľom transformovať zvukovú produkciu VoiceLibri na svetovú úroveň.
+
+
+pmc.ncbi.nlm.nih.gov
+The impact of background music on film audience's attentional
+Otvorí sa v novom okne
+
+voxblock.co.uk
+How music and sound effects can transform an audiobook - Voxblock
+Otvorí sa v novom okne
+
+bookmachine.org
+Sounds important: why audiobooks mean so much - BookMachine
+Otvorí sa v novom okne
+
+researchgate.net
+(PDF) Multimedia Learning: Effects of Background Music and Sound
+Otvorí sa v novom okne
+
+sfxengine.com
+How to layer sound effects in video: Build cinematic audio
+Otvorí sa v novom okne
+
+themusicase.com
+How to properly use Sound Effects in your Audiobook
+Otvorí sa v novom okne
+
+lilianweng.github.io
+Prompt Engineering | Lil'Log
+Otvorí sa v novom okne
+
+arxiv.org
+Active Prompting for Information Extraction Guided by Introspective
+Otvorí sa v novom okne
+
+pure.uva.nl
+Testing prompt engineering methods for knowledge extraction from
+Otvorí sa v novom okne
+
+arxiv.org
+What do MLLMs hear? Examining reasoning with text and sound
+Otvorí sa v novom okne
+
+sfxengine.com
+AI Text Sound Effects A Creator's Guide - SFX Engine
+Otvorí sa v novom okne
+
+mdpi.com
+Evaluation of Prompt Engineering on the Performance of a Large
+Otvorí sa v novom okne
+
+tdx.cat
+FROM FINGERPRINTING TO SEMANTIC AUDIO RETRIEVAL - TDX
+Otvorí sa v novom okne
+
+medium.com
+Scaling Audio Similarity Search with Vector Databases | by Zilliz
+Otvorí sa v novom okne
+
+medium.com
+Contrastive Language–Audio Pretraining (CLAP) for Semantic
+Otvorí sa v novom okne
+
+themusicase.com
+AI Music Analysis & Audio Vectoring: How CLAP Embeddings Are
+Otvorí sa v novom okne
+
+emergentmind.com
+CLAP Text Encoder Overview - Emergent Mind
+Otvorí sa v novom okne
+
+proceedings.mlr.press
+Make-An-Audio: Text-To-Audio Generation with Prompt-Enhanced ...
+Otvorí sa v novom okne
+
+emergentmind.com
+CLAPScore Model: Semantic Audio Evaluation - Emergent Mind
+Otvorí sa v novom okne
+
+arxiv.org
+M2D-CLAP: Exploring General-purpose Audio-Language ... - arXiv
+Otvorí sa v novom okne
+
+medium.com
+Guide to using Qdrant Vector Database for Audio Information Retrieval
+Otvorí sa v novom okne
+
+github.com
+ZeusDB/zeusdb-vector-database - GitHub
+Otvorí sa v novom okne
+
+realpython.com
+Embeddings and Vector Databases With ChromaDB - Real Python
+Otvorí sa v novom okne
+
+sykstudios.in
+10 Powerful Techniques for Layering Soundscapes That Transform
+Otvorí sa v novom okne
+
+soundscapy.readthedocs.io
+Soundscapy
+Otvorí sa v novom okne
+
+pydub.com
+jiaaro/pydub @ GitHub
+Otvorí sa v novom okne
+
+github.com
+pydub operating direct to disk vs in memory? · Issue #51 - GitHub
+Otvorí sa v novom okne
+
+gaudiolab.com
+Introducing the first audiobook featuring sound created by AI
+Otvorí sa v novom okne
+
+mikesmixmaster.com
+Essential Mixing Cinematic Music Tips for a Professional Sound
+Otvorí sa v novom okne
+
+adobe.com
+AI sound effects generator - Adobe Firefly
+Otvorí sa v novom okne
+
+fal.ai
+Sound Effects Generator | Text to Audio - Fal.ai
+Otvorí sa v novom okne
+
+inairspace.com
+Audio Generation AI Tools Are Revolutionizing the Soundscape of
+Otvorí sa v novom okne
+
+dupdub.com
+AI Sound Effects Generator – Turn Text into Realistic Audio FX
+Otvorí sa v novom okne
+
+youtube.com
+Lessons in Editing You Probably Missed | @Olufemii x Adobe Video
+Otvorí sa v novom okne
+
+noelborthwick.com
+How to EQ: Carving Out The Right Sound For Your Mix
+Otvorí sa v novom okne
+
+community.adobe.com
+Tutorial: Better automated ducking for music behind voice overs
+Otvorí sa v novom okne
+
+departuremusic.com
+Mastering Audio Layering in DAWs: Best Practices for Clear and
+Otvorí sa v novom okne
+
+youtube.com
+Make COZY AMBIENCE with Python! Scipy Audio Filters + Kivy GUI
+Otvorí sa v novom okne
+
+medium.com
+A Comprehensive Guide to Audio Processing with Librosa in Python
+Otvorí sa v novom okne
+
+librosa.org
+Tutorial — librosa 0.11.0 documentation
+Otvorí sa v novom okne
+
+youtube.com
+Audio processing in Python with Feature Extraction for machine
+Otvorí sa v novom okne
+
+github.com
+Playing audio in the background · Issue #160 · jiaaro/pydub - GitHub
+Otvorí sa v novom okne
+
+campus.datacamp.com
+Introduction to PyDub | Python - DataCamp
+Otvorí sa v novom okne
+
+djbajablast.com
+Use Python to Automate Audio Sample Processing via PyDub - DJBB
+Otvorí sa v novom okne
+
+themoonlight.io
+Temporal-Enhanced Contrastive Language-Audio Pretraining
+Otvorí sa v novom okne
+
+labellerr.com
+Evaluating & Finetuning Text-To-Audio Multimodal Models - Labellerr
+Otvorí sa v novom okne
+
+arxiv.org
+Semantic-Aware Confidence Calibration for Automated Audio ... - arXiv
+Otvorí sa v novom okne
+
+arxiv.org
+Semantic-Aware Confidence Calibration for Automated Audio
+Otvorí sa v novom okne
+
+visualstudiomagazine.com
+In Agentic AI, It's All About the Markdown - Visual Studio Magazine
+Otvorí sa v novom okne
+
+code.visualstudio.com
+Use Agent Skills in VS Code
+Otvorí sa v novom okne
+
+mltechniques.com
+Sound Generation in Python: Turning Your Data into Music
+Otvorí sa v novom okne
+
+matt-b-segall.medium.com
+Manipulating Audio in Python. Intro | by Matt B Segall - Medium
+Otvorí sa v novom okne
