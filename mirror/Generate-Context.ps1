@@ -190,13 +190,128 @@ $keyFiles = @{
     "Config: Backend TypeScript config" = @(
         "apps/backend/tsconfig.json"
     )
+    "Config: Mobile package.json (dependencies)" = @(
+        "apps/mobile/package.json"
+    )
+    "Config: Soundscape package.json" = @(
+        "soundscape/package.json"
+    )
+
+    # --- BACKEND ADDITIONAL MODULES ---
+    "Backend: Audio Utilities (WAV processing, silence generation)" = @(
+        "apps/backend/src/audioUtils.ts"
+    )
+    "Backend: Chapter Translator (multi-language translation pipeline)" = @(
+        "apps/backend/src/chapterTranslator.ts"
+    )
+    "Backend: Dialogue Parser Simple (dialogue extraction from text)" = @(
+        "apps/backend/src/dialogueParserSimple.ts"
+    )
+    "Backend: Dramatized Chunker Simple (dramatization-aware text splitting)" = @(
+        "apps/backend/src/dramatizedChunkerSimple.ts"
+    )
+    "Backend: Dramatized Processor (dramatization pipeline orchestration)" = @(
+        "apps/backend/src/dramatizedProcessor.ts"
+    )
+    "Backend: Gemini Dramatizer (Gemini-based dramatization engine)" = @(
+        "apps/backend/src/geminiDramatizer.ts"
+    )
+    "Backend: Parallel Pipeline Manager (concurrent generation orchestration)" = @(
+        "apps/backend/src/parallelPipelineManager.ts"
+    )
+    "Backend: Soundscape Integration (ambient audio, music mixing)" = @(
+        "apps/backend/src/soundscapeIntegration.ts"
+    )
+    "Backend: Token Count Test (LLM token estimation utilities)" = @(
+        "apps/backend/src/tokenCountTest.ts"
+    )
+
+    # --- MOBILE ADDITIONAL FILES ---
+    "Mobile: Book Card Component (book thumbnail, metadata display)" = @(
+        "apps/mobile/src/components/ui/BookCard.tsx"
+    )
+    "Mobile: Book List Component (scrollable book collection)" = @(
+        "apps/mobile/src/components/ui/BookList.tsx"
+    )
+    "Mobile: Mini Player Component (persistent playback bar)" = @(
+        "apps/mobile/src/components/ui/MiniPlayer.tsx"
+    )
+    "Mobile: Gutendex API (Project Gutenberg public domain books)" = @(
+        "apps/mobile/src/services/gutendexApi.ts"
+    )
+    "Mobile: OpenLibrary API (book metadata, covers)" = @(
+        "apps/mobile/src/services/openLibraryApi.ts"
+    )
+    "Mobile: Storage Service (AsyncStorage wrapper)" = @(
+        "apps/mobile/src/services/storage.ts"
+    )
+    "Mobile: Settings Store (Zustand, user preferences)" = @(
+        "apps/mobile/src/stores/settingsStore.ts"
+    )
+    "Mobile: Theme Context (dark/light mode provider)" = @(
+        "apps/mobile/src/theme/ThemeContext.tsx"
+    )
+
+    # --- SOUNDSCAPE MODULE (standalone ambient audio system) ---
+    "Soundscape: Entry Point & Exports" = @(
+        "soundscape/src/index.ts"
+    )
+    "Soundscape: Configuration" = @(
+        "soundscape/src/config.ts"
+    )
+    "Soundscape: Type Definitions" = @(
+        "soundscape/src/types.ts"
+    )
+    "Soundscape: Audio Mixer (mixing narration with ambient audio)" = @(
+        "soundscape/src/audioMixer.ts"
+    )
+    "Soundscape: Scene Tagger (scene boundary detection)" = @(
+        "soundscape/src/sceneTagger.ts"
+    )
+    "Soundscape: Sound Directive Generator (LLM-powered sound cues)" = @(
+        "soundscape/src/soundDirectiveGenerator.ts"
+    )
+    "Soundscape: Keyword Map (text-to-sound mapping rules)" = @(
+        "soundscape/src/keywordMap.ts"
+    )
+    "Soundscape: Sound Library (sound asset catalog)" = @(
+        "soundscape/src/soundLibrary.ts"
+    )
+    "Soundscape: Catalog Loader (asset discovery)" = @(
+        "soundscape/src/catalogLoader.ts"
+    )
+    "Soundscape: Credits (sound attribution tracking)" = @(
+        "soundscape/src/credits.ts"
+    )
+    "Soundscape: FFmpeg Runner (audio processing CLI wrapper)" = @(
+        "soundscape/src/ffmpegRunner.ts"
+    )
+    "Soundscape: Music Intro Builder (chapter intro generation)" = @(
+        "soundscape/src/musicIntroBuilder.ts"
+    )
+
+    # --- PWA (basic orientation - legacy/testing frontend) ---
+    "PWA: App Entry (routing, layout structure)" = @(
+        "apps/pwa-v2/src/App.tsx"
+    )
+    "PWA: API Service (backend integration, all endpoints)" = @(
+        "apps/pwa-v2/src/services/api.ts"
+    )
+    "PWA: Player Store (Zustand playback state management)" = @(
+        "apps/pwa-v2/src/stores/playerStore.ts"
+    )
+    "PWA: Progressive Audio Playback Hook (streaming audio)" = @(
+        "apps/pwa-v2/src/hooks/useProgressiveAudioPlayback.ts"
+    )
+    "PWA: Type Definitions (shared interfaces)" = @(
+        "apps/pwa-v2/src/types/index.ts"
+    )
 }
 
 # Documentation files to include as-is (not as code blocks)
-$docFiles = @(
-    "docs/DEV_MANUAL_PART1_ARCHITECTURE.md"
-    "docs/DEV_MANUAL_PART2_API_BACKEND.md"
-)
+# DEV_MANUAL files removed - outdated. Codebase overview is in the grounding block above.
+# Note: Mobile dynamic route files ([id].tsx, [genre].tsx) omitted - PowerShell treats brackets as wildcards.
+$docFiles = @()
 
 # ============================================================================
 # GENERATOR
