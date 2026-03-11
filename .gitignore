@@ -1,5 +1,6 @@
 apps/backend/nul
 node_modules/
+dist/
 audiobooks/
 soundscape/assets/
 !soundscape/assets/catalog.json
@@ -15,3 +16,8 @@ reset.ps1
 .env.example
 apps/backend/.env
 apps/backend/.gcsakey.json
+
+# Consultation mirror - generated output & media
+mirror/output/
+mirror/discussions/
+mirror/videos/
