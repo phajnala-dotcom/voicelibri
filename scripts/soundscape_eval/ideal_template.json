@@ -1,0 +1,146 @@
+{
+  "testStory": "soundscape_test_story.txt",
+  "title": "The Shadow of Thornwood Castle",
+  "description": "Purpose-built test text for systematic soundscape evaluation. 2 chapters, ~690 words, ~5 min TTS. Exercises 7 scene transitions, ~20 SFX events, 6 environments, 3 weather states, intensity arc.",
+  "chapters": [
+    {
+      "chapterIndex": 1,
+      "title": "The Forest Path",
+      "expectedSceneSegments": [
+        {
+          "environment": "forest",
+          "description": "Dense forest with birdsong, morning sun, walking on leaves",
+          "acceptableEnvironments": ["forest", "dense forest", "woodland", "ancient forest", "forest path"],
+          "expectedSounds": ["birdsong", "leaves crunching", "wind in trees"],
+          "startRegion": "beginning"
+        },
+        {
+          "environment": "stream/river",
+          "description": "Rushing stream, water over rocks, frog",
+          "acceptableEnvironments": ["stream", "river", "creek", "stream bank", "forest stream", "rushing stream"],
+          "expectedSounds": ["water flowing", "stream", "frog"],
+          "startRegion": "early-mid"
+        },
+        {
+          "environment": "open meadow",
+          "description": "Open meadowland, wind in grass, sheep bleating, approaching storm",
+          "acceptableEnvironments": ["meadow", "open meadow", "grassland", "field", "open field", "hillside"],
+          "expectedSounds": ["wind", "sheep", "distant thunder"],
+          "startRegion": "mid"
+        },
+        {
+          "environment": "thunderstorm",
+          "description": "Heavy rain, thunder, lightning, intense storm",
+          "acceptableEnvironments": ["storm", "thunderstorm", "heavy rain", "rainstorm", "downpour"],
+          "expectedSounds": ["rain", "thunder", "lightning"],
+          "startRegion": "mid-late"
+        },
+        {
+          "environment": "castle entrance",
+          "description": "At the castle door, pounding on door, door opening",
+          "acceptableEnvironments": ["castle", "castle entrance", "castle gate", "stone walls", "castle exterior"],
+          "expectedSounds": ["door knock", "door opening", "iron bolts"],
+          "startRegion": "end"
+        }
+      ],
+      "expectedSfxEvents": [
+        {"description": "twig snapping", "query": "twig snap branch breaking", "region": "early"},
+        {"description": "woodpecker pecking", "query": "woodpecker hammering pecking tree", "region": "early"},
+        {"description": "frog croaking/jumping", "query": "frog croak splash water plop", "region": "early-mid"},
+        {"description": "sheep bleating", "query": "sheep bleating distant farm", "region": "mid"},
+        {"description": "thunder rumble", "query": "thunder rumble distant low growl", "region": "mid"},
+        {"description": "raindrops hitting ground", "query": "rain drops hitting stone ground", "region": "mid-late"},
+        {"description": "lightning crack + thunderclap", "query": "lightning crack thunder explosion close", "region": "mid-late"},
+        {"description": "fist pounding on door", "query": "fist pounding heavy wooden door knocking", "region": "late"},
+        {"description": "iron bolts scraping", "query": "iron bolt metal sliding scraping lock", "region": "late"},
+        {"description": "heavy door opening/groaning", "query": "heavy wooden door opening creaking groaning hinges", "region": "late"}
+      ],
+      "expectedMetadata": {
+        "timeOfDay": "morning",
+        "weather": "storm",
+        "intensityRange": [0.5, 0.9],
+        "expectedMoods": ["mysterious", "ominous", "tense"]
+      },
+      "minSceneSegments": 3,
+      "idealSceneSegments": 5,
+      "minSfxEvents": 5,
+      "idealSfxEvents": 10
+    },
+    {
+      "chapterIndex": 2,
+      "title": "The Castle Within",
+      "expectedSceneSegments": [
+        {
+          "environment": "castle entrance hall",
+          "description": "Vast stone entrance hall, echoing footsteps, fire crackling",
+          "acceptableEnvironments": ["castle hall", "entrance hall", "great hall", "castle interior", "stone hall", "medieval hall"],
+          "expectedSounds": ["echoing footsteps", "fire crackling", "clock chiming"],
+          "startRegion": "beginning"
+        },
+        {
+          "environment": "castle corridor",
+          "description": "Dark corridor with suits of armor, approaching footsteps, candle light",
+          "acceptableEnvironments": ["corridor", "castle corridor", "stone corridor", "hallway", "dark corridor"],
+          "expectedSounds": ["footsteps on stone", "armor creaking", "rat scurrying"],
+          "startRegion": "mid"
+        },
+        {
+          "environment": "tower chamber",
+          "description": "Small chamber at top of spiral staircase, storm outside, rattling window",
+          "acceptableEnvironments": ["chamber", "tower room", "small room", "castle room", "bedchamber", "tower chamber"],
+          "expectedSounds": ["storm outside", "window rattling", "candle flame", "water dripping"],
+          "startRegion": "mid-late"
+        }
+      ],
+      "expectedSfxEvents": [
+        {"description": "door slamming shut", "query": "heavy door slamming shut boom echo", "region": "early"},
+        {"description": "clock striking/chiming", "query": "clock chime bell tower striking", "region": "early"},
+        {"description": "fire crackling", "query": "fire crackling hearth wood popping sparks", "region": "early"},
+        {"description": "footsteps approaching on stone", "query": "footsteps stone floor walking deliberate measured", "region": "mid"},
+        {"description": "rat scurrying", "query": "rat scurrying claws clicking stone floor", "region": "mid"},
+        {"description": "stairs groaning", "query": "wooden stairs creaking groaning weight", "region": "mid-late"},
+        {"description": "door creaking open on hinges", "query": "wooden door creaking rusty hinges opening", "region": "mid-late"},
+        {"description": "window rattling in wind", "query": "window rattling wind storm glass", "region": "mid-late"},
+        {"description": "match striking", "query": "match striking hiss flame lighting", "region": "late"},
+        {"description": "key turning in lock", "query": "iron key turning lock clicking grinding metal", "region": "late"},
+        {"description": "water dripping in walls", "query": "water dripping echoing stone walls cave", "region": "end"}
+      ],
+      "expectedMetadata": {
+        "timeOfDay": "evening",
+        "weather": "storm",
+        "intensityRange": [0.4, 0.8],
+        "expectedMoods": ["eerie", "dark", "mysterious", "gothic"]
+      },
+      "minSceneSegments": 2,
+      "idealSceneSegments": 3,
+      "minSfxEvents": 5,
+      "idealSfxEvents": 11
+    }
+  ],
+  "scoring": {
+    "weights": {
+      "sceneSegmentCount": 10,
+      "sceneEnvironmentAccuracy": 15,
+      "sfxEventCount": 10,
+      "sfxEventPlacement": 10,
+      "ambientPresence": 10,
+      "ambientDuration": 5,
+      "ambientVolumeRange": 5,
+      "sfxAudibility": 10,
+      "sceneTransitions": 10,
+      "overallCoverage": 15
+    },
+    "description": {
+      "sceneSegmentCount": "Were the right number of scene segments detected? (min/ideal comparison)",
+      "sceneEnvironmentAccuracy": "Do the detected environments match the expected ones?",
+      "sfxEventCount": "Were enough SFX events detected and placed?",
+      "sfxEventPlacement": "Are SFX events in roughly the right temporal positions?",
+      "ambientPresence": "Does each chapter have an ambient track generated?",
+      "ambientDuration": "Is the ambient track duration close to the voice track duration?",
+      "ambientVolumeRange": "Is the ambient volume in an audible but not overwhelming range?",
+      "sfxAudibility": "Can SFX events be distinguished from the ambient bed? (volume spikes)",
+      "sceneTransitions": "Are there audible transitions between different ambient environments?",
+      "overallCoverage": "What percentage of the story's sound-scape potential was realized?"
+    }
+  }
+}
