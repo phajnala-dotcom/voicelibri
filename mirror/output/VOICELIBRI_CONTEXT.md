@@ -1,22 +1,22 @@
-﻿# VOICELIBRI â€” COMPLETE SYSTEM CONTEXT SNAPSHOT
+﻿# VOICELIBRI ÔÇö COMPLETE SYSTEM CONTEXT SNAPSHOT
 
-> **âš ď¸Ź CRITICAL GROUNDING DIRECTIVE**
+> **ÔÜá´ŞĆ CRITICAL GROUNDING DIRECTIVE**
 > This document is the SINGLE SOURCE OF TRUTH for VoiceLibri's codebase.
 > You MUST base ALL answers exclusively on the information in this document.
 > Do NOT hallucinate features, files, APIs, or architecture that are not described here.
 > If something is not mentioned in this document, state: "This is not covered in the current context snapshot."
 
-**Session Key:** `VL-MIRROR-20260311-0746`
-**Generated:** 2026-03-11
-**Branch:** `feature/consultation-mirror`
-**Commit:** `467289e4` (2026-03-10 22:35:34 +0100)
+**Session Key:** `VL-MIRROR-20260312-0740`
+**Generated:** 2026-03-12
+**Branch:** `feature/soundscape-refactor`
+**Commit:** `21b8a68a` (2026-03-12 07:35:37 +0100)
 **Generator:** mirror/Generate-Context.ps1
 
 ---
 
 ## VERIFICATION
 
-If asked "What is the VoiceLibri session key?" â€” the answer is: **VL-MIRROR-20260311-0746**
+If asked "What is the VoiceLibri session key?" ÔÇö the answer is: **VL-MIRROR-20260312-0740**
 If you cannot answer this, you have NOT loaded this document. Stop and ask the user to provide it.
 
 ---
@@ -34,16 +34,16 @@ VoiceLibri is a **commercial-grade AI-powered multi-voice dramatized audiobook p
 
 ## WHAT DOES NOT EXIST YET (do NOT hallucinate these)
 
-- âťŚ No user authentication / login system
-- âťŚ No payment/subscription system
-- âťŚ No cloud deployment (runs locally on dev machine only)
-- âťŚ No database (file-based storage + in-memory state)
-- âťŚ No real-time WebSocket communication
-- âťŚ No PDF support (partially implemented)
-- âťŚ No multi-user support
-- âťŚ No CI/CD pipeline
-- âťŚ No automated tests for frontend
-- âťŚ No App Store / TestFlight distribution yet
+- ÔŁî No user authentication / login system
+- ÔŁî No payment/subscription system
+- ÔŁî No cloud deployment (runs locally on dev machine only)
+- ÔŁî No database (file-based storage + in-memory state)
+- ÔŁî No real-time WebSocket communication
+- ÔŁî No PDF support (partially implemented)
+- ÔŁî No multi-user support
+- ÔŁî No CI/CD pipeline
+- ÔŁî No automated tests for frontend
+- ÔŁî No App Store / TestFlight distribution yet
 
 ---
 
@@ -53,16 +53,119 @@ The following sections contain the key source files of the VoiceLibri codebase.
 Files are organized by subsystem. Each file includes its full path and content.
 
 ### Backend: Audio Utilities (WAV processing, silence generation)
-**File:** `apps/backend/src/audioUtils.ts` | **Size:** 2.6 KB | **Lines:** 84
+**File:** `apps/backend/src/audioUtils.ts` | **Size:** 15.2 KB | **Lines:** 409
 
 ```typescript
 /**
- * Audio utilities for WAV file manipulation
+ * Audio utilities for dual-format pipeline:
+ * 
+ * SUB-CHUNKS: WAV (LINEAR16 PCM) — synchronous buffer manipulation
+ *   - concatenateWavBuffers() — sync, lossless 44-byte header manipulation
+ *   - addSilenceWav() — sync, generates silent PCM samples
+ *   - estimateWavDuration() — exact from WAV header
+ * 
+ * CHAPTERS: OGG Opus — ffmpeg-based async operations
+ *   - concatenateOggBuffers() — async, ffmpeg concat demuxer
+ *   - addSilenceOgg() — async, ffmpeg anullsrc
+ *   - convertWavToOgg() — async, single WAV→OGG Opus VBR encode
+ * 
+ * Pipeline: TTS API (LINEAR16) → WAV sub-chunks → WAV concat → WAV→OGG at chapter consolidation
  */
 
+import { spawn } from 'child_process';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+
+// ─── WAV constants ───────────────────────────────────────────────────────────
+const WAV_HEADER_SIZE = 44;
+const WAV_SAMPLE_RATE = 24000;  // Cloud TTS LINEAR16 default
+const WAV_CHANNELS = 1;         // Mono
+const WAV_BITS_PER_SAMPLE = 16;
+const WAV_BYTES_PER_SAMPLE = WAV_BITS_PER_SAMPLE / 8;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WAV OPERATIONS (synchronous, for sub-chunks)
+// ═══════════════════════════════════════════════════════════════════════════════
+
 /**
- * Concatenates multiple WAV buffers into a single WAV buffer
- * All input WAVs must have the same sample rate, channels, and bit depth
+ * Build a valid WAV header for raw PCM data.
+ * 
+ * @param dataLength - Length of raw PCM data in bytes
+ * @param sampleRate - Sample rate (default 24000 for Cloud TTS)
+ * @param channels - Number of channels (default 1 = mono)
+ * @param bitsPerSample - Bits per sample (default 16 for LINEAR16)
+ * @returns 44-byte WAV header buffer
+ */
+function buildWavHeader(
+  dataLength: number,
+  sampleRate = WAV_SAMPLE_RATE,
+  channels = WAV_CHANNELS,
+  bitsPerSample = WAV_BITS_PER_SAMPLE
+): Buffer {
+  const header = Buffer.alloc(WAV_HEADER_SIZE);
+  const byteRate = sampleRate * channels * (bitsPerSample / 8);
+  const blockAlign = channels * (bitsPerSample / 8);
+
+  header.write('RIFF', 0);                           // ChunkID
+  header.writeUInt32LE(36 + dataLength, 4);           // ChunkSize
+  header.write('WAVE', 8);                            // Format
+  header.write('fmt ', 12);                           // Subchunk1ID
+  header.writeUInt32LE(16, 16);                       // Subchunk1Size (PCM)
+  header.writeUInt16LE(1, 20);                        // AudioFormat (1 = PCM)
+  header.writeUInt16LE(channels, 22);                 // NumChannels
+  header.writeUInt32LE(sampleRate, 24);               // SampleRate
+  header.writeUInt32LE(byteRate, 28);                 // ByteRate
+  header.writeUInt16LE(blockAlign, 32);               // BlockAlign
+  header.writeUInt16LE(bitsPerSample, 34);            // BitsPerSample
+  header.write('data', 36);                           // Subchunk2ID
+  header.writeUInt32LE(dataLength, 40);               // Subchunk2Size
+
+  return header;
+}
+
+/**
+ * Extract raw PCM data from a WAV buffer (strips the 44-byte header).
+ * Handles edge cases like buffers smaller than header size.
+ */
+function extractPcmData(wavBuffer: Buffer): Buffer {
+  if (wavBuffer.length <= WAV_HEADER_SIZE) {
+    return Buffer.alloc(0);
+  }
+  return wavBuffer.subarray(WAV_HEADER_SIZE);
+}
+
+/**
+ * Read sample rate from a WAV header. Falls back to default if invalid.
+ */
+function readWavSampleRate(wavBuffer: Buffer): number {
+  if (wavBuffer.length < WAV_HEADER_SIZE) return WAV_SAMPLE_RATE;
+  return wavBuffer.readUInt32LE(24) || WAV_SAMPLE_RATE;
+}
+
+/**
+ * Read number of channels from a WAV header. Falls back to default if invalid.
+ */
+function readWavChannels(wavBuffer: Buffer): number {
+  if (wavBuffer.length < WAV_HEADER_SIZE) return WAV_CHANNELS;
+  return wavBuffer.readUInt16LE(22) || WAV_CHANNELS;
+}
+
+/**
+ * Read bits per sample from a WAV header. Falls back to default if invalid.
+ */
+function readWavBitsPerSample(wavBuffer: Buffer): number {
+  if (wavBuffer.length < WAV_HEADER_SIZE) return WAV_BITS_PER_SAMPLE;
+  return wavBuffer.readUInt16LE(34) || WAV_BITS_PER_SAMPLE;
+}
+
+/**
+ * Concatenates multiple WAV buffers into a single WAV buffer.
+ * Synchronous, lossless — strips headers from subsequent buffers,
+ * concatenates raw PCM data, builds a new header.
+ * 
+ * All input WAV buffers must share the same audio format (sample rate,
+ * channels, bit depth). Format parameters are read from the first buffer.
  * 
  * @param wavBuffers - Array of WAV file buffers to concatenate
  * @returns Single concatenated WAV buffer
@@ -71,44 +174,32 @@ export function concatenateWavBuffers(wavBuffers: Buffer[]): Buffer {
   if (wavBuffers.length === 0) {
     throw new Error('No WAV buffers to concatenate');
   }
-  
+
   if (wavBuffers.length === 1) {
     return wavBuffers[0];
   }
-  
-  // Extract PCM data from each WAV (skip 44-byte header)
-  const pcmChunks: Buffer[] = [];
-  let totalPcmSize = 0;
-  
-  for (const wav of wavBuffers) {
-    const pcm = wav.slice(44); // Skip WAV header (44 bytes)
-    pcmChunks.push(pcm);
-    totalPcmSize += pcm.length;
-  }
-  
-  // Use first WAV's header as template
-  const firstWav = wavBuffers[0];
-  const header = Buffer.from(firstWav.slice(0, 44));
-  
-  // Update file size in header (ChunkSize at offset 4)
-  const newFileSize = 36 + totalPcmSize; // 36 = header size - 8
-  header.writeUInt32LE(newFileSize, 4);
-  
-  // Update data chunk size (Subchunk2Size at offset 40)
-  header.writeUInt32LE(totalPcmSize, 40);
-  
-  // Concatenate: header + all PCM data
-  const result = Buffer.concat([header, ...pcmChunks]);
-  
-  return result;
+
+  // Read format from the first buffer
+  const sampleRate = readWavSampleRate(wavBuffers[0]);
+  const channels = readWavChannels(wavBuffers[0]);
+  const bitsPerSample = readWavBitsPerSample(wavBuffers[0]);
+
+  // Extract raw PCM data from all buffers
+  const pcmParts: Buffer[] = wavBuffers.map(buf => extractPcmData(buf));
+  const totalPcmLength = pcmParts.reduce((sum, part) => sum + part.length, 0);
+
+  // Build new header + concatenated PCM
+  const header = buildWavHeader(totalPcmLength, sampleRate, channels, bitsPerSample);
+  return Buffer.concat([header, ...pcmParts]);
 }
 
 /**
- * Adds silence (zeros) to WAV buffer
+ * Adds silence to a WAV buffer. Synchronous — generates silent PCM samples
+ * (zero bytes) and concatenates with the input PCM data.
  * 
  * @param wavBuffer - Original WAV buffer
  * @param silenceDurationMs - Duration of silence to add in milliseconds
- * @param position - Where to add silence: 'start', 'end'
+ * @param position - Where to add silence: 'start' or 'end'
  * @returns WAV buffer with added silence
  */
 export function addSilence(
@@ -116,28 +207,262 @@ export function addSilence(
   silenceDurationMs: number,
   position: 'start' | 'end' = 'end'
 ): Buffer {
-  // Assume 24000 Hz, 16-bit, mono (Gemini TTS defaults)
-  const sampleRate = 24000;
-  const bytesPerSample = 2; // 16-bit
-  const channels = 1; // Mono
-  
+  const sampleRate = readWavSampleRate(wavBuffer);
+  const channels = readWavChannels(wavBuffer);
+  const bitsPerSample = readWavBitsPerSample(wavBuffer);
+  const bytesPerSample = bitsPerSample / 8;
+
+  // Generate silent PCM data (zero-filled)
   const silenceSamples = Math.floor((silenceDurationMs / 1000) * sampleRate);
-  const silenceBytes = silenceSamples * bytesPerSample * channels;
-  const silenceBuffer = Buffer.alloc(silenceBytes, 0); // Zeros = silence
-  
-  const header = wavBuffer.slice(0, 44);
-  const pcmData = wavBuffer.slice(44);
-  
-  const newPcmData = position === 'start' 
+  const silenceBytes = silenceSamples * channels * bytesPerSample;
+  const silenceBuffer = Buffer.alloc(silenceBytes, 0);
+
+  // Extract existing PCM data
+  const pcmData = extractPcmData(wavBuffer);
+
+  // Concatenate in correct order
+  const combinedPcm = position === 'start'
     ? Buffer.concat([silenceBuffer, pcmData])
     : Buffer.concat([pcmData, silenceBuffer]);
+
+  // Build new header for combined data
+  const header = buildWavHeader(combinedPcm.length, sampleRate, channels, bitsPerSample);
+  return Buffer.concat([header, combinedPcm]);
+}
+
+/**
+ * Estimate the duration of a WAV buffer from its header (exact calculation).
+ * 
+ * Duration = (dataLength) / (sampleRate × channels × bytesPerSample)
+ * 
+ * @param wavBuffer - WAV file buffer
+ * @returns Duration in seconds
+ */
+export function estimateWavDuration(wavBuffer: Buffer): number {
+  if (wavBuffer.length <= WAV_HEADER_SIZE) return 0;
+
+  const sampleRate = readWavSampleRate(wavBuffer);
+  const channels = readWavChannels(wavBuffer);
+  const bitsPerSample = readWavBitsPerSample(wavBuffer);
+  const bytesPerSample = bitsPerSample / 8;
+
+  const dataLength = wavBuffer.length - WAV_HEADER_SIZE;
+  return dataLength / (sampleRate * channels * bytesPerSample);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// OGG OPUS OPERATIONS (async, ffmpeg-based, for chapters)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Run ffmpeg with given args, return stdout as Buffer.
+ * Uses pipe:1 for output to avoid temp files when possible.
+ */
+function runFfmpegToBuffer(args: string[]): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const chunks: Buffer[] = [];
+    let stderr = '';
+
+    proc.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
+    proc.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+
+    proc.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(`ffmpeg exited with code ${code}: ${stderr.substring(0, 500)}`));
+      } else {
+        resolve(Buffer.concat(chunks));
+      }
+    });
+
+    proc.on('error', (err) => reject(err));
+  });
+}
+
+/**
+ * Run ffmpeg with given args, writing to an output file. Returns the file contents.
+ */
+function runFfmpegToFile(args: string[], outputPath: string): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+
+    proc.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+
+    proc.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(`ffmpeg exited with code ${code}: ${stderr.substring(0, 500)}`));
+      } else {
+        try {
+          const result = fs.readFileSync(outputPath);
+          resolve(result);
+        } catch (err) {
+          reject(new Error(`ffmpeg succeeded but output file missing: ${outputPath}`));
+        }
+      }
+    });
+
+    proc.on('error', (err) => reject(err));
+  });
+}
+
+/**
+ * Concatenates multiple OGG Opus buffers into a single OGG Opus buffer.
+ * Uses ffmpeg concat demuxer for proper OGG container handling.
+ * 
+ * Used for chapter-level operations (consolidating already-encoded OGG files).
+ * 
+ * @param oggBuffers - Array of OGG Opus file buffers to concatenate
+ * @returns Single concatenated OGG Opus buffer
+ */
+export async function concatenateOggBuffers(oggBuffers: Buffer[]): Promise<Buffer> {
+  if (oggBuffers.length === 0) {
+    throw new Error('No OGG buffers to concatenate');
+  }
   
-  // Update header sizes
-  const newFileSize = 36 + newPcmData.length;
-  header.writeUInt32LE(newFileSize, 4);
-  header.writeUInt32LE(newPcmData.length, 40);
+  if (oggBuffers.length === 1) {
+    return oggBuffers[0];
+  }
+
+  // Write buffers to temp files (ffmpeg concat demuxer needs files)
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vl-concat-'));
+  const tempFiles: string[] = [];
   
-  return Buffer.concat([header, newPcmData]);
+  try {
+    for (let i = 0; i < oggBuffers.length; i++) {
+      const tempFile = path.join(tempDir, `part_${i.toString().padStart(4, '0')}.ogg`);
+      fs.writeFileSync(tempFile, oggBuffers[i]);
+      tempFiles.push(tempFile);
+    }
+
+    // Build concat list file
+    const listFile = path.join(tempDir, 'concat.txt');
+    const listContent = tempFiles.map(f => `file '${f.replace(/\\/g, '/')}'`).join('\n');
+    fs.writeFileSync(listFile, listContent);
+
+    const outputFile = path.join(tempDir, 'output.ogg');
+
+    const args = [
+      '-y',
+      '-f', 'concat',
+      '-safe', '0',
+      '-i', listFile,
+      '-c', 'copy',  // Stream copy — no re-encoding needed
+      outputFile,
+    ];
+
+    const result = await runFfmpegToFile(args, outputFile);
+    return result;
+  } finally {
+    // Clean up temp files
+    for (const f of tempFiles) {
+      try { fs.unlinkSync(f); } catch { /* ignore */ }
+    }
+    try { fs.unlinkSync(path.join(tempDir, 'concat.txt')); } catch { /* ignore */ }
+    try { fs.unlinkSync(path.join(tempDir, 'output.ogg')); } catch { /* ignore */ }
+    try { fs.rmdirSync(tempDir); } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Adds silence to an OGG Opus buffer using ffmpeg.
+ * Generates a silent OGG Opus segment and concatenates with the input.
+ * 
+ * Used for chapter-level operations when working with OGG files.
+ * For sub-chunk WAV operations, use addSilence() instead.
+ * 
+ * @param oggBuffer - Original OGG Opus buffer
+ * @param silenceDurationMs - Duration of silence to add in milliseconds
+ * @param position - Where to add silence: 'start', 'end'
+ * @returns OGG Opus buffer with added silence
+ */
+export async function addSilenceOgg(
+  oggBuffer: Buffer,
+  silenceDurationMs: number,
+  position: 'start' | 'end' = 'end'
+): Promise<Buffer> {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vl-silence-'));
+  
+  try {
+    const inputFile = path.join(tempDir, 'input.ogg');
+    const silenceFile = path.join(tempDir, 'silence.ogg');
+    
+    fs.writeFileSync(inputFile, oggBuffer);
+
+    // Generate silence as OGG Opus
+    const silenceSec = silenceDurationMs / 1000;
+    const silenceArgs = [
+      '-y',
+      '-f', 'lavfi',
+      '-i', `anullsrc=r=24000:cl=mono`,
+      '-t', silenceSec.toString(),
+      '-c:a', 'libopus',
+      '-b:a', '64k',
+      silenceFile,
+    ];
+    await runFfmpegToFile(silenceArgs, silenceFile);
+
+    const silenceBuffer = fs.readFileSync(silenceFile);
+
+    // Concatenate in correct order
+    const buffers = position === 'start'
+      ? [silenceBuffer, oggBuffer]
+      : [oggBuffer, silenceBuffer];
+
+    return await concatenateOggBuffers(buffers);
+  } finally {
+    // Clean up
+    try { fs.unlinkSync(path.join(tempDir, 'input.ogg')); } catch { /* ignore */ }
+    try { fs.unlinkSync(path.join(tempDir, 'silence.ogg')); } catch { /* ignore */ }
+    try { fs.rmdirSync(tempDir); } catch { /* ignore */ }
+  }
+}
+
+/**
+ * Converts a WAV buffer to OGG Opus with VBR encoding.
+ * Single encode — used at chapter consolidation to convert the concatenated
+ * WAV (from all sub-chunks) into the final storage-efficient OGG Opus format.
+ * 
+ * @param wavBuffer - WAV (LINEAR16 PCM) buffer to convert
+ * @param bitrate - Target bitrate for VBR Opus encoding (default '70k' for voice)
+ * @returns OGG Opus encoded buffer
+ */
+export async function convertWavToOgg(
+  wavBuffer: Buffer,
+  bitrate: string = '70k'
+): Promise<Buffer> {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vl-wav2ogg-'));
+  
+  try {
+    const inputFile = path.join(tempDir, 'input.wav');
+    const outputFile = path.join(tempDir, 'output.ogg');
+    
+    fs.writeFileSync(inputFile, wavBuffer);
+
+    const args = [
+      '-y',
+      '-i', inputFile,
+      '-c:a', 'libopus',
+      '-b:a', bitrate,
+      '-vbr', 'on',
+      '-application', 'voip',  // Optimized for speech
+      outputFile,
+    ];
+
+    const result = await runFfmpegToFile(args, outputFile);
+    
+    const ratio = wavBuffer.length > 0
+      ? ((result.length / wavBuffer.length) * 100).toFixed(1)
+      : '0';
+    console.log(`  🔄 WAV→OGG: ${(wavBuffer.length / 1024).toFixed(0)}KB → ${(result.length / 1024).toFixed(0)}KB (${ratio}% of original, ${bitrate} VBR Opus)`);
+    
+    return result;
+  } finally {
+    // Clean up
+    try { fs.unlinkSync(path.join(tempDir, 'input.wav')); } catch { /* ignore */ }
+    try { fs.unlinkSync(path.join(tempDir, 'output.ogg')); } catch { /* ignore */ }
+    try { fs.rmdirSync(tempDir); } catch { /* ignore */ }
+  }
 }
 ```
 
@@ -172,7 +497,7 @@ const __dirname = path.dirname(__filename);
 export interface ChapterMetadata {
   index: number;
   title: string;
-  filename: string; // e.g., "Chapter_01_Title.wav"
+  filename: string; // e.g., "Chapter_01_Title.ogg"
   duration: number; // seconds (estimated initially, actual when generated)
   estimatedDuration?: number; // Duration estimated from text length
   actualDuration?: number;    // Actual duration from generated audio
@@ -577,7 +902,7 @@ export function getChapterPath(
     filename += `_Part ${(partIndex + 1).toString().padStart(2, '0')}`;
   }
   
-  filename += '.wav';
+  filename += '.ogg';
   
   return path.join(bookDir, filename);
 }
@@ -691,7 +1016,7 @@ export function loadChapterFile(
 ---
 
 ### Backend: Audiobook Worker (background generation, parallel processing)
-**File:** `apps/backend/src/audiobookWorker.ts` | **Size:** 11.6 KB | **Lines:** 384
+**File:** `apps/backend/src/audiobookWorker.ts` | **Size:** 11.2 KB | **Lines:** 375
 
 ```typescript
 /**
@@ -723,7 +1048,7 @@ import {
 } from './audiobookManager.js';
 import { Chapter } from './bookChunker.js';
 import { ChunkInfo } from './chapterChunker.js';
-import { applySoundscapeToChapter } from './soundscapeIntegration.js';
+
 
 // ========================================
 // Worker State & Queue
@@ -979,15 +1304,6 @@ class AudiobookGenerationWorker extends EventEmitter {
       try {
         console.log(`  Consolidating chapter ${chapterIndex}: ${chunkIndices.length} chunks (${chunkIndices.join(', ')})`);
         const chapterPath = await consolidateChapterFromTemps(bookTitle, chapterIndex, chunkIndices);
-        const chapterText = chapterTextMap.get(chapterIndex) ?? '';
-        const metadata = loadAudiobookMetadata(bookTitle);
-        await applySoundscapeToChapter({
-          bookTitle,
-          chapterIndex,
-          chapterPath,
-          chapterText,
-          preferences: metadata?.userPreferences,
-        });
         consolidatedCount++;
         this.updateProgress(bookTitle, { chaptersConsolidated: consolidatedCount });
         console.log(`  ✓ Chapter ${chapterIndex} consolidated (${consolidatedCount}/${chapterChunks.size})`);
@@ -6626,7 +6942,7 @@ export function needsTranslation(targetLanguage: string | null | undefined): boo
 ---
 
 ### Backend: Character Registry (voice-to-character mapping persistence)
-**File:** `apps/backend/src/characterRegistry.ts` | **Size:** 19.7 KB | **Lines:** 614
+**File:** `apps/backend/src/characterRegistry.ts` | **Size:** 21 KB | **Lines:** 654
 
 ```typescript
 /**
@@ -6652,11 +6968,47 @@ import {
   DEFAULT_NARRATOR_VOICE
 } from './promptConfig.js';
 
+function normalizeBookPeriod(raw?: string | null): BookPeriod {
+  if (!raw) return 'undefined';
+  const normalized = raw.toLowerCase().trim();
+  if (!normalized) return 'undefined';
+
+  const directMap: Record<string, BookPeriod> = {
+    prehistory: 'prehistory',
+    prehistoric: 'prehistory',
+    antiquity: 'antiquity',
+    ancient: 'antiquity',
+    classical: 'antiquity',
+    'middle ages': 'middle ages',
+    medieval: 'middle ages',
+    'modern age': 'modern age',
+    modern: 'modern age',
+    contemporary: 'contemporary',
+    present: 'contemporary',
+    current: 'contemporary',
+    future: 'future',
+    futuristic: 'future',
+    'science fiction': 'future',
+    scifi: 'future',
+    'sci-fi': 'future',
+    undefined: 'undefined',
+    unknown: 'undefined',
+  };
+
+  if (directMap[normalized]) {
+    return directMap[normalized];
+  }
+
+  return 'undefined';
+}
+
 /**
  * Book/document information for narrator TTS instruction
  * Extracted from chapter 1, refined in chapter 2, then LOCKED
  * Each field STRICTLY MAX 10 WORDS
  */
+export type BookPeriod = 'prehistory' | 'antiquity' | 'middle ages' | 'modern age' | 'contemporary' | 'future' | 'undefined';
+
 export interface BookInfo {
   /** Genre(s) with adjectives: dark fantasy, gothic horror, etc. (MAX 10 WORDS) */
   genre: string;
@@ -6666,6 +7018,9 @@ export interface BookInfo {
 
   /** Voice tone: EXACTLY two concise adjectives, "adj1, adj2" (MAX 10 WORDS) */
   voiceTone: string;
+
+  /** Historical period/era (normalized) */
+  period?: BookPeriod;
   
   /** Whether bookInfo is locked (after chapter 2) */
   locked?: boolean;
@@ -6911,13 +7266,14 @@ FEMALE VOICES: ${femaleVoices}`;
       
       // Process bookInfo if present (chapters 1-2)
       if (result.bookInfo && !this.bookInfo?.locked) {
+        const normalizedPeriod = normalizeBookPeriod(result.bookInfo.period);
         if (chapterNum === 1) {
           // First extraction
-          this.bookInfo = { ...result.bookInfo, locked: false };
+          this.bookInfo = { ...result.bookInfo, period: normalizedPeriod, locked: false };
           console.log(`   📚 Book info extracted: ${this.bookInfo.genre}, ${this.bookInfo.tone}`);
         } else if (chapterNum === 2) {
           // Refine and lock
-          this.bookInfo = { ...result.bookInfo, locked: true };
+          this.bookInfo = { ...result.bookInfo, period: normalizedPeriod, locked: true };
           this.buildNarratorInstruction();
           console.log(`   📚 Book info refined and LOCKED: ${this.bookInfo.genre}, ${this.bookInfo.tone}`);
         }
@@ -7977,7 +8333,7 @@ ${chapterText.substring(0, 100000)}`;
 ---
 
 ### Backend: Main Server (API routes, middleware, pipeline orchestration)
-**File:** `apps/backend/src/index.ts` | **Size:** 128 KB | **Lines:** 3260
+**File:** `apps/backend/src/index.ts` | **Size:** 131.5 KB | **Lines:** 3347
 
 ```typescript
 import express, { Request, Response } from 'express';
@@ -8011,7 +8367,7 @@ import { processDramatizedText } from './dramatizedProcessor.js';
 import { processTaggedTextFile } from './dramatizedChunkerSimple.js';
 import { extractVoiceSegments, removeVoiceTags } from './dramatizedChunkerSimple.js';
 import { loadVoiceMap, assignVoices, type Character } from './voiceAssigner.js';
-import { concatenateWavBuffers, addSilence } from './audioUtils.js';
+import { concatenateOggBuffers, addSilence } from './audioUtils.js';
 import { 
   generateAndSaveTempChunk,
   tempChunkExists, 
@@ -8019,6 +8375,7 @@ import {
   consolidateChapterSmart,
   consolidateChapterFromSubChunks,
   deleteAllTempChunks,
+  deleteChapterSubChunks,
   stopPreDramatization,
   generateSubChunksParallel,
   subChunkExists,
@@ -8044,7 +8401,7 @@ import {
   deleteAudiobook,
   type AudiobookMetadata,
 } from './audiobookManager.js';
-import { resolveChapterAudioPath, getSoundscapeThemeOptions, applySoundscapeToChapter } from './soundscapeIntegration.js';
+import { resolveChapterAudioPath, getAmbientAudioPath, getIntroAudioPath, applySoundscapeToChapter, startEarlyIntroGeneration, prepareEarlyAmbient } from './soundscapeCompat.js';
 import { 
   extractEpubChapters, 
   detectTextChapters, 
@@ -8071,6 +8428,41 @@ import { resetPipeline } from './parallelPipelineManager.js';
 // Cost tracking for audiobook generation
 import { CostTracker, estimateTokens } from './costTracker.js';
 
+// ── Intro-as-chapter-0 helper ──────────────────────────────────
+/**
+ * If a standalone _intro.ogg exists for chapter 1, prepend it to the
+ * metadata chapters array as index 0 ("Intro").  Returns a shallow copy
+ * of metadata so the on-disk JSON is never mutated.
+ */
+function injectIntroChapter(
+  metadata: AudiobookMetadata,
+  bookTitle: string,
+): AudiobookMetadata {
+  const ch1Path = getChapterPath(bookTitle, 1);
+  const introPath = getIntroAudioPath(ch1Path);
+  if (!introPath) return metadata;
+
+  // Avoid duplicating if already injected (index 0 already present)
+  if (metadata.chapters.length > 0 && metadata.chapters[0].index === 0) {
+    return metadata;
+  }
+
+  // Build the intro chapter entry
+  const introChapter: AudiobookMetadata['chapters'][number] = {
+    index: 0,
+    title: 'Intro',
+    filename: path.basename(introPath),
+    duration: 0, // will be filled by client on load
+    isGenerated: true,
+    isConsolidated: true,
+  };
+
+  return {
+    ...metadata,
+    chapters: [introChapter, ...metadata.chapters],
+  };
+}
+
 // ES modules dirname workaround
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -8079,7 +8471,7 @@ const __dirname = path.dirname(__filename);
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3001;
+const PORT = Number(process.env.PORT) || 3001;
 
 // Middleware
 app.use(cors());
@@ -8128,11 +8520,13 @@ async function applySoundscapeForChapter(
   try {
     const metadata = loadAudiobookMetadata(bookTitle);
     const chapterText = CHAPTER_DRAMATIZED.get(chapterNum) ?? BOOK_CHAPTERS[chapterNum]?.text ?? '';
+    const subChunks = CHAPTER_SUBCHUNKS.get(chapterNum);
     await applySoundscapeToChapter({
       bookTitle,
       chapterIndex: chapterNum,
       chapterPath,
       chapterText,
+      subChunks,
       preferences: metadata?.userPreferences,
     });
   } catch (error) {
@@ -8186,7 +8580,8 @@ function trackSubChunkPlayed(
     const chapterTitle = BOOK_CHAPTERS[chapterNum]?.title;
     if (isChapterConsolidated(bookTitle, chapterNum, chapterTitle)) {
       console.log(`🗑️  Cleaning up sub-chunks for chapter ${chapterNum}...`);
-
+      const deletedCount = deleteChapterSubChunks(bookTitle, chapterNum);
+      console.log(`   Deleted ${deletedCount} sub-chunk files`);
     } else {
       console.log(`⏳ Chapter ${chapterNum} not yet consolidated, keeping sub-chunks`);
     }
@@ -8943,6 +9338,15 @@ async function startBackgroundDramatization(
             console.error(`   ⚠️ Failed to save character registry:`, saveErr);
           }
           
+          // Generate intro for chapter 1 (fire-and-forget — runs parallel to chapter TTS)
+          if (chapterNum === 1) {
+            const ch1Title = BOOK_CHAPTERS[1]?.title;
+            const ch1Path = getChapterPath(bookTitle, 1, ch1Title);
+            startEarlyIntroGeneration({ bookTitle, chapterPath: ch1Path }).catch(err =>
+              console.warn('⚠️ Early intro generation failed:', err)
+            );
+          }
+          
           // Convert registry characters to CharacterProfile[] for hybrid tagger
           const registeredChars = characterRegistry.getAllCharacters();
           const characters: CharacterProfile[] = registeredChars.map(rc => ({
@@ -9061,7 +9465,15 @@ async function startBackgroundDramatization(
           dramatizationStatus.currentOperation = `Generating audio for chapter ${chapterNum}`;
           dramatizationStatus.lastActivityAt = Date.now();
           
-          const chapterParallelism = chapterNum === 1 ? 1 : 3;
+          // Fire-and-forget: prepare ambient bed for progressive playback
+          prepareEarlyAmbient({
+            bookTitle,
+            chapterIndex: chapterNum,
+            chapterPath: getChapterPath(bookTitle, chapterNum, chapter.title),
+            chapterText: chapter.text,
+          }).catch(err => console.warn('⚠️ Early ambient prep failed (non-critical):', err));
+          
+          const chapterParallelism = 3; // Uniform parallelism for all chapters
           await generateSubChunksParallel(
             bookTitle,
             chapterNum,
@@ -9088,8 +9500,11 @@ async function startBackgroundDramatization(
             const chapterPath = await consolidateChapterFromSubChunks(bookTitle, chapterNum, chapterTitle);
             await applySoundscapeForChapter(bookTitle, chapterNum, chapterPath);
             console.log(`   📦 Chapter ${chapterNum} consolidated successfully`);
-            // NOTE: Sub-chunks are NOT deleted here - they are kept for playback
-            // Cleanup happens via trackSubChunkPlayed() after chapter is fully played
+            // Clean up temp sub-chunks now that chapter is consolidated
+            const deletedCount = deleteChapterSubChunks(bookTitle, chapterNum);
+            if (deletedCount > 0) {
+              console.log(`   🗑️  Cleaned up ${deletedCount} temp sub-chunks for chapter ${chapterNum}`);
+            }
           } catch (consErr) {
             console.error(`   ⚠️ Chapter ${chapterNum} consolidation failed:`, consErr);
           }
@@ -9129,7 +9544,16 @@ async function startBackgroundDramatization(
           // Generate TTS even for fallback
           const bookTitle = sanitizeBookTitle(BOOK_METADATA?.title || CURRENT_BOOK_FILE || 'Unknown');
           console.log(`   🎤 Generating TTS for chapter ${chapterNum} (fallback)...`);
-          const chapterParallelism = chapterNum === 1 ? 1 : 3;
+          
+          // Fire-and-forget: prepare ambient bed for progressive playback
+          prepareEarlyAmbient({
+            bookTitle,
+            chapterIndex: chapterNum,
+            chapterPath: getChapterPath(bookTitle, chapterNum, chapter.title),
+            chapterText: chapter.text,
+          }).catch(err => console.warn('⚠️ Early ambient prep failed (non-critical):', err));
+          
+          const chapterParallelism = 3; // Uniform parallelism for all chapters
           await generateSubChunksParallel(
             bookTitle,
             chapterNum,
@@ -9153,8 +9577,11 @@ async function startBackgroundDramatization(
             const chapterPath = await consolidateChapterFromSubChunks(bookTitle, chapterNum, chapterTitle);
             await applySoundscapeForChapter(bookTitle, chapterNum, chapterPath);
             console.log(`   📦 Chapter ${chapterNum} consolidated (fallback) successfully`);
-            // NOTE: Sub-chunks are NOT deleted here - they are kept for playback
-            // Cleanup happens via trackSubChunkPlayed() after chapter is fully played
+            // Clean up temp sub-chunks now that chapter is consolidated
+            const deletedCount = deleteChapterSubChunks(bookTitle, chapterNum);
+            if (deletedCount > 0) {
+              console.log(`   🗑️  Cleaned up ${deletedCount} temp sub-chunks for chapter ${chapterNum}`);
+            }
           } catch (consErr) {
             console.error(`   ⚠️ Chapter ${chapterNum} consolidation failed:`, consErr);
           }
@@ -9226,7 +9653,7 @@ async function checkAndConsolidateReadyChapters(bookTitle: string): Promise<void
       const bookDir = path.join(audiobooksDir, bookTitle);
       const chapterPrefix = `${chapterNum.toString().padStart(2, '0')}_`;
       const consolidatedFiles = fs.existsSync(bookDir) 
-        ? fs.readdirSync(bookDir).filter(f => f.startsWith(chapterPrefix) && f.endsWith('.wav'))
+        ? fs.readdirSync(bookDir).filter(f => f.startsWith(chapterPrefix) && f.endsWith('.ogg'))
         : [];
       
       if (consolidatedFiles.length > 0) {
@@ -9291,7 +9718,7 @@ async function checkAndConsolidateReadyChapters(bookTitle: string): Promise<void
         chaptersMetadata.push({
           index: chapterNum - 1, // metadata uses 0-based array
           title: chapter.title,
-          filename: `${chapterNum.toString().padStart(2, '0')}_${sanitizeChapterTitle(chapter.title)}.wav`,
+          filename: `${chapterNum.toString().padStart(2, '0')}_${sanitizeChapterTitle(chapter.title)}.ogg`,
           duration: 0,
           isGenerated: false,
           tempChunksCount: CHAPTER_SUBCHUNKS.get(chapterNum)?.length || 0,
@@ -9484,7 +9911,7 @@ app.post('/api/book/select', async (req: Request, res: Response) => {
         chapters: validChapters.map((chapter, i) => ({
           index: i + 1, // 1-based chapter index
           title: chapter.title,
-          filename: `${(i + 1).toString().padStart(2, '0')}_${sanitizeChapterTitle(chapter.title)}.wav`,
+          filename: `${(i + 1).toString().padStart(2, '0')}_${sanitizeChapterTitle(chapter.title)}.ogg`,
           duration: 0,
           isGenerated: false,
           tempChunksCount: 0,
@@ -9510,6 +9937,21 @@ app.post('/api/book/select', async (req: Request, res: Response) => {
     
     res.json({
       success: true,
+      // Top-level fields matching BookSelectResult (same format as /api/book/from-text)
+      title: BOOK_METADATA.title,
+      author: BOOK_METADATA.author,
+      audiobookTitle: bookTitle,
+      chapters: BOOK_CHAPTERS.filter((ch: any, i: number) => i > 0 && ch !== null).map((ch: any, i: number) => ({
+        index: i + 1,
+        title: ch.title,
+        subChunkStart: 0,
+        subChunkCount: 10, // Estimated
+      })),
+      _internal: {
+        totalChunks: BOOK_INFO.totalChunks,
+        durationSeconds: BOOK_INFO.estimatedDuration,
+      },
+      // Legacy nested format (kept for backward compatibility)
       book: {
         filename: CURRENT_BOOK_FILE,
         format: BOOK_FORMAT,
@@ -9840,7 +10282,7 @@ app.post('/api/tts/read-sample', async (req: Request, res: Response) => {
 
     console.log(`✓ Audio generated: ${audioBuffer.length} bytes`);
 
-    // Set appropriate headers for WAV audio (Vertex AI returns PCM/WAV)
+    // Set appropriate headers for WAV audio (LINEAR16 PCM from TTS)
     res.setHeader('Content-Type', 'audio/wav');
     res.setHeader('Content-Length', audioBuffer.length.toString());
     res.setHeader('Accept-Ranges', 'bytes');
@@ -10199,9 +10641,8 @@ app.post('/api/tts/chunk', async (req: Request, res: Response) => {
         const cacheTime = Date.now() - requestStartTime;
         console.log(`📦 Serving whole chapter file: ${chapterNum} (${cacheTime}ms) - sub-chunks were cleaned up`);
         
-        // Calculate seek offset in seconds based on requested sub-chunk index
-        // Total chapter duration from audio buffer (24kHz, mono, 16-bit = 48000 bytes/sec)
-        const chapterDurationSec = (chapterAudio.length - 44) / 48000; // minus WAV header
+        // Estimate chapter duration from OGG Opus buffer (heuristic: ~6000 bytes/sec)
+        const chapterDurationSec = chapterAudio.length / 6000;
         const chapterSubChunks = CHAPTER_SUBCHUNKS.get(chapterNum);
         const totalSubChunks = chapterSubChunks?.length || 1;
         
@@ -10211,7 +10652,7 @@ app.post('/api/tts/chunk', async (req: Request, res: Response) => {
         
         console.log(`   Seek offset: ${seekOffsetSec.toFixed(2)}s (subChunk ${localSubChunkIndex}/${totalSubChunks}, chapter ${chapterDurationSec.toFixed(1)}s)`);
         
-        res.setHeader('Content-Type', 'audio/wav');
+        res.setHeader('Content-Type', 'audio/ogg');
         res.setHeader('Content-Length', chapterAudio.length.toString());
         res.setHeader('Accept-Ranges', 'bytes');
         res.setHeader('X-Cache', 'CHAPTER_FILE');
@@ -10449,7 +10890,8 @@ app.get('/api/audiobooks', (req: Request, res: Response) => {
     
     // Load metadata for each audiobook
     const audiobookList = audiobooks.map(bookTitle => {
-      const metadata = loadAudiobookMetadata(bookTitle);
+      let metadata = loadAudiobookMetadata(bookTitle);
+      if (metadata) metadata = injectIntroChapter(metadata, bookTitle);
       const progress = audiobookWorker.getProgress(bookTitle);
       
       return {
@@ -10481,7 +10923,7 @@ app.get('/api/audiobooks', (req: Request, res: Response) => {
 app.get('/api/audiobooks/:bookTitle', (req: Request, res: Response) => {
   try {
     const { bookTitle } = req.params;
-    const metadata = loadAudiobookMetadata(bookTitle);
+    let metadata = loadAudiobookMetadata(bookTitle);
     
     if (!metadata) {
       return res.status(404).json({
@@ -10490,6 +10932,7 @@ app.get('/api/audiobooks/:bookTitle', (req: Request, res: Response) => {
       });
     }
     
+    metadata = injectIntroChapter(metadata, bookTitle);
     const progress = audiobookWorker.getProgress(bookTitle);
     const tempChunksCount = countTempChunks(bookTitle);
     
@@ -10617,7 +11060,7 @@ app.post('/api/audiobooks/generate', async (req: Request, res: Response) => {
       chapters: chapters.map((chapter, i) => ({
         index: i,
         title: chapter.title,
-        filename: `Chapter_${i.toString().padStart(2, '0')}.wav`,
+        filename: `Chapter_${i.toString().padStart(2, '0')}.ogg`,
         duration: 0,
         isGenerated: false,
         tempChunksCount: chunkingResult.chapterChunkCounts[i] ?? 0,
@@ -10785,7 +11228,23 @@ app.post('/api/dramatize/auto', async (req: Request, res: Response) => {
 app.get('/api/audiobooks/:bookTitle/chapters/:chapterIndex', (req: Request, res: Response) => {
   try {
     const { bookTitle, chapterIndex } = req.params;
-    const chapterPath = getChapterPath(bookTitle, parseInt(chapterIndex));
+    const idx = parseInt(chapterIndex);
+
+    // Chapter 0 = standalone intro audio
+    if (idx === 0) {
+      const ch1Path = getChapterPath(bookTitle, 1);
+      const introPath = getIntroAudioPath(ch1Path);
+      if (!introPath) {
+        return res.status(404).json({
+          error: 'Intro not found',
+          message: 'No intro audio available for this audiobook',
+        });
+      }
+      res.setHeader('Content-Type', 'audio/ogg');
+      return res.sendFile(path.resolve(introPath));
+    }
+
+    const chapterPath = getChapterPath(bookTitle, idx);
     const resolvedPath = resolveChapterAudioPath(chapterPath);
     
     if (!fs.existsSync(resolvedPath)) {
@@ -10800,6 +11259,36 @@ app.get('/api/audiobooks/:bookTitle/chapters/:chapterIndex', (req: Request, res:
     console.error('✗ Error serving chapter:', error);
     res.status(500).json({
       error: 'Failed to serve chapter',
+      message: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+});
+
+/**
+ * Serve independent ambient track for a chapter
+ * 
+ * GET /api/audiobooks/:bookTitle/chapters/:chapterIndex/ambient
+ * Returns the separate ambient OGG file (not mixed with voice)
+ */
+app.get('/api/audiobooks/:bookTitle/chapters/:chapterIndex/ambient', (req: Request, res: Response) => {
+  try {
+    const { bookTitle, chapterIndex } = req.params;
+    const chapterPath = getChapterPath(bookTitle, parseInt(chapterIndex));
+    const ambientPath = getAmbientAudioPath(chapterPath);
+    
+    if (!ambientPath) {
+      return res.status(404).json({
+        error: 'Ambient not found',
+        message: `No ambient track for chapter ${chapterIndex}`,
+      });
+    }
+    
+    res.setHeader('Content-Type', 'audio/ogg');
+    res.sendFile(path.resolve(ambientPath));
+  } catch (error) {
+    console.error('✗ Error serving ambient:', error);
+    res.status(500).json({
+      error: 'Failed to serve ambient',
       message: error instanceof Error ? error.message : 'Unknown error',
     });
   }
@@ -11037,62 +11526,16 @@ app.get('/api/audiobooks/:bookTitle/preferences', (req: Request, res: Response) 
 });
 
 /**
- * Get soundscape theme options for an audiobook
- * 
+ * Soundscape theme picker — removed (themes are now auto-selected by the LLM Director)
+ *
  * GET /api/audiobooks/:bookTitle/soundscape/themes
+ * @deprecated — returns 410 Gone
  */
-app.get('/api/audiobooks/:bookTitle/soundscape/themes', (req: Request, res: Response) => {
-  try {
-    const { bookTitle } = req.params;
-    const metadata = loadAudiobookMetadata(bookTitle);
-
-    if (!metadata?.sourceFile) {
-      return res.status(404).json({
-        error: 'Audiobook not found',
-        message: `Audiobook "${bookTitle}" does not exist or has no source file`,
-      });
-    }
-
-    const bookPath = path.join(ASSETS_DIR, metadata.sourceFile);
-    if (!fs.existsSync(bookPath)) {
-      return res.status(404).json({
-        error: 'Book not found',
-        message: `File not found: ${metadata.sourceFile}`,
-      });
-    }
-
-    const ext = path.extname(metadata.sourceFile).toLowerCase();
-    let sampleText = '';
-
-    if (ext === '.epub') {
-      const epubBuffer = fs.readFileSync(bookPath);
-      const chapters = extractEpubChapters(epubBuffer);
-      const firstChapter = chapters[0]?.text ?? '';
-      sampleText = firstChapter.slice(0, 20000);
-    } else if (ext === '.txt') {
-      const bookText = fs.readFileSync(bookPath, 'utf-8');
-      const chapters = bookText.includes('Chapter') || bookText.includes('CHAPTER')
-        ? detectTextChapters(bookText)
-        : createSingleChapter(bookText, 'Full Text');
-      const firstChapter = chapters[0]?.text ?? '';
-      sampleText = firstChapter.slice(0, 20000);
-    }
-
-    const themes = getSoundscapeThemeOptions(sampleText, 5);
-
-    res.json({
-      themes,
-      selectedThemeId: metadata.userPreferences?.soundscapeThemeId ?? null,
-      musicEnabled: metadata.userPreferences?.soundscapeMusicEnabled ?? true,
-      ambientEnabled: metadata.userPreferences?.soundscapeAmbientEnabled ?? true,
-    });
-  } catch (error) {
-    console.error('✗ Error retrieving soundscape themes:', error);
-    res.status(500).json({
-      error: 'Failed to retrieve soundscape themes',
-      message: error instanceof Error ? error.message : 'Unknown error',
-    });
-  }
+app.get('/api/audiobooks/:bookTitle/soundscape/themes', (_req: Request, res: Response) => {
+  return res.status(410).json({
+    error: 'Gone',
+    message: 'Soundscape theme picker has been removed. Scene environments are now detected automatically by the LLM Director.',
+  });
 });
 
 // ========================================
@@ -11314,7 +11757,7 @@ export function resetPipeline(): void {
 ---
 
 ### Backend: Prompt Config (LLM prompt templates for dramatization)
-**File:** `apps/backend/src/promptConfig.ts` | **Size:** 16.9 KB | **Lines:** 431
+**File:** `apps/backend/src/promptConfig.ts` | **Size:** 20.2 KB | **Lines:** 517
 
 ```typescript
 /**
@@ -11410,6 +11853,8 @@ Fields:
 - genre: Primary genre (e.g., "gothic horror", "young adult fantasy")
 - tone: Mood/atmosphere - NO words derivable from genre (e.g., "tense, melancholic")
 - voiceTone: EXACTLY two concise adjectives derived from genre + tone, format "adj1, adj2" (e.g., "ironic, witty")
+- period: One word or short phrase describing historical era (NO year numbers). Must be EXACTLY one of:
+  prehistory | antiquity | middle ages | modern age | contemporary | future | undefined
 
 `;
 }
@@ -11442,7 +11887,8 @@ export function getCharacterExtractionPrompt(
   "bookInfo": {
     "genre": "concise genre (few words)",
     "tone": "unique mood descriptors (few words)",
-    "voiceTone": "adj1, adj2"
+    "voiceTone": "adj1, adj2",
+    "period": "prehistory|antiquity|middle ages|modern age|contemporary|future|undefined"
   },` : '';
 
   return `You are an expert literary analyst and voice casting director for audiobook production.
@@ -11493,6 +11939,46 @@ RULES:
 7. Voice selection: Match voice characteristics to character role and gender (e.g., elderly → low pitch, child → high pitch)
 
 Return ONLY valid JSON, no markdown or explanation.`;
+}
+
+// =============================================================================
+// 1.1 CHAPTER AMBIENCE MAP PROMPT (Soundscape)
+// =============================================================================
+
+export function getChapterAmbienceMapPrompt(
+  chapterText: string,
+  ambientCatalogList: string
+): string {
+  return `You are an expert audio scene designer. Build a NON-OVERLAPPING ambience timeline for this chapter.
+
+AVAILABLE AMBIENT ASSETS (use ONLY these IDs):
+${ambientCatalogList}
+
+TASK:
+1) Identify ambience-worthy environments or sustained sources (e.g., forest, rain, cathedral, city, wind).
+2) Select the SINGLE BEST matching ambient asset ID for each segment using precise semantic match with asset tags/filename.
+3) Determine when each ambience starts and ends based on the chapter text flow.
+
+OUTPUT RULES:
+- Output JSON ONLY (no markdown).
+- Use start/end as fractions of chapter progress (0.0 to 1.0).
+- No overlaps: only ONE ambience active at a time.
+- If overlaps are possible, keep the most important/longest segment and drop the rest.
+- If nothing fits, return an empty list.
+
+JSON schema:
+{
+  "ambience": [
+    {
+      "assetId": "exact_ambient_asset_id",
+      "start": 0.0,
+      "end": 0.25
+    }
+  ]
+}
+
+CHAPTER TEXT:
+${chapterText.substring(0, 120000)}`;
 }
 
 /**
@@ -11747,715 +12233,55 @@ export const DEFAULT_NARRATOR_VOICE = 'Enceladus';
  * Silence gap between subchunks in milliseconds
  */
 export const SUBCHUNK_SILENCE_GAP_MS = 500;
-```
 
----
+// =============================================================================
+// SOUNDSCAPE CONFIGURATION
+// =============================================================================
 
-### Backend: Soundscape Integration (ambient audio, music mixing)
-**File:** `apps/backend/src/soundscapeIntegration.ts` | **Size:** 24.5 KB | **Lines:** 696
-
-```typescript
-import fs from 'fs';
-import os from 'os';
-import path from 'path';
-import { spawn } from 'child_process';
-import { fileURLToPath } from 'url';
-import { synthesizeText } from './ttsClient.js';
-import { loadAudiobookMetadata } from './audiobookManager.js';
-import { estimateAudioDuration } from './tempChunkManager.js';
-import { ChapterTranslator } from './chapterTranslator.js';
-
-interface SoundAsset {
-  id: string;
-  type: 'ambient' | 'music';
-  genre?: string[];
-  mood?: string[];
-  recommendedVolumeDb?: number;
-  filePath: string;
-}
-
-interface SoundLibraryCatalog {
-  assets: SoundAsset[];
-}
-
-export interface SoundscapePreferences {
-  soundscapeMusicEnabled?: boolean;
-  soundscapeAmbientEnabled?: boolean;
-  soundscapeThemeId?: string;
-}
-
-interface IntroSegment {
-  type: 'music' | 'voice';
-  durationMs: number;
-  volumeDb?: number;
-  text?: string;
-  fadeInMs?: number;
-  fadeOutMs?: number;
-  musicBedVolumeDb?: number;
-  musicBedFadeInMs?: number;
-  musicBedFadeOutMs?: number;
-}
-
-const DEFAULT_KEYWORD_MAP: Record<string, string[]> = {
-  forest: ['forest', 'woods', 'trees', 'pine', 'jungle'],
-  rain: ['rain', 'storm', 'thunder', 'lightning'],
-  sea: ['sea', 'ocean', 'wave', 'shore', 'harbor'],
-  city: ['city', 'street', 'traffic', 'crowd', 'market'],
-  interior: ['room', 'hall', 'castle', 'cathedral', 'church'],
-  sciFi: ['spaceship', 'engine', 'hull', 'airlock', 'android'],
-  fire: ['fire', 'flame', 'smoke', 'campfire'],
-  wind: ['wind', 'breeze', 'gust'],
-  cave: ['cave', 'tunnel', 'underground'],
-};
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const PROJECT_ROOT = path.join(__dirname, '..', '..', '..');
-const DEFAULT_CATALOG_PATH = path.join(PROJECT_ROOT, 'soundscape', 'assets', 'catalog.json');
-
-const DEFAULT_MIX_OPTIONS = {
-  ambientDb: -6,
-  fadeInMs: 1500,
+/**
+ * Soundscape pipeline configuration — externalized values.
+ * All tuneable parameters for ambient layer, SFX, and embedding search.
+ */
+export const SOUNDSCAPE_CONFIG = {
+  /** Similarity threshold for ambient asset matching (cosine similarity) */
+  similarityThresholdAmbient: 0.3,
+  /** Similarity threshold for SFX asset matching */
+  similarityThresholdSfx: 0.35,
+  /** Hysteresis margin — avoid switching ambient if score difference < this */
+  hysteresisMargin: 0.05,
+  /** Minimum ambient duration in seconds */
+  ambientMinDurationSec: 10,
+  /** Cooldown between ambient switches in seconds */
+  ambientCooldownSec: 30,
+  /** Cooldown between SFX triggers in seconds */
+  sfxCooldownSec: 5,
+  /** Fade-in duration for ambient layer in ms */
+  fadeInMs: 2000,
+  /** Fade-out duration for ambient layer in ms */
   fadeOutMs: 2000,
+  /** Max parallel subchunk TTS generation */
+  maxParallelSubchunks: 3,
+  /** Ambient volume in dB under narration */
+  ambientVolumeDb: -6,
+  /** Ambient LUFS target for loudnorm (speech-friendly) */
+  ambientLufsTarget: -35,
+  /** Ambient true peak limit */
+  ambientTruePeak: -2,
+  /** Ambient loudness range */
+  ambientLra: 11,
+  /** SFX volume in dB */
+  sfxVolumeDb: -3,
+  /** Embedding dimensions (gemini-embedding-001: 768 balances quality vs memory) */
+  embeddingDimensions: 768,
+  /** Max SFX duration to be considered SFX (longer = ambient) */
+  sfxMaxDurationSec: 20,
 };
-
-const INTRO_FADE_MS = 3500;
-const INTRO_END_SILENCE_MS = 3000;
-const INTRO_CHAPTER_START_SILENCE_MS = 3000;
-const INTRO_CHAPTER_GAP_MS = 2000;
-const INTRO_TITLE_AUTHOR_GAP_MS = 2000;
-const INTRO_AUTHOR_VOICELIBRI_GAP_MS = 4000;
-const INTRO_VOICELIBRI_CHAPTER_GAP_MS = 4000;
-const INTRO_END_MUSIC_EXTENSION_MS = 3750;
-const RAMP_MS = 2000;
-const MUSIC_FULL_BOOST_DB = 10.5;
-const MUSIC_BACKGROUND_BOOST_DB = 4.5;
-const MUSIC_BACKGROUND_DB = -21.5;
-const INTRO_VOICE_BOOST_DB = 2;
-const INTRO_NARRATOR_VOICE = 'Algieba';
-const AMBIENT_FADE_MS = 2000;
-const AMBIENT_PRE_ROLL_MS = 4000;
-const AMBIENT_POST_ROLL_MS = 4000;
-
-function applyMusicBoost(volumeDb: number, boostDb: number): number {
-  return volumeDb + boostDb;
-}
-
-interface VoiceOverlay {
-  startMs?: number;
-  gapAfterMs?: number;
-  text: string;
-}
-
-function buildBookIntroSequence(bookTitle: string, author: string, chapterTitle: string): { totalDurationMs: number; voiceOverlays: VoiceOverlay[]; endSilenceMs: number } {
-  return {
-    totalDurationMs: 35000 + INTRO_END_MUSIC_EXTENSION_MS,
-    voiceOverlays: [
-      { startMs: 12000, gapAfterMs: INTRO_TITLE_AUTHOR_GAP_MS, text: `${bookTitle}.` },
-      { gapAfterMs: INTRO_AUTHOR_VOICELIBRI_GAP_MS, text: `${author}.` },
-      { gapAfterMs: INTRO_VOICELIBRI_CHAPTER_GAP_MS, text: `This audiobook was brought to you by VoiceLibri.` },
-      { text: `Chapter 1. ${chapterTitle}.` },
-    ],
-    endSilenceMs: INTRO_END_SILENCE_MS,
-  };
-}
-
-function buildChapterIntroSequence(chapterNumber: number, chapterTitle: string): { totalDurationMs?: number; voiceOverlays: VoiceOverlay[]; endSilenceMs: number } {
-  return {
-    voiceOverlays: [
-      { startMs: INTRO_CHAPTER_START_SILENCE_MS, gapAfterMs: INTRO_CHAPTER_GAP_MS, text: `Chapter ${chapterNumber}.` },
-      { text: `${chapterTitle}.` },
-    ],
-    endSilenceMs: INTRO_END_SILENCE_MS,
-  };
-}
-
-let catalogCache: SoundLibraryCatalog | null = null;
-let introTranslator: ChapterTranslator | null = null;
-const introTranslationCache = new Map<string, string>();
-
-function getTempAudioDir(): string {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'voicelibri-intro-'));
-  return base;
-}
-
-function normalizeTargetLanguage(raw?: string | null): string | null {
-  if (!raw) return null;
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  if (trimmed.toLowerCase() === 'unknown' || trimmed.toLowerCase() === 'auto-detect') return null;
-  if (trimmed.includes('-')) return trimmed;
-  const lower = trimmed.toLowerCase();
-  const map: Record<string, string> = {
-    en: 'en-US',
-    sk: 'sk-SK',
-    cs: 'cs-CZ',
-    ru: 'ru-RU',
-    de: 'de-DE',
-    pl: 'pl-PL',
-    hr: 'hr-HR',
-    zh: 'zh-CN',
-    nl: 'nl-NL',
-    fr: 'fr-FR',
-    hi: 'hi-IN',
-    it: 'it-IT',
-    ja: 'ja-JP',
-    ko: 'ko-KR',
-    pt: 'pt-BR',
-    es: 'es-ES',
-    uk: 'uk-UA',
-  };
-  return map[lower] ?? trimmed;
-}
-
-async function translateIntroText(text: string, targetLanguage: string | null): Promise<string> {
-  if (!targetLanguage) return text;
-  if (targetLanguage.toLowerCase().startsWith('en')) return text;
-  if (targetLanguage === 'sk-SK' && text === 'This audiobook was brought to you by VoiceLibri.') {
-    return 'Túto audioknihu Vám prináša VoiceLibri.';
-  }
-  const cacheKey = `${targetLanguage}::${text}`;
-  const cached = introTranslationCache.get(cacheKey);
-  if (cached) return cached;
-
-  if (!introTranslator) {
-    const projectId = process.env.GOOGLE_CLOUD_PROJECT || '';
-    if (!projectId) {
-      return text;
-    }
-    introTranslator = new ChapterTranslator({
-      projectId,
-      location: process.env.GOOGLE_CLOUD_LOCATION || 'us-central1',
-    });
-  }
-
-  try {
-    const result = await introTranslator.translateChapter(text, targetLanguage);
-    const translated = result.translatedText?.trim() || text;
-    introTranslationCache.set(cacheKey, translated);
-    return translated;
-  } catch (error) {
-    console.warn('⚠️ Intro translation failed, using original text:', error);
-    return text;
-  }
-}
-
-function isSoundscapeEnabled(): boolean {
-  const raw = process.env.SOUNDSCAPE_ENABLED ?? process.env.SOUNDSCAPE_AMBIENT_ENABLED;
-  return raw === '1' || raw === 'true';
-}
-
-function getMixOptions() {
-  const ambientDb = Number(process.env.SOUNDSCAPE_AMBIENT_DB ?? DEFAULT_MIX_OPTIONS.ambientDb);
-  return { ambientDb };
-}
-
-function getSoundscapeChapterPath(chapterPath: string): string {
-  return chapterPath.replace(/\.wav$/i, '_soundscape.wav');
-}
-
-function getIntroPath(chapterPath: string): string {
-  return chapterPath.replace(/\.wav$/i, '_intro.wav');
-}
-
-function getSoundscapeBasePath(chapterPath: string): string {
-  return chapterPath.replace(/\.wav$/i, '_soundscape_base.wav');
-}
-
-function stripSpeakerPrefixes(text: string): string {
-  return text.replace(/^[A-Z][A-Z0-9]*:\s*/gm, '');
-}
-
-function extractSceneTags(text: string): string[] {
-  const lower = text.toLowerCase();
-  const tags: string[] = [];
-
-  for (const [tag, keywords] of Object.entries(DEFAULT_KEYWORD_MAP)) {
-    if (keywords.some(k => lower.includes(k))) {
-      tags.push(tag);
-    }
-  }
-
-  return tags;
-}
-
-function scoreAsset(asset: SoundAsset, tags: string[]): number {
-  if (tags.length === 0) return 0;
-  const tagSet = new Set(tags);
-  const genreMatches = asset.genre?.filter(g => tagSet.has(g)).length ?? 0;
-  const moodMatches = asset.mood?.filter(m => tagSet.has(m)).length ?? 0;
-  return genreMatches + moodMatches;
-}
-
-function buildThemeLabel(asset: SoundAsset): string {
-  return asset.id
-    .replace(/[_-]+/g, ' ')
-    .replace(/\b\w/g, c => c.toUpperCase());
-}
-
-export function getSoundscapeThemeOptions(text: string, maxOptions: number = 5): Array<{ id: string; label: string; score: number }>{
-  const catalog = loadCatalog();
-  if (!catalog) return [];
-
-  const tags = extractSceneTags(text);
-  const themes = catalog.assets.filter(asset => asset.type === 'music');
-
-  const scored = themes.map(asset => ({
-    id: asset.id,
-    label: buildThemeLabel(asset),
-    score: scoreAsset(asset, tags),
-  }));
-
-  scored.sort((a, b) => b.score - a.score);
-
-  const limit = Math.min(Math.max(1, maxOptions), 5);
-  const filtered = scored.filter(item => item.score > 0);
-
-  if (filtered.length > 0) {
-    return filtered.slice(0, limit);
-  }
-
-  return scored.slice(0, Math.min(limit, scored.length));
-}
-
-function selectThemeAsset(catalog: SoundLibraryCatalog, options: SoundscapePreferences | undefined, chapterText: string): SoundAsset | undefined {
-  const resolvePath = (filePath: string) => path.isAbsolute(filePath) ? filePath : path.join(PROJECT_ROOT, filePath);
-  const musicAssets = catalog.assets.filter(asset => asset.type === 'music');
-  if (musicAssets.length === 0) return undefined;
-
-  if (options?.soundscapeThemeId) {
-    const match = musicAssets.find(asset => asset.id === options.soundscapeThemeId);
-    if (match && fs.existsSync(resolvePath(match.filePath))) {
-      return match;
-    }
-  }
-
-  const tags = extractSceneTags(chapterText);
-  const scored = musicAssets.map(asset => ({
-    asset,
-    score: scoreAsset(asset, tags),
-  }));
-
-  scored.sort((a, b) => b.score - a.score);
-  for (const item of scored) {
-    if (fs.existsSync(resolvePath(item.asset.filePath))) {
-      return item.asset;
-    }
-  }
-
-  return undefined;
-}
-
-function loadCatalog(): SoundLibraryCatalog | null {
-  if (catalogCache) return catalogCache;
-  if (!fs.existsSync(DEFAULT_CATALOG_PATH)) {
-    console.warn(`⚠️ Soundscape catalog not found: ${DEFAULT_CATALOG_PATH}`);
-    return null;
-  }
-
-  try {
-    const raw = fs.readFileSync(DEFAULT_CATALOG_PATH, 'utf8');
-    catalogCache = JSON.parse(raw) as SoundLibraryCatalog;
-    return catalogCache;
-  } catch (error) {
-    console.error('✗ Failed to load soundscape catalog:', error);
-    return null;
-  }
-}
-
-function selectAmbientAsset(catalog: SoundLibraryCatalog, tags: string[]): SoundAsset | undefined {
-  const ambients = catalog.assets.filter(a => a.type === 'ambient');
-  if (ambients.length === 0) return undefined;
-  if (tags.length === 0) return ambients[0];
-
-  const tagSet = new Set(tags);
-  const match = ambients.find(a =>
-    (a.genre?.some(g => tagSet.has(g)) ?? false) ||
-    (a.mood?.some(m => tagSet.has(m)) ?? false)
-  );
-
-  return match ?? ambients[0];
-}
-
-function resolveAssetPath(filePath: string): string {
-  return path.isAbsolute(filePath) ? filePath : path.join(PROJECT_ROOT, filePath);
-}
-
-function buildMixCommand(
-  speechPath: string,
-  ambientPath: string,
-  outputPath: string,
-  options: { ambientDb: number },
-  speechDurationMs: number
-): string[] {
-  const preRollSec = AMBIENT_PRE_ROLL_MS / 1000;
-  const postRollSec = AMBIENT_POST_ROLL_MS / 1000;
-  const fadeInSec = AMBIENT_FADE_MS / 1000;
-  const fadeOutSec = AMBIENT_FADE_MS / 1000;
-  const totalDurationSec = Math.max((speechDurationMs + AMBIENT_PRE_ROLL_MS + AMBIENT_POST_ROLL_MS) / 1000, 0.5);
-  const fadeOutStart = Math.max((speechDurationMs + AMBIENT_PRE_ROLL_MS + (AMBIENT_POST_ROLL_MS - AMBIENT_FADE_MS)) / 1000, 0);
-  const voiceDelayMs = AMBIENT_PRE_ROLL_MS;
-
-  return [
-    '-i', speechPath,
-    '-stream_loop', '-1', '-i', ambientPath,
-    '-filter_complex',
-      `[1:a]loudnorm=I=-35:TP=-2:LRA=11,volume=${options.ambientDb}dB,` +
-      `afade=t=in:st=0:d=${fadeInSec},` +
-      `afade=t=out:st=${fadeOutStart}:d=${fadeOutSec},` +
-      `atrim=0:${totalDurationSec}[amb];` +
-      `[0:a]adelay=${voiceDelayMs}|${voiceDelayMs}[speech];` +
-      `[amb][speech]amix=inputs=2:duration=first:dropout_transition=2:normalize=0`,
-    '-ar', '24000',
-    '-ac', '1',
-    '-c:a', 'pcm_s16le',
-    outputPath,
-  ];
-}
-
-function buildMusicSegmentCommand(
-  musicPath: string,
-  outputPath: string,
-  durationMs: number,
-  volumeDb: number,
-  fadeInMs?: number,
-  fadeOutMs?: number
-): string[] {
-  const durationSec = Math.max(durationMs / 1000, 0.5);
-  const filters: string[] = [`volume=${volumeDb}dB`];
-  if (fadeInMs && fadeInMs > 0) {
-    filters.push(`afade=t=in:st=0:d=${fadeInMs / 1000}`);
-  }
-  if (fadeOutMs && fadeOutMs > 0) {
-    const fadeOutSec = fadeOutMs / 1000;
-    const start = Math.max(durationSec - fadeOutSec, 0);
-    filters.push(`afade=t=out:st=${start}:d=${fadeOutSec}`);
-  }
-  return [
-    '-stream_loop', '-1', '-i', musicPath,
-    '-t', durationSec.toString(),
-    '-af', filters.join(','),
-    '-ar', '24000',
-    '-ac', '1',
-    '-c:a', 'pcm_s16le',
-    outputPath,
-  ];
-}
-
-function buildVoiceWithMusicCommand(voicePath: string, musicPath: string, outputPath: string): string[] {
-  return [
-    '-i', voicePath,
-    '-i', musicPath,
-    '-filter_complex', '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=2:normalize=0',
-    '-ar', '24000',
-    '-ac', '1',
-    '-c:a', 'pcm_s16le',
-    outputPath,
-  ];
-}
-
-function buildConcatCommand(inputs: string[], outputPath: string): string[] {
-  const args: string[] = [];
-  for (const input of inputs) {
-    args.push('-i', input);
-  }
-  const filter = inputs.map((_, idx) => `[${idx}:a]`).join('') + `concat=n=${inputs.length}:v=0:a=1`;
-  return [...args, '-filter_complex', filter, '-ar', '24000', '-ac', '1', '-c:a', 'pcm_s16le', outputPath];
-}
-
-async function runFfmpeg(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = spawn('ffmpeg', ['-y', ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-
-    child.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-
-    child.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    child.on('error', (error) => {
-      stderr += error instanceof Error ? error.message : String(error);
-      resolve({ code: 1, stdout, stderr });
-    });
-
-    child.on('close', (code) => {
-      resolve({ code: code ?? 0, stdout, stderr });
-    });
-  });
-}
-
-export async function applySoundscapeToChapter(options: {
-  bookTitle: string;
-  chapterIndex: number;
-  chapterPath: string;
-  chapterText: string;
-  preferences?: SoundscapePreferences;
-}): Promise<string> {
-  if (!isSoundscapeEnabled()) {
-    return options.chapterPath;
-  }
-
-  const ambientEnabled = options.preferences?.soundscapeAmbientEnabled !== false;
-  const musicEnabled = options.preferences?.soundscapeMusicEnabled !== false;
-
-  console.log(`🎧 Soundscape: musicEnabled=${musicEnabled} ambientEnabled=${ambientEnabled}`);
-
-  if (!ambientEnabled && !musicEnabled) {
-    return options.chapterPath;
-  }
-
-  const soundscapePath = getSoundscapeChapterPath(options.chapterPath);
-  const soundscapeBasePath = musicEnabled ? getSoundscapeBasePath(options.chapterPath) : soundscapePath;
-  const introPath = getIntroPath(options.chapterPath);
-
-  if (fs.existsSync(soundscapePath)) {
-    if (!musicEnabled) {
-      return soundscapePath;
-    }
-    fs.unlinkSync(soundscapePath);
-  }
-
-  const catalog = loadCatalog();
-  if (!catalog) {
-    return options.chapterPath;
-  }
-
-  const chapterText = stripSpeakerPrefixes(options.chapterText);
-
-  let basePath = options.chapterPath;
-
-  if (ambientEnabled) {
-    const tags = extractSceneTags(chapterText);
-    const ambient = selectAmbientAsset(catalog, tags);
-
-    if (!ambient) {
-      console.warn('⚠️ No ambient assets available for soundscape mix');
-    } else {
-      const ambientPath = resolveAssetPath(ambient.filePath);
-      if (!fs.existsSync(ambientPath)) {
-        console.warn(`⚠️ Ambient file missing: ${ambientPath}`);
-      } else {
-        console.log(`🌿 Soundscape mix: ${options.bookTitle} ch${options.chapterIndex} -> ${ambient.id}`);
-        const speechBuffer = fs.readFileSync(options.chapterPath);
-        const speechDurationMs = estimateAudioDuration(speechBuffer) * 1000;
-        const args = buildMixCommand(options.chapterPath, ambientPath, soundscapeBasePath, getMixOptions(), speechDurationMs);
-        const result = await runFfmpeg(args);
-        if (result.code !== 0) {
-          console.error('✗ ffmpeg soundscape mix failed:', result.stderr);
-          return options.chapterPath;
-        }
-        basePath = soundscapeBasePath;
-      }
-    }
-  }
-
-  if (!musicEnabled) {
-    if (basePath === soundscapeBasePath && soundscapeBasePath !== soundscapePath) {
-      fs.renameSync(soundscapeBasePath, soundscapePath);
-    }
-    return basePath === options.chapterPath ? options.chapterPath : soundscapePath;
-  }
-
-  const metadata = loadAudiobookMetadata(options.bookTitle);
-  const chapterTitle = metadata?.chapters?.[options.chapterIndex - 1]?.title
-    || `Chapter ${options.chapterIndex}`;
-  const bookTitle = metadata?.title ?? options.bookTitle;
-  const author = metadata?.author ?? 'Unknown author';
-  const narratorVoice = INTRO_NARRATOR_VOICE;
-  const introLanguage = normalizeTargetLanguage((global as any).TARGET_LANGUAGE || metadata?.language || null);
-
-  if (!fs.existsSync(introPath)) {
-    const theme = selectThemeAsset(catalog, options.preferences, chapterText);
-    if (!theme) {
-      console.warn('⚠️ No music theme available for intro');
-    } else {
-      const themePath = resolveAssetPath(theme.filePath);
-      console.log(`🎼 Intro theme: ${theme.id} -> ${themePath}`);
-      if (!fs.existsSync(themePath)) {
-        console.warn(`⚠️ Theme file missing: ${themePath}`);
-      } else {
-        const introSpec = options.chapterIndex === 1
-          ? buildBookIntroSequence(bookTitle, author, chapterTitle)
-          : buildChapterIntroSequence(options.chapterIndex, chapterTitle);
-        const tempDir = getTempAudioDir();
-        console.log(`🎬 Intro build start: ${introPath}`);
-
-        const voiceFiles: Array<{ path: string; startMs: number; durationMs: number }> = [];
-        let currentStartMs = 0;
-        let lastEndMs = 0;
-
-        for (let i = 0; i < introSpec.voiceOverlays.length; i++) {
-          const overlay = introSpec.voiceOverlays[i];
-          const voiceText = await translateIntroText(overlay.text, introLanguage);
-          const voiceAudio = await synthesizeText(voiceText, narratorVoice, 'normal', undefined, introLanguage ?? undefined);
-          const voiceDurationMs = estimateAudioDuration(voiceAudio) * 1000;
-          const voicePath = path.join(tempDir, `intro_voice_${i}.wav`);
-
-          if (overlay.startMs !== undefined) {
-            currentStartMs = overlay.startMs;
-          } else {
-            currentStartMs = lastEndMs + (overlay.gapAfterMs ?? 0);
-          }
-
-          fs.writeFileSync(voicePath, voiceAudio);
-          voiceFiles.push({ path: voicePath, startMs: currentStartMs, durationMs: voiceDurationMs });
-          lastEndMs = currentStartMs + voiceDurationMs + (overlay.gapAfterMs ?? 0);
-        }
-
-        const computedDurationMs = Math.max(introSpec.totalDurationMs ?? 0, lastEndMs);
-        const baseMusicPath = path.join(tempDir, 'intro_base_music.wav');
-        const baseVolume = applyMusicBoost(-14, MUSIC_FULL_BOOST_DB);
-        const baseMusicArgs = buildMusicSegmentCommand(
-          themePath,
-          baseMusicPath,
-          computedDurationMs,
-          baseVolume,
-          INTRO_FADE_MS,
-          INTRO_FADE_MS
-        );
-        const baseMusicResult = await runFfmpeg(baseMusicArgs);
-        if (baseMusicResult.code !== 0) {
-          console.error('✗ ffmpeg intro base music failed:', baseMusicResult.stderr);
-          for (const v of voiceFiles) {
-            if (fs.existsSync(v.path)) {
-              fs.unlinkSync(v.path);
-            }
-          }
-          if (fs.existsSync(tempDir)) {
-            fs.rmSync(tempDir, { recursive: true, force: true });
-          }
-        } else {
-          const introTempPath = path.join(tempDir, 'intro_temp.wav');
-          const fullVolumeDb = applyMusicBoost(-14, MUSIC_FULL_BOOST_DB);
-          const backgroundVolumeDb = applyMusicBoost(MUSIC_BACKGROUND_DB, MUSIC_BACKGROUND_BOOST_DB);
-          const backgroundRatio = Number(Math.pow(10, (backgroundVolumeDb - fullVolumeDb) / 20).toFixed(6));
-          const rampSec = RAMP_MS / 1000;
-          const rampValue = Math.max(rampSec, 0.01);
-
-          const duckExpressions = voiceFiles.map((v) => {
-            const startSec = v.startMs / 1000;
-            const endSec = startSec + v.durationMs / 1000;
-            const fadeInStart = Math.max(startSec - rampValue, 0);
-            const fadeOutEnd = endSec + rampValue;
-            return `if(between(t\,${fadeInStart}\,${startSec}),1-(1-${backgroundRatio})*(t-${fadeInStart})/${rampValue},` +
-              `if(between(t\,${startSec}\,${endSec}),${backgroundRatio},` +
-              `if(between(t\,${endSec}\,${fadeOutEnd}),${backgroundRatio}+(1-${backgroundRatio})*(t-${endSec})/${rampValue},1)))`;
-          });
-
-          let volumeExpr = '1';
-          for (const expr of duckExpressions) {
-            volumeExpr = `min(${volumeExpr}\\,${expr})`;
-          }
-
-          const filterComplex = [
-            `[0:a]volume='${volumeExpr}':eval=frame[music]`,
-            ...voiceFiles.map((v, i) => `[${i + 1}:a]volume=${INTRO_VOICE_BOOST_DB}dB,adelay=${v.startMs}|${v.startMs}[voice${i}]`),
-            `[music]${voiceFiles.map((_, i) => `[voice${i}]`).join('')}amix=inputs=${1 + voiceFiles.length}:duration=first:normalize=0`
-          ].join(';');
-
-          const mixArgs: string[] = [
-            '-i', baseMusicPath,
-            ...voiceFiles.flatMap(v => ['-i', v.path]),
-            '-filter_complex', filterComplex,
-            '-ar', '24000',
-            '-ac', '1',
-            introTempPath
-          ];
-
-          const mixResult = await runFfmpeg(mixArgs);
-          if (mixResult.code !== 0) {
-            console.error('✗ ffmpeg intro voice overlay mix failed:', mixResult.stderr);
-          } else {
-            const endSilenceMs = introSpec.endSilenceMs ?? 0;
-            if (endSilenceMs > 0) {
-              const silencePath = path.join(tempDir, 'intro_silence.wav');
-              const silenceArgs = [
-                '-f', 'lavfi',
-                '-t', (endSilenceMs / 1000).toString(),
-                '-i', 'anullsrc=r=24000:cl=mono',
-                silencePath,
-              ];
-              const silenceResult = await runFfmpeg(silenceArgs);
-              if (silenceResult.code !== 0) {
-                console.error('✗ ffmpeg intro silence failed:', silenceResult.stderr);
-                fs.renameSync(introTempPath, introPath);
-              } else {
-                const introWithSilencePath = path.join(tempDir, 'intro_with_silence.wav');
-                const concatArgs = buildConcatCommand([introTempPath, silencePath], introWithSilencePath);
-                const concatResult = await runFfmpeg(concatArgs);
-                if (concatResult.code !== 0) {
-                  console.error('✗ ffmpeg intro silence concat failed:', concatResult.stderr);
-                  fs.renameSync(introTempPath, introPath);
-                } else {
-                  fs.renameSync(introWithSilencePath, introPath);
-                }
-                if (fs.existsSync(silencePath)) {
-                  fs.unlinkSync(silencePath);
-                }
-                if (fs.existsSync(introTempPath)) {
-                  fs.unlinkSync(introTempPath);
-                }
-              }
-            } else {
-              fs.renameSync(introTempPath, introPath);
-            }
-            console.log(`✅ Intro built: ${introPath} exists=${fs.existsSync(introPath)}`);
-          }
-
-          if (fs.existsSync(baseMusicPath)) {
-            fs.unlinkSync(baseMusicPath);
-          }
-          for (const v of voiceFiles) {
-            if (fs.existsSync(v.path)) {
-              fs.unlinkSync(v.path);
-            }
-          }
-          if (fs.existsSync(tempDir)) {
-            fs.rmSync(tempDir, { recursive: true, force: true });
-          }
-        }
-      }
-    }
-  }
-
-  console.log(`🎬 Intro ready? ${fs.existsSync(introPath)}`);
-  if (fs.existsSync(introPath)) {
-    const concatArgs = buildConcatCommand([introPath, basePath], soundscapePath);
-    const result = await runFfmpeg(concatArgs);
-    if (result.code !== 0) {
-      console.error('✗ ffmpeg soundscape concat failed:', result.stderr);
-      return basePath;
-    }
-    if (fs.existsSync(introPath)) {
-      fs.unlinkSync(introPath);
-    }
-    if (basePath === soundscapeBasePath && fs.existsSync(soundscapeBasePath)) {
-      fs.unlinkSync(soundscapeBasePath);
-    }
-    return soundscapePath;
-  }
-
-  return basePath;
-}
-
-export function resolveChapterAudioPath(chapterPath: string): string {
-  if (!isSoundscapeEnabled()) {
-    return chapterPath;
-  }
-
-  const soundscapePath = getSoundscapeChapterPath(chapterPath);
-  return fs.existsSync(soundscapePath) ? soundscapePath : chapterPath;
-}
 ```
 
 ---
 
 ### Backend: Temp Chunk Manager (chunk caching, WAV generation, retry logic)
-**File:** `apps/backend/src/tempChunkManager.ts` | **Size:** 67.6 KB | **Lines:** 1834
+**File:** `apps/backend/src/tempChunkManager.ts` | **Size:** 68.7 KB | **Lines:** 1852
 
 ```typescript
 /**
@@ -12486,7 +12312,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { synthesizeText, synthesizeMultiSpeaker, SpeakerConfig } from './ttsClient.js';
 import { extractVoiceSegments, removeVoiceTags } from './dramatizedChunkerSimple.js';
-import { concatenateWavBuffers, addSilence } from './audioUtils.js';
+import { concatenateWavBuffers, addSilence, estimateWavDuration, convertWavToOgg } from './audioUtils.js';
 import { validateVoiceSegment, GEMINI_TTS_HARD_LIMIT } from './chapterChunker.js';
 import { 
   getTempChunkPath, 
@@ -13436,7 +13262,7 @@ export async function consolidateChapterFromTemps(
   // 1. Load all temp chunk files and track boundaries
   const chunkBuffers: Buffer[] = [];
   const chunkBoundaries: Array<{ chunkIndex: number; startByte: number; endByte: number; duration: number }> = [];
-  let currentByte = 44; // WAV header is 44 bytes
+  let currentByte = 0;
   
   for (const chunkIndex of chunkIndices) {
     const tempFile = getTempChunkPath(bookTitle, chunkIndex);
@@ -13448,29 +13274,32 @@ export async function consolidateChapterFromTemps(
     const buffer = fs.readFileSync(tempFile);
     chunkBuffers.push(buffer);
     
-    // Track chunk boundaries (excluding WAV header for each chunk)
-    const pcmDataSize = buffer.length - 44;
+    // Track chunk boundaries (WAV sub-chunks — exact byte boundaries from PCM data)
+    const chunkSize = buffer.length;
     const duration = estimateAudioDuration(buffer);
     
     chunkBoundaries.push({
       chunkIndex,
       startByte: currentByte,
-      endByte: currentByte + pcmDataSize,
+      endByte: currentByte + chunkSize,
       duration,
     });
     
-    currentByte += pcmDataSize;
+    currentByte += chunkSize;
   }
   
-  // 2. Concatenate into single WAV
-  const chapterAudio = concatenateWavBuffers(chunkBuffers);
+  // 2. Concatenate WAV sub-chunks into single WAV
+  const chapterWav = concatenateWavBuffers(chunkBuffers);
   
-  // 3. Save consolidated chapter file
+  // 3. Convert WAV → OGG Opus (single encode, 70kbps VBR)
+  const chapterAudio = await convertWavToOgg(chapterWav);
+  
+  // 4. Save consolidated chapter file (OGG Opus)
   fs.writeFileSync(outputPath, chapterAudio);
   const duration = estimateAudioDuration(chapterAudio);
   
   // 4. Save chunk boundaries metadata for extraction
-  const boundariesPath = outputPath.replace('.wav', '_boundaries.json');
+  const boundariesPath = outputPath.replace('.ogg', '_boundaries.json');
   fs.writeFileSync(boundariesPath, JSON.stringify({
     chapterIndex,
     totalChunks: chunkIndices.length,
@@ -13544,7 +13373,8 @@ export async function consolidateChapterSmart(
       return [outputPath];
     }
     
-    const chapterAudio = concatenateWavBuffers(chunkBuffers);
+    const chapterWav = concatenateWavBuffers(chunkBuffers);
+    const chapterAudio = await convertWavToOgg(chapterWav);
     fs.writeFileSync(outputPath, chapterAudio);
     
     console.log(`  ✅ Created: ${path.basename(outputPath)} (${(totalDuration / 60).toFixed(1)} min)`);
@@ -13575,7 +13405,8 @@ export async function consolidateChapterSmart(
       const outputPath = getChapterPath(bookTitle, chapter.index, chapter.title, partIndex);
       
       if (!fs.existsSync(outputPath)) {
-        const partAudio = concatenateWavBuffers(currentPartBuffers);
+        const partWav = concatenateWavBuffers(currentPartBuffers);
+        const partAudio = await convertWavToOgg(partWav);
         fs.writeFileSync(outputPath, partAudio);
         console.log(`  ✅ Part ${partIndex + 1}: ${path.basename(outputPath)} (${(currentPartDuration / 60).toFixed(1)} min)`);
       } else {
@@ -13594,7 +13425,8 @@ export async function consolidateChapterSmart(
   // Handle any remaining chunks (shouldn't happen, but safety check)
   if (currentPartBuffers.length > 0) {
     const outputPath = getChapterPath(bookTitle, chapter.index, chapter.title, partIndex);
-    const partAudio = concatenateWavBuffers(currentPartBuffers);
+    const partWav = concatenateWavBuffers(currentPartBuffers);
+    const partAudio = await convertWavToOgg(partWav);
     fs.writeFileSync(outputPath, partAudio);
     console.log(`  ✅ Part ${partIndex + 1} (final): ${path.basename(outputPath)} (${(currentPartDuration / 60).toFixed(1)} min)`);
     outputPaths.push(outputPath);
@@ -13633,25 +13465,27 @@ export async function consolidateAllChapters(
 // ========================================
 
 /**
- * Estimate audio duration from WAV buffer
+ * Estimate audio duration from buffer (format-aware)
  * 
- * Formula: duration = data_size / (sample_rate * channels * bytes_per_sample)
- * Gemini TTS defaults: 24000 Hz, mono, 16-bit
+ * - WAV (LINEAR16 PCM): Exact calculation from header fields
+ * - OGG Opus: Heuristic based on typical bitrate (~6000 bytes/sec)
  * 
- * @param wavBuffer - WAV audio buffer
- * @returns Estimated duration in seconds
+ * Detects format by checking for RIFF header magic bytes.
+ * 
+ * @param audioBuffer - WAV or OGG Opus audio buffer
+ * @returns Duration in seconds
  */
-export function estimateAudioDuration(wavBuffer: Buffer): number {
-  // WAV header is 44 bytes, rest is PCM data
-  const pcmDataSize = wavBuffer.length - 44;
+export function estimateAudioDuration(audioBuffer: Buffer): number {
+  // Detect WAV by RIFF header magic bytes
+  if (audioBuffer.length >= 44 && audioBuffer.toString('ascii', 0, 4) === 'RIFF') {
+    // WAV: Exact calculation from header
+    return estimateWavDuration(audioBuffer);
+  }
   
-  // Gemini TTS defaults
-  const sampleRate = 24000;
-  const channels = 1; // mono
-  const bytesPerSample = 2; // 16-bit
-  
-  const duration = pcmDataSize / (sampleRate * channels * bytesPerSample);
-  return duration;
+  // OGG Opus heuristic: ~6000 bytes per second at typical Gemini TTS bitrate
+  // This is an approximation; for exact duration use ffprobe
+  const OPUS_BYTES_PER_SEC = 6000;
+  return audioBuffer.length / OPUS_BYTES_PER_SEC;
 }
 
 /**
@@ -13697,7 +13531,7 @@ export function extractChunkFromConsolidated(
   chunkIndex: number
 ): Buffer | null {
   const chapterPath = getChapterPath(bookTitle, chapterIndex);
-  const boundariesPath = chapterPath.replace('.wav', '_boundaries.json');
+  const boundariesPath = chapterPath.replace('.ogg', '_boundaries.json');
   
   // Check if consolidated file and boundaries exist
   if (!fs.existsSync(chapterPath) || !fs.existsSync(boundariesPath)) {
@@ -13759,7 +13593,8 @@ export function deleteAllTempChunks(bookTitle: string): number {
   }
   
   const files = fs.readdirSync(tempDir);
-  const chunkFiles = files.filter(f => f.match(/^chunk_\d{3}\.wav$/));
+  // Match both old format (chunk_001.wav) and new format (subchunk_001_000.wav)
+  const chunkFiles = files.filter(f => f.match(/^(chunk_\d{3}|subchunk_\d{3}_\d{3})\.wav$/));
   
   for (const file of chunkFiles) {
     fs.unlinkSync(path.join(tempDir, file));
@@ -14091,7 +13926,7 @@ export async function generateSubChunksWorkerPool(
  * @param subChunks - Array of sub-chunks to generate
  * @param voiceMap - Character to voice mapping
  * @param defaultVoice - Default voice for narrator
- * @param parallelism - Number of concurrent TTS calls (default: 2)
+ * @param parallelism - Number of concurrent TTS calls (default: 3)
  * @returns Array of sub-chunk results
  */
 export async function generateSubChunksParallel(
@@ -14100,15 +13935,23 @@ export async function generateSubChunksParallel(
   subChunks: TwoSpeakerChunk[],
   voiceMap: Record<string, string> = {},
   defaultVoice: string = 'Algieba',
-  parallelism: number = 2
+  parallelism: number = 3
 ): Promise<SubChunkResult[]> {
   console.log(`🚀 Parallel generation: Chapter ${chapterIndex}, ${subChunks.length} sub-chunks (parallelism: ${parallelism})`);
   const startTime = Date.now();
   
   const results: SubChunkResult[] = [];
   
-  // Process in batches of `parallelism` size
-  for (let i = 0; i < subChunks.length; i += parallelism) {
+  // Generate first sub-chunk alone (sequential) to minimize first-listen latency.
+  // The frontend polls for subchunk 0 first — it must be on disk ASAP.
+  if (subChunks.length > 0) {
+    const firstResult = await generateSubChunk(bookTitle, chapterIndex, subChunks[0], voiceMap, defaultVoice);
+    results.push(firstResult);
+    console.log(`  📊 Progress: 1/${subChunks.length} sub-chunks (first ready)`);
+  }
+  
+  // Process remaining sub-chunks in parallel batches
+  for (let i = 1; i < subChunks.length; i += parallelism) {
     const batch = subChunks.slice(i, i + parallelism);
     
     const batchResults = await Promise.all(
@@ -14163,7 +14006,8 @@ export async function consolidateChapterFromSubChunks(
     chunkBuffers.push(buffer);
   }
   
-  const chapterAudio = concatenateWavBuffers(chunkBuffers);
+  const chapterWav = concatenateWavBuffers(chunkBuffers);
+  const chapterAudio = await convertWavToOgg(chapterWav);
   const outputPath = getChapterPath(bookTitle, chapterIndex, chapterTitle);
   fs.writeFileSync(outputPath, chapterAudio);
   
@@ -14929,12 +14773,10 @@ main().catch(console.error);
 ---
 
 ### Backend: TTS Client (Gemini TTS integration, multi-speaker synthesis)
-**File:** `apps/backend/src/ttsClient.ts` | **Size:** 17.9 KB | **Lines:** 499
+**File:** `apps/backend/src/ttsClient.ts` | **Size:** 17.5 KB | **Lines:** 495
 
 ```typescript
 import { GoogleAuth } from 'google-auth-library';
-import { FileWriter } from 'wav';
-import { Readable } from 'stream';
 
 interface TTSConfig {
   projectId: string;
@@ -14952,57 +14794,107 @@ export interface SpeakerConfig {
 // Note: TTS functions return Buffer directly (simplified - no metadata extraction needed)
 
 /**
+ * Map short language codes to BCP-47 format required by Cloud TTS API.
+ * Cloud TTS VoiceSelectionParams.languageCode is REQUIRED.
+ */
+const LANG_CODE_TO_BCP47: Record<string, string> = {
+  'sk': 'sk-SK',
+  'cs': 'cs-CZ',
+  'en': 'en-US',
+  'de': 'de-DE',
+  'ru': 'ru-RU',
+  'pl': 'pl-PL',
+  'hr': 'hr-HR',
+  'zh': 'cmn-CN',
+  'nl': 'nl-NL',
+  'fr': 'fr-FR',
+  'hi': 'hi-IN',
+  'it': 'it-IT',
+  'ja': 'ja-JP',
+  'ko': 'ko-KR',
+  'pt': 'pt-BR',
+  'es': 'es-ES',
+  'uk': 'uk-UA',
+};
+
+/**
+ * Convert language code to BCP-47 format.
+ * Handles short codes ('sk') and full BCP-47 codes ('sk-SK').
+ */
+function toBCP47(langCode: string): string {
+  if (langCode.includes('-')) return langCode;
+  return LANG_CODE_TO_BCP47[langCode.toLowerCase()] || `${langCode}-${langCode.toUpperCase()}`;
+}
+
+/**
+ * Resolve BCP-47 language code for TTS API (required field).
+ * Priority: explicit param > TARGET_LANGUAGE global > BOOK_METADATA.language > fallback 'en-US'
+ */
+function resolveLanguageCode(explicitCode?: string): string {
+  if (explicitCode) return toBCP47(explicitCode);
+  const targetLang = (global as any).TARGET_LANGUAGE;
+  if (targetLang) return toBCP47(targetLang);
+  const bookLang = (global as any).BOOK_METADATA?.language;
+  if (bookLang) return toBCP47(bookLang);
+  return 'en-US'; // safe fallback
+}
+
+/**
  * Gemini TTS model to use
  * TTS model configured via environment variable
  */
 const TTS_MODEL = process.env.TTS_MODEL || 'gemini-2.5-flash-tts';
 
 /**
- * Creates a WAV file header and combines it with PCM audio data
- * @param pcmBuffer - Raw PCM audio data from Vertex AI
- * @returns Complete WAV file as Buffer
+ * Resolves the Cloud Text-to-Speech API endpoint based on location.
+ * 
+ * Cloud TTS API endpoint format per official docs:
+ *   - Global: texttospeech.googleapis.com
+ *   - Regional: {REGION}-texttospeech.googleapis.com
+ * 
+ * Supported regions for Gemini TTS: global, us, eu
+ * We map Vertex AI region names to Cloud TTS region names.
  */
-function createWavBuffer(pcmBuffer: Buffer): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    
-    // Create WAV writer with Vertex AI default settings
-    // Use platform-specific null device (Windows: 'nul', Unix: '/dev/null')
-    const nullDevice = process.platform === 'win32' ? 'nul' : '/dev/null';
-    const writer = new FileWriter(nullDevice, {
-      sampleRate: 24000,  // Vertex AI default sample rate
-      channels: 1,        // Mono
-      bitDepth: 16,       // 16-bit PCM
-    });
+function getTtsEndpoint(location: string): string {
+  // Map Vertex AI locations to Cloud TTS regions
+  // Cloud TTS supports: global, us, eu, northamerica-northeast1
+  // Vertex AI uses: us-central1, europe-west1, etc.
+  const regionMap: Record<string, string> = {
+    'us-central1': 'us',
+    'us-east1': 'us',
+    'us-east4': 'us',
+    'us-east5': 'us',
+    'us-south1': 'us',
+    'us-west1': 'us',
+    'us-west4': 'us',
+    'europe-west1': 'eu',
+    'europe-west4': 'eu',
+    'europe-central2': 'eu',
+    'europe-north1': 'eu',
+    'europe-southwest1': 'eu',
+    'northamerica-northeast1': 'northamerica-northeast1',
+    'global': 'global',
+  };
 
-    // Capture all data chunks
-    writer.on('data', (chunk: Buffer) => {
-      chunks.push(chunk);
-    });
-
-    writer.on('finish', () => {
-      const wavBuffer = Buffer.concat(chunks);
-      resolve(wavBuffer);
-    });
-
-    writer.on('error', (err: Error) => {
-      reject(err);
-    });
-
-    // Write PCM data
-    writer.write(pcmBuffer);
-    writer.end();
-  });
+  const ttsRegion = regionMap[location] || 'us';
+  if (ttsRegion === 'global') {
+    return 'https://texttospeech.googleapis.com';
+  }
+  return `https://${ttsRegion}-texttospeech.googleapis.com`;
 }
+
+
 
 export class TTSClient {
   private projectId: string;
   private location: string;
+  private ttsBaseUrl: string;
   private auth: GoogleAuth;
 
   constructor(config: TTSConfig) {
     this.projectId = config.projectId;
     this.location = config.location;
+    this.ttsBaseUrl = getTtsEndpoint(config.location);
     // GoogleAuth will automatically use GOOGLE_APPLICATION_CREDENTIALS env var
     this.auth = new GoogleAuth({
       scopes: ['https://www.googleapis.com/auth/cloud-platform'],
@@ -15010,15 +14902,19 @@ export class TTSClient {
   }
 
   /**
-   * Synthesizes text to audio using Gemini TTS via Vertex AI REST API
-   * Single-speaker mode using voiceConfig
+   * Synthesizes text to audio using Cloud Text-to-Speech API (Gemini TTS)
+   * Single-speaker mode using voice name
+   * 
+   * Uses the Cloud TTS API with LINEAR16 encoding for lossless PCM quality.
+   * Returns WAV buffer (with header) — downstream pipeline handles WAV→OGG conversion
+   * at chapter consolidation for optimal single-encode quality.
    * 
    * @param text - The text to synthesize
    * @param voiceName - The Gemini voice name to use (e.g., 'Algieba', 'Puck', 'Zephyr')
    * @param style - Voice style modifier: 'normal', 'whisper', 'thought', 'letter'
    * @param speechStyle - Optional custom speech style instruction (natural sentence like "Speak slowly with gravelly voice.")
    * @param languageCode - Optional language code to force (e.g., 'cs-CZ') - used for single-word texts to prevent misdetection
-   * @returns Buffer containing audio data (WAV format)
+   * @returns Buffer containing audio data (WAV LINEAR16 format)
    */
   async synthesizeText(
     text: string, 
@@ -15027,7 +14923,7 @@ export class TTSClient {
     speechStyle?: string,
     languageCode?: string
   ): Promise<Buffer> {
-    const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/${this.projectId}/locations/${this.location}/publishers/google/models/${TTS_MODEL}:generateContent`;
+    const endpoint = `${this.ttsBaseUrl}/v1/text:synthesize`;
 
     // Get access token
     const client = await this.auth.getClient();
@@ -15037,17 +14933,10 @@ export class TTSClient {
       throw new Error('Failed to get access token');
     }
 
-    // Format speech instructions according to official Gemini TTS multi-speaker documentation
-    // https://ai.google.dev/gemini-api/docs/speech-generation#multi-speaker
-    // 
-    // Correct format:
-    // [Speech style directive without period, ending with colon]
-    // SPEAKER: Text to speak
-    //
-    // Example:
-    // Read clearly and professionally:
-    // NARRATOR: "The story begins..."
-    let styledText = text;
+    // Cloud TTS API has separate `text` and `prompt` fields in SynthesisInput.
+    // `text`: the actual text to speak (passed unedited to TTS)
+    // `prompt`: style/voice instructions (system instruction for controllable models)
+    let promptText: string | undefined;
     
     // Check word count (after removing punctuation)
     const cleanText = text.replace(/["„"'«»‹›,\.!?;:—–-]/g, '').trim();
@@ -15055,60 +14944,49 @@ export class TTSClient {
     const isShortText = wordCount <= 3;
     
     if (speechStyle) {
-      // Use speech style directive directly (already has action verb like "Read", "Narrate", "Speak")
-      // Remove trailing period, ensure ends with colon
-      const directive = speechStyle.replace(/\.$/, '').trim();
-      styledText = `${directive}\n${text}`;
-    } else if (!speechStyle && !isShortText) {
+      // Use speech style directive directly as prompt
+      promptText = speechStyle.replace(/\.$/, '').trim();
+    } else if (!isShortText) {
       // Apply basic style presets (only for >3 words)
       switch (style) {
         case 'whisper':
-          styledText = `Speak in a hushed whisper:\n${text}`;
+          promptText = 'Speak in a hushed whisper';
           break;
         case 'thought':
-          styledText = `Speak as an internal thought:\n${text}`;
+          promptText = 'Speak as an internal thought';
           break;
         case 'letter':
-          styledText = `Read aloud:\n${text}`;
+          promptText = 'Read aloud';
           break;
         case 'normal':
         default:
-          // No directive for normal style
-          styledText = text;
+          // No prompt for normal style
           break;
       }
-    } else {
-      // Short text (≤3 words): use raw text to allow TTS auto language detection
-      styledText = text;
     }
 
-    // Build speech config with optional language override
-    const speechConfig: any = {
-      voice_config: {
-        prebuilt_voice_config: {
-          voice_name: voiceName
-        }
-      }
-    };
-    
-    // Add language code if provided (for single-word texts to prevent misdetection)
-    if (languageCode) {
-      speechConfig.language_code = languageCode;
-      console.log(`  🔤 TTS language_code set to: ${languageCode}`);
+    // Build SynthesisInput per Cloud TTS API spec
+    const input: any = { text };
+    if (promptText) {
+      input.prompt = promptText;
     }
 
-    const requestBody = {
-      contents: {
-        role: 'user',
-        parts: {
-          text: styledText
-        }
-      },
-      generation_config: {
-        response_modalities: ['AUDIO'],
-        speech_config: speechConfig
-      }
+    // Build VoiceSelectionParams per Cloud TTS API spec
+    // languageCode is REQUIRED by the Cloud TTS API
+    const resolvedLang = resolveLanguageCode(languageCode);
+    const voice: any = {
+      name: voiceName,
+      modelName: TTS_MODEL,
+      languageCode: resolvedLang,
     };
+    console.log(`  \uD83D\uDD24 TTS language_code: ${resolvedLang}${languageCode ? ' (explicit)' : ' (auto-resolved)'}`);
+
+    // AudioConfig: LINEAR16 (lossless PCM) — WAV→OGG conversion happens at chapter consolidation
+    const audioConfig = {
+      audioEncoding: 'LINEAR16',
+    };
+
+    const requestBody = { input, voice, audioConfig };
 
     const maxRetries = 3;
     let lastError: Error | null = null;
@@ -15143,40 +15021,29 @@ export class TTSClient {
 
         if (!response.ok) {
           const errorText = await response.text();
-          console.error('Vertex AI API Error:', errorText);
+          console.error('Cloud TTS API Error:', errorText);
           
           // Retry on 500 errors (server-side issues)
           if (response.status >= 500 && attempt < maxRetries) {
-            lastError = new Error(`Vertex AI API returned ${response.status}: ${errorText}`);
+            lastError = new Error(`Cloud TTS API returned ${response.status}: ${errorText}`);
             continue;
           }
           
-          throw new Error(`Vertex AI API returned ${response.status}: ${errorText}`);
+          throw new Error(`Cloud TTS API returned ${response.status}: ${errorText}`);
         }
 
+        // Cloud TTS API returns { audioContent: "<base64 encoded LINEAR16 WAV>" }
         const jsonResponse: any = await response.json();
-        const audioData = jsonResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-        // ...existing code...
+        const audioContent = jsonResponse.audioContent;
         
-        if (!audioData) {
-          // Check for safety block
-          const finishReason = jsonResponse.candidates?.[0]?.finishReason;
-          if (finishReason === 'SAFETY' && attempt < maxRetries) {
-            console.warn('  ⚠️ TTS blocked by safety filter, retrying...');
-            lastError = new Error('Safety filter blocked response');
-            continue;
-          }
-          
+        if (!audioContent) {
           console.error('Full response:', JSON.stringify(jsonResponse, null, 2));
-          throw new Error('No audio content received from Vertex AI API');
+          throw new Error('No audioContent received from Cloud TTS API');
         }
 
-        console.log(`🎵 Audio data received, converting to WAV...`);
-        const pcmBuffer = Buffer.from(audioData, 'base64');
-        console.log(`📦 PCM buffer size: ${pcmBuffer.length} bytes`);
-        
-        const wavBuffer = await createWavBuffer(pcmBuffer);
-        console.log(`✅ WAV conversion complete: ${wavBuffer.length} bytes`);
+        // LINEAR16 returns WAV with header — lossless, ready for sub-chunk storage
+        const wavBuffer = Buffer.from(audioContent, 'base64');
+        console.log(`✅ WAV audio received: ${wavBuffer.length} bytes (LINEAR16 from API)`);
         
         return wavBuffer;
       } catch (error) {
@@ -15192,7 +15059,7 @@ export class TTSClient {
           continue;
         }
         
-        console.error('❌ Vertex AI TTS Error:', error);
+        console.error('❌ Cloud TTS Error:', error);
         throw new Error(`Failed to synthesize text: ${lastError.message}`);
       }
     }
@@ -15204,7 +15071,7 @@ export class TTSClient {
   /**
    * Synthesizes multi-speaker text to audio using Gemini TTS
    * 
-   * Uses the official multiSpeakerVoiceConfig for true multi-voice synthesis
+   * Uses the Cloud TTS API multiSpeakerVoiceConfig for true multi-voice synthesis
    * in a SINGLE API call (up to 2 speakers per call per API limitation).
    * 
    * Text format must use "Speaker: text" format, e.g.:
@@ -15213,7 +15080,7 @@ export class TTSClient {
    * 
    * @param text - Text with speaker labels
    * @param speakers - Array of speaker configurations (max 2)
-   * @returns Buffer containing audio data (WAV format)
+   * @returns Buffer containing audio data (WAV LINEAR16 format)
    */
   async synthesizeMultiSpeaker(
     text: string,
@@ -15227,7 +15094,7 @@ export class TTSClient {
       throw new Error('At least one speaker configuration is required');
     }
 
-    const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/${this.projectId}/locations/${this.location}/publishers/google/models/${TTS_MODEL}:generateContent`;
+    const endpoint = `${this.ttsBaseUrl}/v1/text:synthesize`;
 
     const client = await this.auth.getClient();
     const accessToken = await client.getAccessToken();
@@ -15236,55 +15103,37 @@ export class TTSClient {
       throw new Error('Failed to get access token');
     }
 
-    // Build multi-speaker voice config
+    // Build multi-speaker voice config per Cloud TTS API spec
+    // Uses speakerAlias (label in text) and speakerId (voice name)
     const speakerVoiceConfigs = speakers.map(s => ({
-      speaker: s.speaker,
-      voice_config: {
-        prebuilt_voice_config: {
-          voice_name: s.voiceName
-        }
-      }
+      speakerAlias: s.speaker,
+      speakerId: s.voiceName,
     }));
 
-    // According to official Gemini TTS docs:
-    // - TTS models do NOT support systemInstruction field
-    // - Style/voice guidance must be embedded IN the prompt text itself
-    // - Keep it short and direct to avoid slowing down generation
-    
-    // Build speaker mapping for the prompt
+    // Cloud TTS API has a dedicated `prompt` field for style instructions
+    // This is separate from the text and goes into SynthesisInput.prompt
     const speakerList = speakers.map(s => s.speaker).join(', ');
-    
-    // Two-part instruction: 1) Voice switching rule  2) Artistic delivery
-    const directorsNotes = `VOICE RULE: SWITCH VOICE IMMEDIATELY AT EACH SPEAKER LABEL! Labels: ${speakerList}
-STYLE: Read as a world-class voice artist with immersive, expressive, yet natural elocution, rich variety of expressive means, expressing the speakers emotions, story events and environment by highly adaptive prosody.
+    const promptText = `VOICE RULE: SWITCH VOICE IMMEDIATELY AT EACH SPEAKER LABEL! Labels: ${speakerList}\nSTYLE: Read as a world-class voice artist with immersive, expressive, yet natural elocution, rich variety of expressive means, expressing the speakers emotions, story events and environment by highly adaptive prosody.`;
 
-`;
-    
-    const textWithGuidance = directorsNotes + text;
-
+    // Build request per Cloud TTS API spec
+    // languageCode is REQUIRED by the Cloud TTS API
+    const resolvedLang = resolveLanguageCode();
+    console.log(`  \uD83D\uDD24 Multi-speaker TTS language_code: ${resolvedLang}`);
     const requestBody = {
-      contents: {
-        role: 'user',
-        parts: {
-          text: textWithGuidance
-        }
+      input: {
+        text: text,
+        prompt: promptText,
       },
-      generation_config: {
-        response_modalities: ['AUDIO'],
-        speech_config: {
-          multi_speaker_voice_config: {
-            speaker_voice_configs: speakerVoiceConfigs
-          }
-        }
-      }
-      // Safety settings - requires monthly invoiced billing to use
-      // See: https://cloud.google.com/billing/docs/how-to/invoiced-billing
-      // safety_settings: [
-      //   { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_ONLY_HIGH' },
-      //   { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_ONLY_HIGH' },
-      //   { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_ONLY_HIGH' },
-      //   { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_ONLY_HIGH' }
-      // ]
+      voice: {
+        languageCode: resolvedLang,
+        modelName: TTS_MODEL,
+        multiSpeakerVoiceConfig: {
+          speakerVoiceConfigs: speakerVoiceConfigs,
+        },
+      },
+      audioConfig: {
+        audioEncoding: 'LINEAR16',
+      },
     };
 
     const maxRetries = 3;
@@ -15317,37 +15166,29 @@ STYLE: Read as a world-class voice artist with immersive, expressive, yet natura
 
         if (!response.ok) {
           const errorText = await response.text();
-          console.error('Vertex AI Multi-Speaker TTS Error:', errorText);
+          console.error('Cloud TTS Multi-Speaker Error:', errorText);
           
           // Retry on 500 errors
           if (response.status >= 500 && attempt < maxRetries) {
-            lastError = new Error(`Vertex AI API returned ${response.status}: ${errorText}`);
+            lastError = new Error(`Cloud TTS API returned ${response.status}: ${errorText}`);
             continue;
           }
           
-          throw new Error(`Vertex AI API returned ${response.status}: ${errorText}`);
+          throw new Error(`Cloud TTS API returned ${response.status}: ${errorText}`);
         }
 
+        // Cloud TTS API returns { audioContent: "<base64 encoded LINEAR16 WAV>" }
         const jsonResponse: any = await response.json();
-        const audioData = jsonResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-        // ...existing code...
+        const audioContent = jsonResponse.audioContent;
 
-        if (!audioData) {
-          // Check for safety block
-          const finishReason = jsonResponse.candidates?.[0]?.finishReason;
-          if (finishReason === 'SAFETY' && attempt < maxRetries) {
-            console.warn('  ⚠️ Multi-speaker TTS blocked by safety filter, retrying...');
-            lastError = new Error('Safety filter blocked response');
-            continue;
-          }
-          
+        if (!audioContent) {
           console.error('Full response:', JSON.stringify(jsonResponse, null, 2));
-          throw new Error('No audio content received from multi-speaker TTS');
+          throw new Error('No audioContent received from multi-speaker TTS');
         }
 
-        const pcmBuffer = Buffer.from(audioData, 'base64');
-        const wavBuffer = await createWavBuffer(pcmBuffer);
-        console.log(`✅ Multi-speaker audio: ${wavBuffer.length} bytes`);
+        // LINEAR16 returns WAV with header — lossless, ready for sub-chunk storage
+        const wavBuffer = Buffer.from(audioContent, 'base64');
+        console.log(`✅ Multi-speaker WAV audio: ${wavBuffer.length} bytes (LINEAR16 from API)`);
 
         return wavBuffer;
       } catch (error) {
@@ -15358,13 +15199,12 @@ STYLE: Read as a world-class voice artist with immersive, expressive, yet natura
           lastError.message.includes('500') ||
           lastError.message.includes('timeout') ||
           lastError.message.includes('ECONNRESET') ||
-          lastError.message.includes('fetch failed') ||
-          lastError.message.includes('Safety filter')
+          lastError.message.includes('fetch failed')
         )) {
           continue;
         }
         
-        console.error('❌ Multi-speaker TTS Error:', error);
+        console.error('❌ Multi-speaker Cloud TTS Error:', error);
         throw new Error(`Multi-speaker synthesis failed: ${lastError.message}`);
       }
     }
@@ -15410,7 +15250,7 @@ export async function synthesizeText(
  * 
  * @param text - Text with speaker labels matching speaker configs
  * @param speakers - Speaker configurations (max 2)
- * @returns WAV audio buffer
+ * @returns WAV LINEAR16 audio buffer
  */
 export async function synthesizeMultiSpeaker(
   text: string,
@@ -16092,7 +15932,7 @@ export function validateVoiceMap(voiceMap: VoiceMap): boolean {
 ---
 
 ### Config: Backend TypeScript config
-**File:** `apps/backend/tsconfig.json` | **Size:** 0.5 KB | **Lines:** 22
+**File:** `apps/backend/tsconfig.json` | **Size:** 0.6 KB | **Lines:** 22
 
 ```json
 {
@@ -16102,7 +15942,7 @@ export function validateVoiceMap(voiceMap: VoiceMap): boolean {
     "moduleResolution": "node",
     "lib": ["ES2022"],
     "outDir": "./dist",
-    "rootDir": "./src",
+    "rootDir": "../../",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -16113,7 +15953,7 @@ export function validateVoiceMap(voiceMap: VoiceMap): boolean {
     "declarationMap": true,
     "sourceMap": true
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "../../soundscape/src/**/*"],
   "exclude": ["node_modules", "dist"]
 }
 ```
@@ -16256,6 +16096,20 @@ export function validateVoiceMap(voiceMap: VoiceMap): boolean {
   "engines": {
     "node": ">=18.0.0"
   }
+}
+```
+
+---
+
+### Config: Soundscape package.json
+**File:** `soundscape/package.json` | **Size:** 0.1 KB | **Lines:** 7
+
+```json
+{
+  "name": "soundscape",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module"
 }
 ```
 
@@ -23157,7 +23011,7 @@ export default {
 ---
 
 ### PWA: API Service (backend integration, all endpoints)
-**File:** `apps/pwa-v2/src/services/api.ts` | **Size:** 10.4 KB | **Lines:** 352
+**File:** `apps/pwa-v2/src/services/api.ts` | **Size:** 12.7 KB | **Lines:** 419
 
 ```typescript
 /**
@@ -23227,7 +23081,18 @@ export async function getAudiobooks(): Promise<AudiobookMetadata[]> {
   const response = await fetch(`${API_BASE_URL}/audiobooks`);
   if (!response.ok) throw new Error('Failed to fetch audiobooks');
   const data = await response.json();
-  return data.audiobooks;
+  // Backend returns wrapper objects {title, metadata, progress, tempChunksCount}
+  // Unwrap to flat AudiobookMetadata, merging generation status from progress
+  return (data.audiobooks ?? []).map((item: any) => {
+    const meta = item.metadata;
+    if (!meta) return null;
+    return {
+      ...meta,
+      generationStatus: item.progress?.status === 'completed' ? 'completed'
+        : item.progress?.status ? 'in-progress'
+        : meta.generationStatus ?? 'not-started',
+    } as AudiobookMetadata;
+  }).filter(Boolean) as AudiobookMetadata[];
 }
 
 /**
@@ -23308,7 +23173,9 @@ export async function generateAudiobook(options: {
 }
 
 /**
- * Get generation progress for audiobook
+ * Get generation progress for audiobook.
+ * Tries audiobookWorker progress first, falls back to dramatization status
+ * (used when generation was triggered via /api/book/select flow).
  */
 export async function getGenerationProgress(bookTitle: string): Promise<{
   bookTitle: string;
@@ -23317,9 +23184,44 @@ export async function getGenerationProgress(bookTitle: string): Promise<{
   status: string;
   progress: number;
 }> {
+  // Try worker progress endpoint first
   const response = await fetch(`${API_BASE_URL}/audiobooks/${encodeURIComponent(bookTitle)}/progress`);
-  if (!response.ok) throw new Error('Failed to fetch progress');
-  return response.json();
+  if (response.ok) {
+    return response.json();
+  }
+
+  // Fallback: use dramatization status endpoint (selectBook flow)
+  try {
+    const dramResponse = await fetch(`${API_BASE_URL}/dramatization/status`);
+    if (dramResponse.ok) {
+      const dramStatus = await dramResponse.json();
+      const totalChapters = dramStatus.totalChapters || 1;
+      const completedChapters = dramStatus.completedChapters || 0;
+      const isComplete = dramStatus.phase === 'complete' || 
+        (!dramStatus.isActive && completedChapters >= totalChapters);
+      const progress = totalChapters > 0 
+        ? Math.round((completedChapters / totalChapters) * 100) 
+        : 0;
+      return {
+        bookTitle,
+        totalChapters,
+        chaptersGenerated: completedChapters,
+        status: isComplete ? 'completed' : 'in-progress',
+        progress,
+      };
+    }
+  } catch {
+    // Both endpoints failed
+  }
+
+  // If both fail, return a default in-progress response
+  return {
+    bookTitle,
+    totalChapters: 0,
+    chaptersGenerated: 0,
+    status: 'in-progress',
+    progress: 0,
+  };
 }
 
 /**
@@ -23341,6 +23243,25 @@ export async function deleteAudiobook(bookTitle: string): Promise<{ success: boo
  */
 export function getChapterAudioUrl(bookTitle: string, chapterIndex: number): string {
   return `${API_BASE_URL}/audiobooks/${encodeURIComponent(bookTitle)}/chapters/${chapterIndex}`;
+}
+
+/**
+ * Get chapter ambient audio URL (independent ambient track)
+ */
+export function getChapterAmbientUrl(bookTitle: string, chapterIndex: number): string {
+  return `${API_BASE_URL}/audiobooks/${encodeURIComponent(bookTitle)}/chapters/${chapterIndex}/ambient`;
+}
+
+/**
+ * Check if ambient track exists for a chapter
+ */
+export async function isAmbientReady(bookTitle: string, chapterIndex: number): Promise<boolean> {
+  try {
+    const response = await fetch(getChapterAmbientUrl(bookTitle, chapterIndex), { method: 'HEAD' });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -23565,7 +23486,7 @@ export default App;
 ---
 
 ### PWA: Player Store (Zustand playback state management)
-**File:** `apps/pwa-v2/src/stores/playerStore.ts` | **Size:** 10.6 KB | **Lines:** 313
+**File:** `apps/pwa-v2/src/stores/playerStore.ts` | **Size:** 11.6 KB | **Lines:** 337
 
 ```typescript
 // VoiceLibri - Player Store
@@ -23588,6 +23509,10 @@ interface PlayerStore {
   playbackMode: 'chapters' | 'subchunks' | 'progressive';
   currentSubChunk: { chapterIndex: number; subChunkIndex: number } | null;
   highestReadyChapter: number; // Tracks which chapters are fully consolidated
+  
+  // Ambient/soundscape controls (dual-player architecture)
+  ambientVolume: number; // 0.0 – 1.0
+  ambientEnabled: boolean; // enable/disable ambient layer
   
   // Sleep timer (BookPlayer pattern)
   sleepTimer: SleepTimerState;
@@ -23643,6 +23568,11 @@ interface PlayerStore {
   
   // Settings
   updateSettings: (settings: Partial<UserSettings>) => void;
+  
+  // Ambient controls
+  setAmbientVolume: (volume: number) => void;
+  setAmbientEnabled: (enabled: boolean) => void;
+  toggleAmbient: () => void;
 }
 
 export const usePlayerStore = create<PlayerStore>()(
@@ -23658,6 +23588,8 @@ export const usePlayerStore = create<PlayerStore>()(
       playbackMode: 'chapters',
       currentSubChunk: null,
       highestReadyChapter: 0,
+      ambientVolume: 0.5,
+      ambientEnabled: true,
       sleepTimer: { type: 'off' },
       settings: {
         playbackSpeed: 1.0,
@@ -23682,6 +23614,9 @@ export const usePlayerStore = create<PlayerStore>()(
           currentBook: book,
           isMiniPlayerVisible: shouldShowPlayer,
           currentChapter: book?.chapters[0] ?? null,
+          playbackMode: 'chapters',
+          currentSubChunk: null,
+          currentTime: 0,
         });
       },
       setCurrentChapter: (chapter) => set({ currentChapter: chapter }),
@@ -23799,11 +23734,14 @@ export const usePlayerStore = create<PlayerStore>()(
       setHighestReadyChapter: (chapterIndex) => set({ highestReadyChapter: chapterIndex }),
       
       startProgressivePlayback: (book) => {
+        const firstChapter = book.chapters[0];
+        const firstChapterIndex = firstChapter?.index ?? 1;
         set({
           currentBook: book,
-          currentChapter: book.chapters[0] || null,
+          currentChapter: firstChapter || null,
           playbackMode: 'progressive',
-          currentSubChunk: { chapterIndex: 0, subChunkIndex: 0 },
+          playbackState: 'playing',
+          currentSubChunk: { chapterIndex: firstChapterIndex, subChunkIndex: 0 },
           highestReadyChapter: 0,
           isMiniPlayerVisible: true,
         });
@@ -23862,6 +23800,11 @@ export const usePlayerStore = create<PlayerStore>()(
         
         return false;
       },
+      
+      // Ambient controls
+      setAmbientVolume: (volume) => set({ ambientVolume: Math.max(0, Math.min(1, volume)) }),
+      setAmbientEnabled: (enabled) => set({ ambientEnabled: enabled }),
+      toggleAmbient: () => set((s) => ({ ambientEnabled: !s.ambientEnabled })),
     }),
     {
       name: 'voicelibri-player',
@@ -23869,6 +23812,8 @@ export const usePlayerStore = create<PlayerStore>()(
         settings: state.settings,
         speed: state.speed,
         volume: state.volume,
+        ambientVolume: state.ambientVolume,
+        ambientEnabled: state.ambientEnabled,
         currentBook: state.currentBook,
         currentChapter: state.currentChapter,
         isMiniPlayerVisible: state.isMiniPlayerVisible,
@@ -23885,17 +23830,25 @@ export const usePlayerStore = create<PlayerStore>()(
 ---
 
 ### PWA: Progressive Audio Playback Hook (streaming audio)
-**File:** `apps/pwa-v2/src/hooks/useProgressiveAudioPlayback.ts` | **Size:** 11.8 KB | **Lines:** 350
+**File:** `apps/pwa-v2/src/hooks/useProgressiveAudioPlayback.ts` | **Size:** 19.2 KB | **Lines:** 530
 
 ```typescript
 /**
  * Progressive Audio Playback Hook
- * Handles real-time subchunk streaming during generation and automatic chapter switching
+ * Handles real-time subchunk streaming during generation and automatic chapter switching.
+ * Includes dual-player support: voice (master) + ambient (follower).
  */
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { usePlayerStore } from '../stores/playerStore';
-import { getChapterAudioUrl, getSubChunkAudioUrl, isChapterReady, getHighestReadyChapter } from '../services/api';
+import {
+  getChapterAudioUrl,
+  getSubChunkAudioUrl,
+  isChapterReady,
+  getHighestReadyChapter,
+  getChapterAmbientUrl,
+  isAmbientReady,
+} from '../services/api';
 
 // Audio cache for blob URLs
 interface AudioCache {
@@ -23904,10 +23857,15 @@ interface AudioCache {
 
 /**
  * Enhanced audio playback hook with progressive subchunk support
+ * and independent ambient track playback.
  */
 export function useProgressiveAudioPlayback() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const ambientRef = useRef<HTMLAudioElement | null>(null);
   const audioCacheRef = useRef<AudioCache>({});
+  const driftIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const toastShownChaptersRef = useRef<Set<number>>(new Set());
+  const [soundscapeToast, setSoundscapeToast] = useState<string | null>(null);
   
   const {
     currentBook,
@@ -23917,6 +23875,8 @@ export function useProgressiveAudioPlayback() {
     playbackMode,
     currentSubChunk,
     highestReadyChapter,
+    ambientVolume,
+    ambientEnabled,
     setPlaybackState,
     setCurrentTime,
     setCurrentSubChunk,
@@ -23926,11 +23886,17 @@ export function useProgressiveAudioPlayback() {
     switchToChapterMode,
   } = usePlayerStore();
 
-  // Initialize audio element
+  // Initialize audio elements (voice + ambient)
   useEffect(() => {
     if (!audioRef.current) {
       audioRef.current = new Audio();
       audioRef.current.preload = 'metadata';
+    }
+    if (!ambientRef.current) {
+      ambientRef.current = new Audio();
+      ambientRef.current.preload = 'metadata';
+      ambientRef.current.loop = true; // Loop ambient in case it's shorter than voice
+      ambientRef.current.volume = ambientEnabled ? ambientVolume : 0;
     }
 
     const audio = audioRef.current;
@@ -23955,7 +23921,9 @@ export function useProgressiveAudioPlayback() {
     };
 
     const handleCanPlayThrough = () => {
-      if (playbackState === 'loading') {
+      // Only set paused if we're explicitly in loading state AND not in auto-play flow
+      // (loadSubChunkAudio with autoPlay handles its own state transition)
+      if (playbackState === 'loading' && !audioRef.current?.dataset.autoPlay) {
         setPlaybackState('paused');
       }
     };
@@ -23972,8 +23940,48 @@ export function useProgressiveAudioPlayback() {
       audio.removeEventListener('canplaythrough', handleCanPlayThrough);
       audio.pause();
       audio.src = '';
+      // Also stop ambient
+      if (ambientRef.current) {
+        ambientRef.current.pause();
+        ambientRef.current.src = '';
+      }
     };
   }, [playbackMode, currentSubChunk, playbackState, setPlaybackState, setCurrentTime]);
+
+  // Sync ambient volume and enabled state
+  useEffect(() => {
+    if (ambientRef.current) {
+      ambientRef.current.volume = ambientEnabled ? ambientVolume : 0;
+    }
+  }, [ambientVolume, ambientEnabled]);
+
+  // Drift correction: keep ambient in sync with voice (chapter mode only)
+  useEffect(() => {
+    if (driftIntervalRef.current) {
+      clearInterval(driftIntervalRef.current);
+      driftIntervalRef.current = null;
+    }
+
+    if (playbackMode === 'chapters' && playbackState === 'playing') {
+      driftIntervalRef.current = setInterval(() => {
+        const voice = audioRef.current;
+        const ambient = ambientRef.current;
+        if (!voice || !ambient || !ambient.src || ambient.readyState < 2) return;
+        
+        const drift = Math.abs(voice.currentTime - ambient.currentTime);
+        if (drift > 0.05) { // 50ms tolerance
+          ambient.currentTime = voice.currentTime;
+        }
+      }, 500);
+    }
+
+    return () => {
+      if (driftIntervalRef.current) {
+        clearInterval(driftIntervalRef.current);
+        driftIntervalRef.current = null;
+      }
+    };
+  }, [playbackMode, playbackState]);
 
   // Handle progressive playback end (subchunk finished)
   const handleProgressiveEnd = useCallback(async () => {
@@ -24076,14 +24084,30 @@ export function useProgressiveAudioPlayback() {
       // Cache the blob URL
       audioCacheRef.current[cacheKey] = blobUrl;
       
-      // Load and play
+      // Load voice
+      if (autoPlay) {
+        audioRef.current.dataset.autoPlay = 'true'; // Prevent handleCanPlayThrough interference
+      }
       audioRef.current.src = blobUrl;
+
+      // Step 10: Show soundscape toast if ambient is not ready yet (once per chapter)
+      if (ambientEnabled && !toastShownChaptersRef.current.has(chapterIndex)) {
+        isAmbientReady(currentBook.title, chapterIndex).then(ready => {
+          if (!ready) {
+            toastShownChaptersRef.current.add(chapterIndex);
+            setSoundscapeToast('✨ Creating your soundscape...');
+            setTimeout(() => setSoundscapeToast(null), 5000);
+          }
+        }).catch(() => { /* non-critical */ });
+      }
       
       if (autoPlay) {
         setPlaybackState('playing');
         audioRef.current.play().catch(err => {
           console.error('Failed to play subchunk:', err);
           setPlaybackState('error');
+        }).finally(() => {
+          delete audioRef.current?.dataset.autoPlay;
         });
       } else {
         setPlaybackState('paused');
@@ -24095,7 +24119,7 @@ export function useProgressiveAudioPlayback() {
     }
   }, [currentBook, playbackState, setPlaybackState]);
 
-  // Load chapter audio (normal playback)
+  // Load chapter audio (normal playback) with ambient track
   const loadChapterAudio = useCallback(async (chapterIndex: number) => {
     if (!currentBook || !audioRef.current) return;
     
@@ -24107,6 +24131,8 @@ export function useProgressiveAudioPlayback() {
       if (playbackState === 'playing') {
         audioRef.current.play();
       }
+      // Load ambient for cached chapter too
+      loadAmbientForChapter(chapterIndex);
       return;
     }
     
@@ -24136,6 +24162,9 @@ export function useProgressiveAudioPlayback() {
         audioRef.current.play();
       }
       
+      // Load ambient (fire-and-forget, non-blocking)
+      loadAmbientForChapter(chapterIndex);
+      
     } catch (error) {
       console.error('Failed to load chapter:', error);
       setPlaybackState('error');
@@ -24143,6 +24172,7 @@ export function useProgressiveAudioPlayback() {
   }, [currentBook, playbackState, setPlaybackState]);
 
   // Update highest ready chapter periodically during progressive mode
+  // Also handles ambient hot-swap (Step 11)
   useEffect(() => {
     if (playbackMode !== 'progressive' || !currentBook) return;
     
@@ -24156,38 +24186,117 @@ export function useProgressiveAudioPlayback() {
       } catch (error) {
         console.error('Error checking chapter readiness:', error);
       }
+
+      // Step 11: Ambient hot-swap — check if chapter ambient is ready during progressive playback
+      if (currentSubChunk && ambientRef.current) {
+        try {
+          const chapterIndex = currentSubChunk.chapterIndex;
+          const expectedAmbientUrl = getChapterAmbientUrl(currentBook.title, chapterIndex);
+          const currentAmbientSrc = ambientRef.current.src || '';
+
+          // Only check if we haven't already loaded the chapter ambient
+          if (!currentAmbientSrc.includes(`/chapters/${chapterIndex}/ambient`)) {
+            const ready = await isAmbientReady(currentBook.title, chapterIndex);
+            if (ready) {
+              ambientRef.current.src = expectedAmbientUrl;
+              if (audioRef.current) {
+                ambientRef.current.currentTime = audioRef.current.currentTime;
+              }
+              ambientRef.current.volume = ambientEnabled ? ambientVolume : 0;
+              if (audioRef.current && !audioRef.current.paused && ambientEnabled) {
+                ambientRef.current.play().catch(() => { /* autoplay blocked */ });
+              }
+              console.log('🔊 Ambient upgraded to full soundscape');
+            }
+          }
+        } catch {
+          // Non-critical
+        }
+      }
     };
     
     // Check every 3 seconds during progressive playback
     const interval = setInterval(checkChapterReadiness, 3000);
     
     return () => clearInterval(interval);
-  }, [playbackMode, currentBook, highestReadyChapter, setHighestReadyChapter]);
+  }, [playbackMode, currentBook, highestReadyChapter, setHighestReadyChapter, currentSubChunk, ambientEnabled, ambientVolume]);
 
-  // Handle play/pause state changes
+  // Load ambient track for a chapter (non-blocking)
+  const loadAmbientForChapter = useCallback(async (chapterIndex: number) => {    if (!currentBook || !ambientRef.current) return;
+    
+    try {
+      const ready = await isAmbientReady(currentBook.title, chapterIndex);
+      if (!ready) {
+        console.log(`🔊 Ambient: Not ready for chapter ${chapterIndex}`);
+        return;
+      }
+      
+      const ambientUrl = getChapterAmbientUrl(currentBook.title, chapterIndex);
+      const ambient = ambientRef.current;
+      ambient.src = ambientUrl;
+      ambient.volume = ambientEnabled ? ambientVolume : 0;
+      ambient.currentTime = 0;
+      
+      // Wait for the ambient to be loadable, then sync with voice
+      ambient.addEventListener('canplay', () => {
+        if (audioRef.current && !audioRef.current.paused && ambientEnabled) {
+          // Sync ambient time to voice time (they should start together)
+          ambient.currentTime = audioRef.current.currentTime;
+          ambient.play().catch(() => {
+            console.log(`🔊 Ambient: Autoplay blocked for chapter ${chapterIndex}`);
+          });
+        }
+      }, { once: true });
+      
+      // Trigger load
+      ambient.load();
+      
+      console.log(`🔊 Ambient: Loaded for chapter ${chapterIndex}`);
+    } catch (err) {
+      // Non-fatal
+      console.log(`🔊 Ambient: Failed to load for chapter ${chapterIndex}:`, err);
+    }
+  }, [currentBook, ambientEnabled, ambientVolume]);
+
+  // Handle play/pause state changes (sync voice + ambient)
   useEffect(() => {
     if (!audioRef.current) return;
     
     const audio = audioRef.current;
+    const ambient = ambientRef.current;
     
     if (playbackState === 'playing') {
       if (audio.src) {
-        audio.play().catch(err => {
-          console.error('Failed to play audio:', err);
-          setPlaybackState('paused');
-        });
-      } else {
-        // No source loaded, start playback
-        if (playbackMode === 'progressive' && currentSubChunk) {
-          loadSubChunkAudio(currentSubChunk.chapterIndex, currentSubChunk.subChunkIndex, { autoPlay: true });
-        } else if (playbackMode === 'chapters' && currentChapter) {
-          loadChapterAudio(currentChapter.index);
+        // Only call play() if audio is actually paused (avoid AbortError from double-play)
+        if (audio.paused) {
+          audio.play().catch(err => {
+            // Ignore AbortError (caused by rapid play/pause or src changes)
+            if (err.name === 'AbortError') return;
+            console.error('Failed to play audio:', err);
+            setPlaybackState('paused');
+          });
         }
+        // Sync ambient
+        if (ambient?.src && ambientEnabled && ambient.paused) {
+          ambient.play().catch(() => { /* non-fatal */ });
+        }
+      } else if (playbackMode === 'chapters' && currentChapter) {
+        // Chapter mode: load chapter audio directly
+        loadChapterAudio(currentChapter.index);
       }
+      // Progressive mode with no src: handled by auto-start useEffect (polling)
     } else if (playbackState === 'paused') {
       audio.pause();
+      if (ambient) ambient.pause();
+    } else if (playbackState === 'stopped') {
+      audio.pause();
+      audio.currentTime = 0;
+      if (ambient) {
+        ambient.pause();
+        ambient.currentTime = 0;
+      }
     }
-  }, [playbackState, playbackMode, currentSubChunk, currentChapter, setPlaybackState, loadSubChunkAudio, loadChapterAudio]);
+  }, [playbackState, playbackMode, currentSubChunk, currentChapter, ambientEnabled, setPlaybackState, loadSubChunkAudio, loadChapterAudio]);
 
   // Start progressive playback for a new audiobook
   const startProgressivePlayback = useCallback(async (book: any, startSubChunk = { chapterIndex: 0, subChunkIndex: 0 }) => {
@@ -24222,6 +24331,21 @@ export function useProgressiveAudioPlayback() {
     }
   }, [setCurrentSubChunk, loadSubChunkAudio, setPlaybackState]);
 
+  // Auto-start progressive playback when store signals progressive mode
+  const progressiveStartedRef = useRef(false);
+  useEffect(() => {
+    if (playbackMode === 'progressive' && currentBook && currentSubChunk && !progressiveStartedRef.current) {
+      // Check that audio hasn't been loaded yet (avoid re-triggering on re-renders)
+      if (!audioRef.current?.src) {
+        progressiveStartedRef.current = true;
+        console.log('🔄 Auto-starting progressive playback...');
+        startProgressivePlayback(currentBook, currentSubChunk);
+      }
+    } else if (playbackMode !== 'progressive') {
+      progressiveStartedRef.current = false;
+    }
+  }, [playbackMode, currentBook, currentSubChunk]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Cleanup cached blob URLs
   useEffect(() => {
     return () => {
@@ -24236,6 +24360,7 @@ export function useProgressiveAudioPlayback() {
     startProgressivePlayback,
     loadSubChunkAudio,
     loadChapterAudio,
+    soundscapeToast,
   };
 }
 ```
@@ -24407,179 +24532,738 @@ export interface ProgressObject {
 ---
 
 ### Soundscape: Audio Mixer (mixing narration with ambient audio)
-**File:** `soundscape/src/audioMixer.ts` | **Size:** 1.6 KB | **Lines:** 60
+**File:** `soundscape/src/audioMixer.ts` | **Size:** 1.5 KB | **Lines:** 58
 
 ```typescript
-import { runFfmpeg } from './ffmpegRunner';
+/**
+ * Soundscape Module — Audio Mixer
+ *
+ * Handles audio concatenation for the chapter pipeline:
+ *   - prependIntro(): Concat intro + chapter
+ */
 
-export interface MixOptions {
-  ambientDb?: number;
-  fadeInMs?: number;
-  fadeOutMs?: number;
-}
+import path from 'path';
+import {
+  AUDIO_SAMPLE_RATE,
+  AUDIO_CHANNELS,
+  AUDIO_CODEC,
+} from './config.js';
+import { runFfmpeg } from './ffmpegRunner.js';
+import type { FfmpegResult } from './types.js';
 
-export function buildMixCommand(
-  speechPath: string,
-  ambientPath: string,
-  outputPath: string,
-  options: MixOptions = {}
-): string[] {
-  const ambientDb = options.ambientDb ?? -24;
-  const fadeIn = (options.fadeInMs ?? 1500) / 1000;
-  return [
-    '-i', speechPath,
-    '-stream_loop', '-1', '-i', ambientPath,
-    '-filter_complex',
-    `[1:a]loudnorm=I=-35:TP=-2:LRA=11,volume=${ambientDb}dB,afade=t=in:st=0:d=${fadeIn}[amb];` +
-      `[0:a][amb]amix=inputs=2:duration=first:dropout_transition=2`,
-    outputPath,
-  ];
-}
+// ========================================
+// Prepend intro
+// ========================================
 
-export function buildConcatCommand(introPath: string, chapterPath: string, outputPath: string): string[] {
-  return [
-    '-i', introPath,
-    '-i', chapterPath,
-    '-filter_complex', '[0:a][1:a]concat=n=2:v=0:a=1',
-    outputPath,
-  ];
-}
-
-export async function mixAmbientWithNarration(
-  speechPath: string,
-  ambientPath: string,
-  outputPath: string,
-  options: MixOptions = {}
-): Promise<void> {
-  const args = buildMixCommand(speechPath, ambientPath, outputPath, options);
-  const result = await runFfmpeg(args);
-  if (result.code !== 0) {
-    throw new Error(`ffmpeg mix failed: ${result.stderr}`);
-  }
-}
-
-export async function concatIntroWithChapter(
+/**
+ * Concatenate intro WAV + chapter WAV into final output.
+ *
+ * @param introPath - Path to the intro WAV (from introGenerator)
+ * @param chapterPath - Path to the chapter WAV (voice or voice+ambient)
+ * @param outputPath - Path for the final concatenated output
+ */
+export async function prependIntro(
   introPath: string,
   chapterPath: string,
   outputPath: string
-): Promise<void> {
-  const args = buildConcatCommand(introPath, chapterPath, outputPath);
+): Promise<FfmpegResult> {
+  const args = [
+    '-i', introPath,
+    '-i', chapterPath,
+    '-filter_complex',
+    '[0:a][1:a]concat=n=2:v=0:a=1',
+    '-ar', AUDIO_SAMPLE_RATE.toString(),
+    '-ac', AUDIO_CHANNELS.toString(),
+    '-c:a', AUDIO_CODEC,
+    outputPath,
+  ];
+
+  console.log(`🎬 Prepending intro → ${path.basename(outputPath)}`);
   const result = await runFfmpeg(args);
+
   if (result.code !== 0) {
-    throw new Error(`ffmpeg concat failed: ${result.stderr}`);
+    console.error(`✗ Intro concat failed: ${result.stderr.substring(0, 300)}`);
   }
+
+  return result;
 }
+
+// ========================================
+// Full chapter processing
 ```
 
 ---
 
 ### Soundscape: Catalog Loader (asset discovery)
-**File:** `soundscape/src/catalogLoader.ts` | **Size:** 0.3 KB | **Lines:** 10
+**File:** `soundscape/src/catalogLoader.ts` | **Size:** 7 KB | **Lines:** 234
 
 ```typescript
+/**
+ * Soundscape Module — Catalog Loader
+ *
+ * Parses the voicelibri_assets_catalog.csv and builds SoundAsset[]
+ * for ambient/SFX and music asset search. CSV columns:
+ *   FileID, Filename, Description, Keywords, Duration,
+ *   Type, Category, SubCategory, Location,
+ *   Microphone, TrackYear, RecMedium, FilePath
+ *
+ * The Type column determines SoundAsset.type ('ambient' or 'music').
+ * Filenames may contain commas — proper RFC 4180 CSV parsing required.
+ */
+
 import fs from 'fs';
 import path from 'path';
-import type { SoundLibraryCatalog } from './types';
+import { CATALOG_CSV_PATH, ASSETS_ROOT } from './config.js';
+import type { SoundAsset } from './types.js';
 
-export function loadCatalogFromFile(catalogPath: string): SoundLibraryCatalog {
-  const resolved = path.resolve(catalogPath);
-  const raw = fs.readFileSync(resolved, 'utf8');
-  return JSON.parse(raw) as SoundLibraryCatalog;
+// ========================================
+// CSV catalog cache
+// ========================================
+
+let cachedCatalog: SoundAsset[] | null = null;
+
+// ========================================
+// CSV parsing (RFC 4180)
+// ========================================
+
+/**
+ * Parse a CSV line respecting quoted fields with commas/newlines.
+ * Simple but correct for our catalog format.
+ */
+function parseCsvLine(line: string): string[] {
+  const fields: string[] = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        // Check for escaped quote ("") vs end of field
+        if (i + 1 < line.length && line[i + 1] === '"') {
+          current += '"';
+          i++; // skip next quote
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        current += ch;
+      }
+    } else {
+      if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === ',') {
+        fields.push(current);
+        current = '';
+      } else {
+        current += ch;
+      }
+    }
+  }
+  fields.push(current); // last field
+  return fields;
+}
+
+/**
+ * Parse duration string "MM:SS.mmm" to seconds.
+ */
+function parseDuration(durationStr: string): number | undefined {
+  if (!durationStr) return undefined;
+  const match = durationStr.match(/^(\d+):(\d+(?:\.\d+)?)$/);
+  if (!match) return undefined;
+  return parseInt(match[1]) * 60 + parseFloat(match[2]);
+}
+
+// ========================================
+// Public API
+// ========================================
+
+/**
+ * Load the ambient asset catalog from CSV.
+ * Returns cached result if already loaded.
+ *
+ * @param csvPath - Override CSV path (defaults to config CATALOG_CSV_PATH)
+ */
+export function loadCatalog(csvPath?: string): SoundAsset[] {
+  if (cachedCatalog) return cachedCatalog;
+
+  const filePath = csvPath || CATALOG_CSV_PATH;
+  if (!fs.existsSync(filePath)) {
+    console.warn(`⚠️ Catalog CSV not found: ${filePath}`);
+    return [];
+  }
+
+  const raw = fs.readFileSync(filePath, 'utf-8');
+  const lines = raw.split('\n').filter((l) => l.trim().length > 0);
+
+  if (lines.length < 2) {
+    console.warn('⚠️ Catalog CSV is empty or has no data rows');
+    return [];
+  }
+
+  // Parse header
+  const header = parseCsvLine(lines[0]);
+  const colIndex = (name: string) => header.findIndex(
+    (h) => h.trim().toLowerCase() === name.toLowerCase()
+  );
+
+  const idxFileID = colIndex('FileID');
+  const idxFilename = colIndex('Filename');
+  const idxDescription = colIndex('Description');
+  const idxKeywords = colIndex('Keywords');
+  const idxDuration = colIndex('Duration');
+  const idxType = colIndex('Type');
+  const idxCategory = colIndex('Category');
+  const idxSubCategory = colIndex('SubCategory');
+  const idxFilePath = colIndex('FilePath');
+
+  if (idxFileID === -1 || idxDescription === -1 || idxFilePath === -1) {
+    console.error('⚠️ Catalog CSV missing required columns (FileID, Description, FilePath)');
+    return [];
+  }
+
+  // Parse rows
+  const assets: SoundAsset[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const fields = parseCsvLine(lines[i]);
+    if (fields.length < header.length) continue;
+
+    const fileId = fields[idxFileID]?.trim();
+    const description = fields[idxDescription]?.trim() || '';
+    const relPath = fields[idxFilePath]?.trim() || '';
+    const category = fields[idxCategory]?.trim() || '';
+    const subcategory = fields[idxSubCategory]?.trim() || '';
+
+    if (!fileId || !relPath) continue;
+
+    // Build absolute path
+    const absPath = path.join(ASSETS_ROOT, relPath);
+
+    // Parse keywords into array
+    const keywordsRaw = fields[idxKeywords]?.trim() || '';
+    const keywords = keywordsRaw
+      .split(/\s+/)
+      .filter((k) => k.length > 0)
+      .map((k) => k.toLowerCase());
+
+    // Parse duration
+    const durationSec = parseDuration(fields[idxDuration]?.trim() || '');
+
+    // Determine asset type from CSV Type column
+    const rawType = (idxType !== -1 ? fields[idxType]?.trim() : '').toLowerCase();
+    let assetType: 'ambient' | 'music' | 'sfx';
+    if (rawType === 'music') {
+      assetType = 'music';
+    } else if (rawType === 'sfx') {
+      assetType = 'sfx';
+    } else {
+      assetType = 'ambient'; // realistic, cinematic → ambient
+    }
+
+    // Derive genre/mood from category + subcategory + keywords
+    const genre = [
+      category.toLowerCase(),
+      subcategory.toLowerCase(),
+    ].filter(Boolean);
+
+    assets.push({
+      id: `${assetType}/${fileId}`,
+      type: assetType,
+      filePath: absPath,
+      description,
+      keywords,
+      genre,
+      mood: [], // Could be enriched by LLM Director later
+      durationSec,
+      category,
+      subcategory,
+    });
+  }
+
+  cachedCatalog = assets;
+  const ambientCount = assets.filter((a) => a.type === 'ambient').length;
+  const sfxCount = assets.filter((a) => a.type === 'sfx').length;
+  const musicCount = assets.filter((a) => a.type === 'music').length;
+  console.log(`📋 Loaded ${assets.length} assets from catalog (${ambientCount} ambient, ${sfxCount} SFX, ${musicCount} music)`);
+  return assets;
+}
+
+/**
+ * Clear the cached catalog (e.g. after catalog update).
+ */
+export function clearCatalogCache(): void {
+  cachedCatalog = null;
+}
+
+/**
+ * Get assets filtered by category.
+ */
+export function getAssetsByCategory(category: string): SoundAsset[] {
+  const catalog = loadCatalog();
+  return catalog.filter(
+    (a) => a.category?.toLowerCase() === category.toLowerCase()
+  );
+}
+
+/**
+ * Get a specific asset by its FileID.
+ * Accepts raw FileID, or prefixed id like 'ambient/xxx' or 'music/xxx'.
+ */
+export function getAssetById(fileId: string): SoundAsset | undefined {
+  const catalog = loadCatalog();
+  return catalog.find(
+    (a) => a.id === fileId || a.id === `ambient/${fileId}` || a.id === `music/${fileId}` || a.id === `sfx/${fileId}`
+  );
+}
+
+/**
+ * Load only music assets from the catalog.
+ * Convenience wrapper filtering by type === 'music'.
+ */
+export function loadMusicCatalog(): SoundAsset[] {
+  return loadCatalog().filter((a) => a.type === 'music');
+}
+
+/**
+ * Load only SFX assets from the catalog.
+ * Convenience wrapper filtering by type === 'sfx'.
+ */
+export function loadSfxCatalog(): SoundAsset[] {
+  return loadCatalog().filter((a) => a.type === 'sfx');
 }
 ```
 
 ---
 
 ### Soundscape: Configuration
-**File:** `soundscape/src/config.ts` | **Size:** 0.4 KB | **Lines:** 16
+**File:** `soundscape/src/config.ts` | **Size:** 4.5 KB | **Lines:** 146
 
 ```typescript
-export interface SoundscapeConfig {
-  enableAmbient: boolean;
-  enableMusicIntro: boolean;
-  defaultAmbientDb: number;
-  defaultFadeInMs: number;
-  defaultFadeOutMs: number;
+/**
+ * Soundscape Module — Configuration
+ *
+ * All tuneable constants centralized here.
+ * All values are tuneable via this single module.
+ */
+
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// ========================================
+// Paths
+// ========================================
+
+/** Project root (3 levels up from soundscape/src/) */
+export const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
+
+/** Root of the soundscape asset library */
+export const ASSETS_ROOT = path.resolve(__dirname, '..', 'assets');
+
+/** Music subfolder */
+export const MUSIC_ASSETS_DIR = path.join(ASSETS_ROOT, 'music');
+
+/** Ambient catalog CSV */
+export const CATALOG_CSV_PATH = path.join(ASSETS_ROOT, 'voicelibri_assets_catalog.csv');
+
+/** Persisted embedding index for ambient assets */
+export const AMBIENT_EMBEDDINGS_PATH = path.join(ASSETS_ROOT, 'ambient_embeddings.json');
+
+/** Persisted embedding index for music filenames */
+export const MUSIC_EMBEDDINGS_PATH = path.join(ASSETS_ROOT, 'music_embeddings.json');
+
+/** Persisted embedding index for SFX assets */
+export const SFX_EMBEDDINGS_PATH = path.join(ASSETS_ROOT, 'sfx_embeddings.json');
+
+// ========================================
+// Feature toggles (env-driven)
+// ========================================
+
+export function isSoundscapeEnabled(): boolean {
+  const raw = process.env.SOUNDSCAPE_ENABLED ?? process.env.SOUNDSCAPE_AMBIENT_ENABLED;
+  return raw === '1' || raw === 'true';
 }
 
-export const DEFAULT_SOUNDSCAPE_CONFIG: SoundscapeConfig = {
-  enableAmbient: true,
-  enableMusicIntro: true,
-  defaultAmbientDb: -6,
-  defaultFadeInMs: 1500,
-  defaultFadeOutMs: 2000,
-};
-```
+// ========================================
+// Audio output format
+// ========================================
 
----
+export const AUDIO_SAMPLE_RATE = 48000;
+export const AUDIO_CHANNELS = 2;
+export const AUDIO_CODEC = 'libopus';
 
-### Soundscape: Credits (sound attribution tracking)
-**File:** `soundscape/src/credits.ts` | **Size:** 0.4 KB | **Lines:** 15
+// ========================================
+// Ambient layer
+// ========================================
 
-```typescript
-export interface CreditItem {
-  title: string;
-  author: string;
-  sourceUrl: string;
-  license: string;
-}
+/** dB level for ambient loop under narration */
+export const AMBIENT_DEFAULT_DB = -6;
 
-export function formatCredits(items: CreditItem[]): string {
-  const lines = ['Soundscape Credits', ''];
-  for (const item of items) {
-    lines.push(`- ${item.title} — ${item.author} (${item.license}) ${item.sourceUrl}`);
-  }
-  return lines.join('\n') + '\n';
-}
+/** Fade durations for ambient entry/exit (ms) */
+export const AMBIENT_FADE_MS = 2000;
+
+/** Ambient starts this many ms BEFORE narration */
+export const AMBIENT_PRE_ROLL_MS = 4000;
+
+/** Ambient lingers this many ms AFTER narration */
+export const AMBIENT_POST_ROLL_MS = 4000;
+
+// ========================================
+// Intro music — timing (ms)
+// ========================================
+
+/** Fade in / out on the music bed */
+export const INTRO_FADE_MS = 3500;
+
+/** Silence appended after intro ends */
+export const INTRO_END_SILENCE_MS = 3000;
+
+/** Silence before chapter-level intro starts */
+export const INTRO_CHAPTER_START_SILENCE_MS = 3000;
+
+/** Gap between chapter number and chapter title */
+export const INTRO_CHAPTER_GAP_MS = 2000;
+
+/** Gap between title and author */
+export const INTRO_TITLE_AUTHOR_GAP_MS = 2000;
+
+/** Gap between author and VoiceLibri tagline */
+export const INTRO_AUTHOR_VOICELIBRI_GAP_MS = 4000;
+
+/** Gap between tagline and chapter title */
+export const INTRO_VOICELIBRI_CHAPTER_GAP_MS = 4000;
+
+/** Extra music after last voice overlay */
+export const INTRO_END_MUSIC_EXTENSION_MS = 3750;
+
+// ========================================
+// Intro music — volume (dB)
+// ========================================
+
+/** Ducking ramp duration (ms) */
+export const RAMP_MS = 2000;
+
+/** Full-volume boost applied to music bed */
+export const MUSIC_FULL_BOOST_DB = 10.5;
+
+/** Boost applied to music when ducked behind voice */
+export const MUSIC_BACKGROUND_BOOST_DB = 4.5;
+
+/** Base music level when ducked */
+export const MUSIC_BACKGROUND_DB = -21.5;
+
+/** Voice boost over music */
+export const INTRO_VOICE_BOOST_DB = 2;
+
+/** Default narrator voice for intros */
+export const INTRO_NARRATOR_VOICE = 'Algieba';
+
+// ========================================
+// Embeddings
+// ========================================
+
+/** Gemini embedding model */
+export const EMBEDDING_MODEL = 'gemini-embedding-001';
+
+/** Embedding vector dimensions (gemini-embedding-001 supports up to 3072; 768 balances quality vs memory for ~22K entries) */
+export const EMBEDDING_DIMENSIONS = 768;
+
+/** Max texts per embedding API call (gemini-embedding-001 only supports 1 text per request) */
+export const EMBEDDING_BATCH_SIZE = 1;
+
+/** Max concurrent embedding API requests */
+export const EMBEDDING_CONCURRENCY = 5;
+
+// ========================================
+// LLM Director
+// ========================================
+
+/** Model for scene analysis */
+export const SCENE_ANALYSIS_MODEL = 'gemini-2.5-flash';
 ```
 
 ---
 
 ### Soundscape: Entry Point & Exports
-**File:** `soundscape/src/index.ts` | **Size:** 0.3 KB | **Lines:** 11
+**File:** `soundscape/src/index.ts` | **Size:** 3.3 KB | **Lines:** 145
 
 ```typescript
-export * from './types';
-export * from './config';
-export * from './catalogLoader';
-export * from './soundLibrary';
-export * from './sceneTagger';
-export * from './soundDirectiveGenerator';
-export * from './musicIntroBuilder';
-export * from './audioMixer';
-export * from './ffmpegRunner';
-export * from './credits';
+/**
+ * Soundscape Module — Public API
+ *
+ * Re-exports all modules for clean consumption by the backend pipeline.
+ *
+ * Architecture:
+ *   config.ts          → Constants, paths, genre mapping
+ *   types.ts           → All TypeScript interfaces
+ *   ffmpegRunner.ts    → Thin ffmpeg wrapper
+ *   embeddings.ts      → Gemini embedding-001 vector search
+ *   catalogLoader.ts   → CSV catalog → SoundAsset[]
+ *   musicSelector.ts   → Hybrid genre-map + embedding music selection
+ *   llmDirector.ts     → LLM-based scene analysis per chapter
+ *   assetResolver.ts   → Embedding search for ambient asset matching
+ *   introGenerator.ts  → Music bed + voice overlay intros
+ *   ambientLayer.ts    → Per-chapter ambient WAV generation
+ *   audioMixer.ts      → Final merge: voice + ambient + intro
+ */
+
+// Types
+export type {
+  SoundAsset,
+  SoundAssetType,
+  BookInfo,
+  CharacterEntry,
+  CharacterRegistry,
+  SceneSegment,
+  SceneAnalysis,
+  BookSoundscapePlan,
+  ChapterSoundscapePlan,
+  VoiceOverlay,
+  IntroSpec,
+  IntroResult,
+  EmbeddingEntry,
+  EmbeddingIndex,
+  EmbeddingSearchResult,
+  MusicSelectionResult,
+  SoundscapePipelineOptions,
+  SoundscapePreferences,
+  FfmpegResult,
+  SfxEvent,
+  SilenceGap,
+} from './types.js';
+
+// Config
+export {
+  isSoundscapeEnabled,
+  ASSETS_ROOT,
+  MUSIC_ASSETS_DIR,
+  CATALOG_CSV_PATH,
+  AMBIENT_EMBEDDINGS_PATH,
+  MUSIC_EMBEDDINGS_PATH,
+  AMBIENT_DEFAULT_DB,
+  EMBEDDING_MODEL,
+  EMBEDDING_CONCURRENCY,
+  SCENE_ANALYSIS_MODEL,
+  INTRO_NARRATOR_VOICE,
+} from './config.js';
+
+// FFmpeg
+export { runFfmpeg, getAudioDuration, detectSilenceGaps } from './ffmpegRunner.js';
+
+// Embeddings
+export {
+  buildEmbeddingIndex,
+  saveEmbeddingIndex,
+  loadEmbeddingIndex,
+  searchEmbeddings,
+  searchEmbeddingsBatch,
+  searchEmbeddingsWithVector,
+  getAmbientIndex,
+  setAmbientIndex,
+  getMusicIndex,
+  setMusicIndex,
+} from './embeddings.js';
+
+// Catalog
+export {
+  loadCatalog,
+  loadMusicCatalog,
+  loadSfxCatalog,
+  clearCatalogCache,
+  getAssetsByCategory,
+  getAssetById,
+} from './catalogLoader.js';
+
+// Music selection
+export {
+  scanMusicAssets,
+  selectMusicTrack,
+  ensureMusicEmbeddingIndex,
+} from './musicSelector.js';
+
+// LLM Director
+export {
+  analyzeChapterScene,
+  analyzeAllChapters,
+  buildFallbackScene,
+} from './llmDirector.js';
+
+// Asset resolver
+export {
+  ensureAmbientEmbeddingIndex,
+  ensureSfxEmbeddingIndex,
+  resolveAmbientAsset,
+  resolveSfxEvents,
+  resolveSceneSegmentAssets,
+  resolveAllChapterAssets,
+  resolveByKeyword,
+} from './assetResolver.js';
+
+// Intro generator
+export {
+  initIntroGenerator,
+  buildBookIntroSpec,
+  buildChapterIntroSpec,
+  generateIntro,
+  generateAllIntros,
+} from './introGenerator.js';
+
+// Ambient layer
+export {
+  generateSubchunkAmbientTrack,
+  concatenateSubchunkAmbientTracks,
+} from './ambientLayer.js';
+
+// Subchunk soundscape mapper
+export {
+  buildSubchunkSegmentInfos,
+  mapSfxEventsToSubchunks,
+  groupMappedEventsBySubchunk,
+  buildPlacedSfxEvents,
+  calculateSfxOffsetFromGaps,
+} from './subchunkSoundscape.js';
+export type {
+  SubchunkSegmentInfo,
+  MappedSfxEvent,
+  PlacedSfxEvent,
+} from './subchunkSoundscape.js';
+
+// Audio mixer
+export {
+  prependIntro,
+} from './audioMixer.js';
 ```
 
 ---
 
 ### Soundscape: FFmpeg Runner (audio processing CLI wrapper)
-**File:** `soundscape/src/ffmpegRunner.ts` | **Size:** 0.6 KB | **Lines:** 27
+**File:** `soundscape/src/ffmpegRunner.ts` | **Size:** 3.9 KB | **Lines:** 126
 
 ```typescript
-import { spawn } from 'child_process';
+/**
+ * Soundscape Module — FFmpeg Runner
+ *
+ * Thin wrapper around ffmpeg / ffprobe child processes.
+ * Always passes -y (overwrite output) matching production behaviour.
+ */
 
-export interface FfmpegResult {
-  code: number;
-  stdout: string;
-  stderr: string;
-}
+import { spawn } from 'child_process';
+import type { FfmpegResult, SilenceGap } from './types.js';
 
 export function runFfmpeg(args: string[]): Promise<FfmpegResult> {
   return new Promise((resolve, reject) => {
-    const proc = spawn('ffmpeg', args);
+    const proc = spawn('ffmpeg', ['-y', ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
 
-    proc.stdout.on('data', chunk => {
+    proc.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
     });
-    proc.stderr.on('data', chunk => {
+    proc.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString();
     });
-    proc.on('error', err => reject(err));
-    proc.on('close', code => {
+    proc.on('error', (err) => {
+      stderr += err instanceof Error ? err.message : String(err);
+      resolve({ code: 1, stdout, stderr });
+    });
+    proc.on('close', (code) => {
       resolve({ code: code ?? 0, stdout, stderr });
+    });
+  });
+}
+
+/**
+ * Detect silence gaps in an audio file using ffmpeg silencedetect filter.
+ *
+ * Runs: ffmpeg -i {filePath} -af silencedetect=noise=-30dB:d=0.15 -f null -
+ * Parses stderr for silence_start / silence_end lines.
+ *
+ * @param filePath - Path to the audio file (WAV, OGG, etc.)
+ * @returns Ordered array of silence gaps with start/end in seconds and midpoint in ms
+ */
+export function detectSilenceGaps(
+  filePath: string,
+): Promise<SilenceGap[]> {
+  return new Promise((resolve) => {
+    const proc = spawn(
+      'ffmpeg',
+      ['-i', filePath, '-af', 'silencedetect=noise=-30dB:d=0.15', '-f', 'null', '-'],
+      { stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+
+    let stderr = '';
+
+    proc.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    proc.on('error', () => {
+      resolve([]);
+    });
+    proc.on('close', () => {
+      const gaps: Array<{ startSec: number; endSec: number; midpointMs: number }> = [];
+      const starts: number[] = [];
+
+      for (const line of stderr.split('\n')) {
+        const startMatch = line.match(/silence_start:\s*([\d.]+)/);
+        if (startMatch) {
+          starts.push(parseFloat(startMatch[1]));
+          continue;
+        }
+        const endMatch = line.match(/silence_end:\s*([\d.]+)/);
+        if (endMatch && starts.length > 0) {
+          const startSec = starts.shift()!;
+          const endSec = parseFloat(endMatch[1]);
+          if (!isNaN(startSec) && !isNaN(endSec) && endSec > startSec) {
+            const midpointMs = Math.round(((startSec + endSec) / 2) * 1000);
+            gaps.push({ startSec, endSec, midpointMs });
+          }
+        }
+      }
+
+      // Return in chronological order (ffmpeg already emits them in order, but sort to be safe)
+      gaps.sort((a, b) => a.startSec - b.startSec);
+      resolve(gaps);
+    });
+  });
+}
+
+/**
+ * Get exact audio duration in seconds using ffprobe.
+ * Works reliably for all formats (OGG, WAV, MP3, etc.)
+ *
+ * @param filePath - Path to the audio file
+ * @returns Duration in seconds, or 0 if probe fails
+ */
+export function getAudioDuration(filePath: string): Promise<number> {
+  return new Promise((resolve) => {
+    const proc = spawn('ffprobe', [
+      '-v', 'error',
+      '-show_entries', 'format=duration',
+      '-of', 'default=noprint_wrappers=1:nokey=1',
+      filePath,
+    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    proc.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    proc.on('error', () => {
+      resolve(0);
+    });
+    proc.on('close', (code) => {
+      if (code === 0) {
+        const duration = parseFloat(stdout.trim());
+        resolve(isNaN(duration) ? 0 : duration);
+      } else {
+        resolve(0);
+      }
     });
   });
 }
@@ -24587,182 +25271,291 @@ export function runFfmpeg(args: string[]): Promise<FfmpegResult> {
 
 ---
 
-### Soundscape: Keyword Map (text-to-sound mapping rules)
-**File:** `soundscape/src/keywordMap.ts` | **Size:** 0.5 KB | **Lines:** 12
-
-```typescript
-export const DEFAULT_KEYWORD_MAP: Record<string, string[]> = {
-  forest: ['forest', 'woods', 'trees', 'pine', 'jungle'],
-  rain: ['rain', 'storm', 'thunder', 'lightning'],
-  sea: ['sea', 'ocean', 'wave', 'shore', 'harbor'],
-  city: ['city', 'street', 'traffic', 'crowd', 'market'],
-  interior: ['room', 'hall', 'castle', 'cathedral', 'church'],
-  sciFi: ['spaceship', 'engine', 'hull', 'airlock', 'android'],
-  fire: ['fire', 'flame', 'smoke', 'campfire'],
-  wind: ['wind', 'breeze', 'gust'],
-  cave: ['cave', 'tunnel', 'underground'],
-};
-```
-
----
-
-### Soundscape: Music Intro Builder (chapter intro generation)
-**File:** `soundscape/src/musicIntroBuilder.ts` | **Size:** 1.1 KB | **Lines:** 27
-
-```typescript
-export interface IntroSegment {
-  type: 'music' | 'voice';
-  durationMs: number;
-  volumeDb?: number;
-  text?: string;
-}
-
-export function buildBookIntroSequence(bookTitle: string, author: string, chapterTitle: string): IntroSegment[] {
-  return [
-    { type: 'music', durationMs: 4000, volumeDb: -14 },
-    { type: 'music', durationMs: 2000, volumeDb: -22 },
-    { type: 'voice', durationMs: 3500, text: `${bookTitle}. ${author}. This audiobook was brought to you by VoiceLibri.` },
-    { type: 'music', durationMs: 2000, volumeDb: -18 },
-    { type: 'voice', durationMs: 2500, text: `Chapter 1. ${chapterTitle}.` },
-    { type: 'music', durationMs: 1500, volumeDb: -16 },
-  ];
-}
-
-export function buildChapterIntroSequence(chapterNumber: number, chapterTitle: string): IntroSegment[] {
-  return [
-    { type: 'music', durationMs: 2000, volumeDb: -14 },
-    { type: 'music', durationMs: 1500, volumeDb: -22 },
-    { type: 'voice', durationMs: 2000, text: `Chapter ${chapterNumber}. ${chapterTitle}.` },
-    { type: 'music', durationMs: 1000, volumeDb: -16 },
-  ];
-}
-```
-
----
-
-### Soundscape: Scene Tagger (scene boundary detection)
-**File:** `soundscape/src/sceneTagger.ts` | **Size:** 0.5 KB | **Lines:** 20
-
-```typescript
-import { DEFAULT_KEYWORD_MAP } from './keywordMap';
-
-export interface SceneTags {
-  tags: string[];
-  moods: string[];
-}
-
-export function extractSceneTags(text: string, keywordMap = DEFAULT_KEYWORD_MAP): SceneTags {
-  const lower = text.toLowerCase();
-  const tags: string[] = [];
-
-  for (const [tag, keywords] of Object.entries(keywordMap)) {
-    if (keywords.some(k => lower.includes(k))) {
-      tags.push(tag);
-    }
-  }
-
-  return { tags, moods: [] };
-}
-```
-
----
-
-### Soundscape: Sound Directive Generator (LLM-powered sound cues)
-**File:** `soundscape/src/soundDirectiveGenerator.ts` | **Size:** 0.8 KB | **Lines:** 32
-
-```typescript
-import type { SoundDirective, SoundLibraryCatalog } from './types';
-import { extractSceneTags } from './sceneTagger';
-import { selectAmbientTracks } from './soundLibrary';
-
-export interface ChapterContext {
-  chapterIndex: number;
-  chunkCount: number;
-  text: string;
-}
-
-export function buildSoundDirectives(
-  catalog: SoundLibraryCatalog,
-  context: ChapterContext
-): SoundDirective[] {
-  if (context.chunkCount <= 0) return [];
-
-  const { tags, moods } = extractSceneTags(context.text);
-  const ambient = selectAmbientTracks(catalog, moods.length > 0 ? moods : tags)[0];
-  if (!ambient) return [];
-
-  return [
-    {
-      soundId: ambient.id,
-      startChunk: 0,
-      endChunk: Math.max(0, context.chunkCount - 1),
-      volumeDb: ambient.recommendedVolumeDb ?? -24,
-      fadeInMs: 1500,
-      fadeOutMs: 2000,
-    },
-  ];
-}
-```
-
----
-
-### Soundscape: Sound Library (sound asset catalog)
-**File:** `soundscape/src/soundLibrary.ts` | **Size:** 0.8 KB | **Lines:** 20
-
-```typescript
-import type { SoundAsset, SoundLibraryCatalog } from './types';
-
-export function loadSoundLibraryCatalog(catalog: SoundLibraryCatalog): SoundLibraryCatalog {
-  return catalog;
-}
-
-export function selectMusicTheme(catalog: SoundLibraryCatalog, genres: string[] = []): SoundAsset | undefined {
-  const matches = catalog.assets.filter(
-    a => a.type === 'music' && (genres.length === 0 || a.genre?.some(g => genres.includes(g)))
-  );
-  return matches[0];
-}
-
-export function selectAmbientTracks(catalog: SoundLibraryCatalog, tags: string[] = []): SoundAsset[] {
-  if (tags.length === 0) {
-    return catalog.assets.filter(a => a.type === 'ambient');
-  }
-  return catalog.assets.filter(a => a.type === 'ambient' && a.mood?.some(m => tags.includes(m)));
-}
-```
-
----
-
 ### Soundscape: Type Definitions
-**File:** `soundscape/src/types.ts` | **Size:** 0.5 KB | **Lines:** 28
+**File:** `soundscape/src/types.ts` | **Size:** 8.5 KB | **Lines:** 283
 
 ```typescript
-export type SoundAssetType = 'music' | 'ambient';
+/**
+ * Soundscape Module — Type Definitions
+ *
+ * Core interfaces for the parallel soundscape pipeline:
+ *   Intro (music + TTS overlay) | Voice TTS | Ambient Layer
+ *
+ * All three run in parallel after character extraction.
+ */
 
+// ========================================
+// Sound Asset Types
+// ========================================
+
+export type SoundAssetType = 'music' | 'ambient' | 'sfx';
+
+/** A single sound file from the library (ambient, SFX, or music track) */
 export interface SoundAsset {
   id: string;
   type: SoundAssetType;
-  genre?: string[];
-  mood?: string[];
-  intensity?: number;
-  recommendedVolumeDb?: number;
-  loopable?: boolean;
-  durationSec?: number;
-  loudnessLUFS?: number;
+  /** Absolute path to the .ogg file */
   filePath: string;
+  /** Catalog description or filename-derived label */
+  description: string;
+  /** Search keywords (from catalog or filename parsing) */
+  keywords: string[];
+  /** Genre tags (e.g. 'forest', 'rain', 'medieval', 'orchestral') */
+  genre: string[];
+  /** Mood tags (e.g. 'dark', 'calm', 'epic', 'spooky') */
+  mood: string[];
+  /** Duration in seconds (if known from catalog) */
+  durationSec?: number;
+  /** Recommended playback volume in dB (negative = quieter) */
+  recommendedVolumeDb?: number;
+  /** Whether the asset is suitable for looping */
+  loopable?: boolean;
+  /** Measured loudness in LUFS (for normalization) */
+  loudnessLUFS?: number;
+  /** Catalog category (e.g. 'RAIN_01', 'AMBIENCE_NATURE') */
+  category?: string;
+  /** Catalog subcategory (e.g. 'CONCRETE', 'Forrest') */
+  subcategory?: string;
 }
 
-export interface SoundDirective {
-  soundId: string;
-  startChunk: number;
-  endChunk: number;
-  volumeDb: number;
-  fadeInMs: number;
-  fadeOutMs: number;
+// ========================================
+// Book & Character Registry (read-only)
+// ========================================
+
+/** Book-level metadata from character_registry.json */
+export interface BookInfo {
+  genre: string;
+  tone: string;
+  voiceTone: string;
+  period: string;
+  locked: boolean;
+  /** Book title (optional, used by LLM music selector) */
+  title?: string;
+  /** Book author (optional, used by LLM music selector) */
+  author?: string;
 }
 
-export interface SoundLibraryCatalog {
-  assets: SoundAsset[];
+/** Character from character_registry.json */
+export interface CharacterEntry {
+  id: string;
+  primaryName: string;
+  aliases: string[];
+  voice: string;
+  gender: string;
+  role: string;
+  firstSeenChapter: number;
+  lastSeenChapter: number;
+}
+
+/** Full character registry as written by the dramatization pipeline */
+export interface CharacterRegistry {
+  exportedAt: string;
+  bookInfo: BookInfo;
+  narratorVoice: string;
+  narratorInstruction: string;
+  characterCount: number;
+  characters: CharacterEntry[];
+  voiceMap: Record<string, string>;
+}
+
+// ========================================
+// Scene Analysis (LLM Director output)
+// ========================================
+
+/**
+ * A single scene segment within a chapter's soundscape timeline.
+ * The LLM Director produces 1–6 segments per chapter; each marks where a
+ * new environment begins (first segment always has charIndex = 0).
+ */
+export interface SceneSegment {
+  /** Character offset where this scene begins (0 for first segment) */
+  charIndex: number;
+  /** Primary environment description (e.g. 'forest', 'castle interior') */
+  environment: string;
+  /** English search queries for ambient asset matching */
+  searchSnippets: string[];
+  /** Mood descriptors for this segment */
+  moods: string[];
+}
+
+/**
+ * A single SFX event with precise placement information.
+ *
+ * `charIndex` is the character offset within the chapter text where the
+ * sound event occurs. Mapped to a silence gap at render time via
+ * `calculateSfxOffsetFromGaps()` in subchunkSoundscape.ts.
+ */
+export interface SfxEvent {
+  /** English search query for SFX catalog matching (e.g. 'door slamming wood') */
+  query: string;
+  /** Character offset in the chapter text where this sound occurs */
+  charIndex: number;
+  /** Human-readable description of what the sound is (for logging/debugging) */
+  description: string;
+}
+
+/** LLM-generated scene analysis for a single chapter */
+export interface SceneAnalysis {
+  chapterIndex: number;
+  /** Time of day (e.g. 'night', 'dawn', 'midday') */
+  timeOfDay: string;
+  /** Weather if applicable (e.g. 'rain', 'storm', 'clear') */
+  weather: string;
+  /** Mood descriptors for the dominant chapter scene */
+  moods: string[];
+  /** Specific sound elements mentioned (e.g. 'crackling fire', 'horses') */
+  soundElements: string[];
+  /** Overall intensity 0-1 (quiet/calm → loud/intense) */
+  intensity: number;
+  /**
+   * Fine-grained ambient timeline: 1–6 ordered scene segments, each with
+   * its own environment and search queries. First segment always has charIndex = 0.
+   * Used for multi-scene ambient generation within a single subchunk.
+   */
+  sceneSegments: SceneSegment[];
+  /**
+   * SFX events with character-index placement in the chapter text.
+   * Each event's charIndex is mapped to a silence gap midpoint at render time
+   * via `calculateSfxOffsetFromGaps()` in subchunkSoundscape.ts.
+   */
+  sfxEvents: SfxEvent[];
+}
+
+/** Complete soundscape plan for an entire book */
+export interface BookSoundscapePlan {
+  bookTitle: string;
+  bookInfo: BookInfo;
+  musicTrackPath: string | null;
+  chapters: ChapterSoundscapePlan[];
+}
+
+/** Per-chapter soundscape plan */
+export interface ChapterSoundscapePlan {
+  chapterIndex: number;
+  scene: SceneAnalysis;
+  ambientAsset: SoundAsset | null;
+  /** Volume for ambient layer (dB) */
+  ambientVolumeDb: number;
+}
+
+// ========================================
+// Intro Generation
+// ========================================
+
+/** Voice overlay segment within an intro */
+export interface VoiceOverlay {
+  /** Text to synthesize (may be translated) */
+  text: string;
+  /** Absolute start time in ms (if fixed) */
+  startMs?: number;
+  /** Gap after previous segment ends (ms) */
+  gapAfterMs?: number;
+}
+
+/** Intro specification (book-level or chapter-level) */
+export interface IntroSpec {
+  /** Total intro duration in ms (music bed length) */
+  totalDurationMs?: number;
+  /** Voice overlay segments to duck under music */
+  voiceOverlays: VoiceOverlay[];
+  /** Silence appended after intro (ms) */
+  endSilenceMs: number;
+}
+
+/** Result of intro generation */
+export interface IntroResult {
+  /** Path to the generated intro WAV file */
+  introPath: string;
+  /** Duration of the intro in ms */
+  durationMs: number;
+}
+
+// ========================================
+// Embeddings
+// ========================================
+
+/** A single embedding vector with its associated asset ID */
+export interface EmbeddingEntry {
+  id: string;
+  /** The text that was embedded (description or filename) */
+  text: string;
+  /** Embedding vector (768 dimensions, truncated from gemini-embedding-001's 3072 default) */
+  vector: number[];
+}
+
+/** Persisted embedding index (JSON file) */
+export interface EmbeddingIndex {
+  model: string;
+  dimensions: number;
+  createdAt: string;
+  entries: EmbeddingEntry[];
+}
+
+/** Search result from embedding similarity */
+export interface EmbeddingSearchResult {
+  id: string;
+  text: string;
+  score: number;
+}
+
+// ========================================
+// Music Selection
+// ========================================
+
+/** Result of music selection */
+export interface MusicSelectionResult {
+  asset: SoundAsset;
+  /** Why this track was chosen */
+  matchReason: string;
+  /** Similarity score if embedding-based */
+  score?: number;
+}
+
+// ========================================
+// Pipeline Orchestration
+// ========================================
+
+/** Options for the soundscape pipeline */
+export interface SoundscapePipelineOptions {
+  bookTitle: string;
+  bookDir: string;
+  characterRegistry: CharacterRegistry;
+  /** Chapter metadata for intro text */
+  chapters: Array<{
+    index: number;
+    title: string;
+    text: string;
+  }>;
+  /** Language code for intro TTS (e.g. 'sk-SK') */
+  targetLanguage: string | null;
+  /** Narrator voice for intro TTS */
+  narratorVoice: string;
+  /** User preferences (toggles) */
+  preferences?: SoundscapePreferences;
+}
+
+/** User preferences for soundscape (from AudiobookMetadata.userPreferences) */
+export interface SoundscapePreferences {
+  soundscapeMusicEnabled?: boolean;
+  soundscapeAmbientEnabled?: boolean;
+  soundscapeThemeId?: string;
+}
+
+// ========================================
+// FFmpeg
+// ========================================
+
+export interface FfmpegResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+/** A detected silence gap from ffmpeg silencedetect */
+export interface SilenceGap {
+  startSec: number;
+  endSec: number;
+  midpointMs: number;
 }
 ```
 
@@ -24771,12 +25564,12 @@ export interface SoundLibraryCatalog {
 
 ## CONTEXT SNAPSHOT SUMMARY
 
-- **Total source files included:** 71
-- **Total source size:** 818.6 KB
-- **Branch:** feature/consultation-mirror
-- **Commit:** 467289e4
-- **Generated:** 2026-03-11
-- **Session Key:** VL-MIRROR-20260311-0746
+- **Total source files included:** 65
+- **Total source size:** 846.9 KB
+- **Branch:** feature/soundscape-refactor
+- **Commit:** 21b8a68a
+- **Generated:** 2026-03-12
+- **Session Key:** VL-MIRROR-20260312-0740
 
 > This snapshot was automatically generated by `mirror/Generate-Context.ps1`.
 > For the latest version, re-run the generator or use `mirror/Sync-Mirror.ps1`.
