@@ -1,0 +1,400 @@
+VOICELIBRI SOUNDSCAPE — KOMPLETNÁ REVÍZIA A AKČNÝ PLÁN
+
+Pre Opus 4 / Copilot agent vo VS Code — kompletný manuál v jednom kuse
+
+
+1. SÚHRN SITUÁCIE
+
+1.1 Dve paralelné implementácie
+
+KomponentUmiestnenieStavStarý monolit soundscapeIntegration.tsapps/backend/src/ (main)❌ Aktívne používaný, primitívny keyword matchingNový modulárny systém soundscape/src/* (10 modulov)soundscape/src/ (branch feature/soundscape-refactor)✅ Kompletne implementovaný, nepripojenýNový bridge soundscapeCompat.tsapps/backend/src/ (branch feature/soundscape-refactor)✅ Implementovaný, nepripojený1.2 Koreňová príčina
+
+Na main vetve sú audiobookWorker.ts (riadok 31) a index.ts (riadok 69) stále importujú zo starého soundscapeIntegration.ts:
+
+// audiobookWorker.ts:31
+import { applySoundscapeToChapter } from './soundscapeIntegration.js';
+
+// index.ts:69
+import { resolveChapterAudioPath, getSoundscapeThemeOptions, applySoundscapeToChapter } from './soundscapeIntegration.js';
+
+Starý súbor používa DEFAULT_KEYWORD_MAP (jednoduché slová: forest, rain, sea…) a JSON catalog.json. Nový systém s embedding cosine similarity a LLM režisérom (Gemini 2.5 Flash) je kompletne implementovaný v soundscape/src/*, ale nikdy nie je zavolaný.
+
+
+2. ARCHITEKTONICKÁ MAPA — NOVÝ SYSTÉM
+
+2.1 Súborová štruktúra
+
+soundscape/
+├── assets/
+│   ├── voicelibri_assets_catalog.csv    ← CSV katalóg (22K+ entries)
+│   ├── ambient_embeddings.json          ← cache (auto-build pri prvom behu)
+│   ├── sfx_embeddings.json              ← cache (auto-build)
+│   ├── music_embeddings.json            ← cache (auto-build)
+│   └── music/                           ← hudobné tracky
+└── src/
+    ├── types.ts              — SoundAsset, SceneAnalysis, SfxEvent, EmbeddingIndex...
+    ├── config.ts             — Konštanty (cesty, dB, modely, dimenzie)
+    ├── catalogLoader.ts      — CSV → SoundAsset[] (RFC 4180 parser)
+    ├── embeddings.ts         — Gemini embedding-001, cosine similarity
+    ├── llmDirector.ts        — LLM "zvukový režisér" (Gemini 2.5 Flash)
+    ├── assetResolver.ts      — Embedding-based asset matching
+    ├── subchunkSoundscape.ts — SFX → subchunk mapping, silence-gap timing
+    ├── ambientLayer.ts       — FFmpeg ambient + SFX rendering
+    ├── ffmpegRunner.ts       — FFmpeg wrapper
+    ├── musicSelector.ts      — LLM-guided music selection
+    └── introGenerator.ts     — Intro audio (music + TTS overlay)
+
+2.2 Pipeline Flow
+
+TEXT KAPITOLY (akýkoľvek jazyk)
+         │
+╔════════╧═════════════╗
+║  KROK 1: LLM REŽISÉR ║  ← llmDirector.ts → Gemini 2.5 Flash
+║  analyzeChapterScene()║  ← JEDINÉ miesto kde treba LLM
+╚════════╤═════════════╝
+         │ výstup: SceneAnalysis {
+         │   sceneSegments[1..6]  → environment, searchSnippets (EN)
+         │   sfxEvents[]          → query (EN), charIndex, description
+         │   timeOfDay, weather, moods, intensity, soundElements
+         │ }
+         │
+╔════════╧══════════════════════╗
+║  KROK 2: DETERMINISTICKÝ MATCH ║  ← assetResolver.ts (žiadny LLM)
+╠═══════════════════════════════╣
+║  2a. resolveSceneSegmentAssets()║  ← cosine similarity:
+║      searchSnippets vs.        ║    embed index, topK=5,
+║      ambient_embeddings.json   ║    SCORE_DELTA≤0.02,
+║                                ║    DURATION_FACTOR≥1.5
+║  2b. resolveSfxEvents()        ║  ← cosine similarity:
+║      sfxEvent.query vs.        ║    sfx_embeddings.json,
+║      sfx embedding index       ║    threshold score ≥ 0.5
+╚════════╤══════════════════════╝
+         │
+╔════════╧══════════════════════╗
+║  KROK 3: DETERMINISTICKÉ TIMING║ ← subchunkSoundscape.ts (žiadny LLM)
+╠═══════════════════════════════╣
+║  3a. buildSubchunkSegmentInfos ║ ← charCount, cumulativeCharStart
+║  3b. mapSfxEventsToSubchunks   ║ ← proporčné charIndex → subchunk
+║  3c. calculateSfxOffsetFromGaps║ ← silence gap midpoint z ffprobe
+║  3d. buildPlacedSfxEvents      ║ ← constraints:
+║      · no-layering (1 SFX/gap) ║
+║      · no-boundary-crossing    ║
+║      · no-ambient-overlap ±500ms║
+║      · min spacing 2000ms      ║
+╚════════╤══════════════════════╝
+         │
+╔════════╧══════════════════════╗
+║  KROK 4: FFMPEG RENDERING      ║ ← ambientLayer.ts
+╠═══════════════════════════════╣
+║  4a. generateSubchunkAmbient   ║ ← per-subchunk OGG:
+║      · multi-scene crossfade   ║   500ms medzi segmentmi
+║      · SFX adelay placement    ║   LUFS correction
+║  4b. concatenateSubchunkAmbient║ ← concat → chapter_N_ambient.ogg
+║      · chapter-level 2s fade   ║
+╚══════════════════════════════╝
+
+2.3 Kľúčové API Závislosti
+
+SlužbaModelÚčelEndpointVertex AIgemini-2.5-flashScénická analýza{location}-aiplatform.googleapis.com/.../generateContentVertex AIgemini-embedding-001Embedding vektory (768 dim){location}-aiplatform.googleapis.com/.../predictGoogle Authgoogle-auth-libraryAutentifikáciaADC (Application Default Credentials)Projekt: calmbridge-2 (fallback), lokácia: us-central1 (fallback). Env vars: GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION.
+
+
+3. IDENTIFIKÁCIA PROBLÉMOV
+
+P1 (HLAVNÝ): Starý import — nová pipeline sa nevolá
+
+• audiobookWorker.ts:31 a index.ts:69 importujú zo starého soundscapeIntegration.ts
+
+• Nový soundscapeCompat.ts existuje len na feature/soundscape-refactor
+
+• Dôsledok: Celý nový soundscape systém je mŕtvy kód
+
+P2: `getSoundscapeThemeOptions()` — starý export
+
+• index.ts importuje getSoundscapeThemeOptions zo starého modulu
+
+• Treba overiť, či nový soundscapeCompat.ts túto funkciu exportuje, a ak nie — pridať stub
+
+P3: Embedding indexy — prvé spustenie
+
+• Pri prvom behu sa musia vybudovať 3 JSON indexy (Vertex AI embedding API)
+
+• Trvá ~2–10 min podľa veľkosti katalógu a API rate limits
+
+• Potom sa cachujú na disk a ďalšie spustenia sú instantné
+
+P4: CSV katalóg vs. JSON katalóg
+
+• Starý systém: catalog.json (JSON, relatívne cesty)
+
+• Nový systém: voicelibri_assets_catalog.csv (CSV, ASSETS_ROOT-relatívne cesty)
+
+• Treba overiť, že CSV katalóg existuje a má správne stĺpce: FileID, Description, FilePath, Type, Keywords, Duration, Category, SubCategory
+
+P5: Feature toggle
+
+• config.ts:43-46 — isSoundscapeEnabled() čte SOUNDSCAPE_ENABLED alebo SOUNDSCAPE_AMBIENT_ENABLED env var
+
+• Musí byť = '1' alebo = 'true' aby soundscape fungoval
+
+• Bez tohto env var je celý soundscape vypnutý
+
+P6: Fallback logika je správna
+
+• buildFallbackScene() v llmDirector.ts:290-350 — keyword matching ako safety net keď Gemini zlyhá
+
+• resolveByKeyword() v assetResolver.ts:251-283 — keyword overlap keď embedding nie je dostupný
+
+• Oba fallbacky sú správne a nemajú sa odstraňovať
+
+
+4. AKČNÝ PLÁN — IMPLEMENTÁCIA PO KROKOCH
+
+Krok 0: Predpríprava — analýza diff medzi vetvami
+
+Cieľ: Pochopiť presný stav feature/soundscape-refactor vs. main.
+
+# Pozri diff medzi main a feature branch
+git fetch origin
+git diff main..origin/feature/soundscape-refactor --stat
+
+Overenie: Skontrolovať, či soundscapeCompat.ts exportuje všetky 3 funkcie, ktoré index.ts importuje:
+
+• applySoundscapeToChapter
+
+• resolveChapterAudioPath
+
+• getSoundscapeThemeOptions
+
+Test: Len vizuálna kontrola, žiadny runtime.
+
+
+Krok 1: Merge `feature/soundscape-refactor` → `main`
+
+Cieľ: Dostať nový kód na main.
+
+git checkout main
+git merge origin/feature/soundscape-refactor
+
+Riziko: Merge konflikty v soundscapeIntegration.ts (oba ho upravovali). Riešenie:
+
+• Starý soundscapeIntegration.ts zachovať (zatiaľ sa stále importuje)
+
+• Nový soundscapeCompat.ts pribudne vedľa neho
+
+• Nové soundscape/src/* moduly pribudnú
+
+Test po merge: npx tsc --noEmit — TypeScript kompilácia bez chýb.
+
+
+Krok 2: Prepojiť importy — `soundscapeIntegration` → `soundscapeCompat`
+
+Cieľ: Prepnúť oba importujúce súbory na nový bridge.
+
+Zmena v audiobookWorker.ts:
+
+- import { applySoundscapeToChapter } from './soundscapeIntegration.js';
++ import { applySoundscapeToChapter } from './soundscapeCompat.js';
+
+Zmena v index.ts:
+
+- import { resolveChapterAudioPath, getSoundscapeThemeOptions, applySoundscapeToChapter } from './soundscapeIntegration.js';
++ import { resolveChapterAudioPath, getSoundscapeThemeOptions, applySoundscapeToChapter } from './soundscapeCompat.js';
+
+Ak getSoundscapeThemeOptions neexistuje v soundscapeCompat.ts, pridať stub:
+
+export function getSoundscapeThemeOptions(): Array<{ id: string; label: string }> {
+  return [{ id: 'auto', label: 'Automatic' }];
+}
+
+Krok 3: Overiť env vars a CSV katalóg
+
+Cieľ: Zaručiť, že runtime podmienky sú splnené.
+
+Skontrolovať .env (alebo Cloud Run env):
+
+# POVINNÉ pre soundscape:
+SOUNDSCAPE_ENABLED=true         # alebo SOUNDSCAPE_AMBIENT_ENABLED=true
+GOOGLE_CLOUD_PROJECT=calmbridge-2
+GOOGLE_CLOUD_LOCATION=us-central1
+
+# Voliteľné (fallback existuje v config.ts):
+# Ak nie sú nastavené, použijú sa defaulty z config.ts
+
+Overiť CSV katalóg:
+
+# Musí existovať:
+ls soundscape/assets/voicelibri_assets_catalog.csv
+
+# Overiť header (prvý riadok):
+head -1 soundscape/assets/voicelibri_assets_catalog.csv
+# Očakávaný: FileID,Filename,Description,Keywords,Duration,Type,Category,SubCategory,...,FilePath
+
+Test: Len vizuálna kontrola.
+
+
+Krok 4: Smoke test — build + spustenie servera
+
+Cieľ: Overiť, že server štartuje bez chýb.
+
+cd apps/backend
+npx tsc --noEmit        # TypeScript kompilácia
+npm run build           # Plný build
+npm start               # Spustiť server
+
+Čo sledovať v logoch:
+
+• 📋 Loaded N assets from catalog (X ambient, Y SFX, Z music) — katalóg sa načítal
+
+• 🔊 Building ambient embedding index (first run)... — prvé spustenie, buduje embeddingy
+
+• Žiadne Error ani FATAL
+
+Test: Server štartuje, API /api/health vracia 200.
+
+
+Krok 5: Smoke test — generácia jednej kapitoly
+
+Cieľ: Overiť celý pipeline end-to-end.
+
+1. Nahrať krátku knihu (1-2 kapitoly)
+
+2. Spustiť generáciu s SOUNDSCAPE_ENABLED=true
+
+3. Sledovať logy:
+
+🎬 Analyzing scene for chapter 1...        ← LLM Director (Gemini 2.5 Flash)
+  ✓ forest | night | rain | intensity=0.7  ← Scénická analýza OK
+🔍 Resolving ambient for chapter 1         ← Asset Resolver
+  ✓ Matched: "rain in dark forest" (score=0.847) ← Embedding match
+🎯 Subchunk ambient+2×SFX: 45.23s | -6dB  ← FFmpeg rendering
+✓ Chapter ambient (3 subchunks) ready      ← Concat hotový
+
+Ak sa objaví: 🔊 Building ambient embedding index (first run — this takes a while)...
+
+• To je normálne pri prvom spustení. Počkať ~2-10 min.
+
+• Po dokončení sa objaví: 💾 Embedding index saved: .../ambient_embeddings.json
+
+
+Krok 6: Vyčistiť starý kód (VOLITEĽNÉ, gate)
+
+Až po úspešnom smoke teste z Kroku 5!
+
+• Premenovať starý soundscapeIntegration.ts → soundscapeIntegration.legacy.ts
+
+• Alebo odstrániť (ak nik iný neimportuje)
+
+• Skontrolovať, že žiadny iný súbor neimportuje zo soundscapeIntegration.js
+
+grep -rn "soundscapeIntegration" apps/backend/src/ --include="*.ts" | grep -v ".legacy"
+
+5. KONFIGURAČNÉ KONŠTANTY (config.ts)
+
+KonštantaHodnotaÚčelEMBEDDING_MODELgemini-embedding-001Embedding modelEMBEDDING_DIMENSIONS768Dimenzie vektora (z 3072 max)EMBEDDING_BATCH_SIZE1Texty na API call (model limit)EMBEDDING_CONCURRENCY5Paralelné embedding requestySCENE_ANALYSIS_MODELgemini-2.5-flashLLM pre scénickú analýzuAMBIENT_DEFAULT_DB-6Hlasitosť ambientu pod naráciouAMBIENT_FADE_MS2000Fade in/out pre ambientAMBIENT_PRE_ROLL_MS4000Ambient pred naráciouAMBIENT_POST_ROLL_MS4000Ambient po naráciiAUDIO_SAMPLE_RATE48000Vzorkovacia frekvenciaAUDIO_CODEClibopusAudio kodek
+
+6. TYPY — KĽÚČOVÉ ROZHRANIA (types.ts)
+
+// Zvukový asset z katalógu
+interface SoundAsset {
+  id: string;                    // "ambient/fileId" | "sfx/fileId" | "music/fileId"
+  type: 'ambient' | 'sfx' | 'music';
+  filePath: string;              // Absolútna cesta k .ogg
+  description: string;           // Popis pre embedding
+  keywords: string[];            // Kľúčové slová
+  durationSec?: number;          // Dĺžka v sekundách
+  loudnessLUFS?: number;         // Pre normalizáciu hlasitosti
+}
+
+// Výstup LLM režiséra pre 1 kapitolu
+interface SceneAnalysis {
+  chapterIndex: number;
+  sceneSegments: SceneSegment[];  // 1-6 scén (charIndex, environment, searchSnippets, moods)
+  sfxEvents: SfxEvent[];          // SFX eventy (query, charIndex, description)
+  timeOfDay: string;
+  weather: string;
+  moods: string[];
+  soundElements: string[];
+  intensity: number;              // 0.0 - 1.0
+}
+
+// Silence gap z ffprobe
+interface SilenceGap {
+  startSec: number;
+  endSec: number;
+  midpointMs: number;            // Sem sa umiestni SFX
+}
+
+7. SEKVENČNÝ DIAGRAM — RUNTIME
+
+audiobookWorker              soundscapeCompat           llmDirector          assetResolver         subchunkSoundscape     ambientLayer
+     │                            │                         │                     │                       │                    │
+     │ applySoundscapeToChapter() │                         │                     │                       │                    │
+     │ ─────────────────────────→ │                         │                     │                       │                    │
+     │                            │ analyzeChapterScene()   │                     │                       │                    │
+     │                            │ ───────────────────────→│                     │                       │                    │
+     │                            │                         │ callGemini()        │                       │                    │
+     │                            │                         │ (Gemini 2.5 Flash)  │                       │                    │
+     │                            │     SceneAnalysis       │                     │                       │                    │
+     │                            │ ←───────────────────────│                     │                       │                    │
+     │                            │                         │                     │                       │                    │
+     │                            │ resolveSceneSegmentAssets()                   │                       │                    │
+     │                            │ ──────────────────────────────────────────────→│                       │                    │
+     │                            │                         │  cosine similarity  │                       │                    │
+     │                            │      per-segment assets │                     │                       │                    │
+     │                            │ ←──────────────────────────────────────────────│                       │                    │
+     │                            │                         │                     │                       │                    │
+     │                            │ resolveSfxEvents()      │                     │                       │                    │
+     │                            │ ──────────────────────────────────────────────→│                       │                    │
+     │                            │      per-event assets   │                     │                       │                    │
+     │                            │ ←──────────────────────────────────────────────│                       │                    │
+     │                            │                         │                     │                       │                    │
+     │                            │ mapSfxEventsToSubchunks()                     │                       │                    │
+     │                            │ ──────────────────────────────────────────────────────────────────────→│                    │
+     │                            │ buildPlacedSfxEvents()  │                     │                       │                    │
+     │                            │ ←────────────────────────────────────────────────────────────────────── │                    │
+     │                            │                         │                     │                       │                    │
+     │                            │ generateSubchunkAmbientTrack()                │                       │                    │
+     │                            │ ──────────────────────────────────────────────────────────────────────────────────────────→ │
+     │                            │                         │                     │  ffmpeg filter_complex │                    │
+     │                            │      subchunk OGG files │                     │                       │                    │
+     │                            │ ←────────────────────────────────────────────────────────────────────────────────────────── │
+     │                            │                         │                     │                       │                    │
+     │                            │ concatenateSubchunkAmbientTracks()            │                       │                    │
+     │                            │ ──────────────────────────────────────────────────────────────────────────────────────────→ │
+     │   chapter_N_ambient.ogg    │                         │                     │                       │                    │
+     │ ←──────────────────────────│                         │                     │                       │                    │
+
+8. ZOZNAM VŠETKÝCH ZMIEN (pre agenta)
+
+#SúborAkciaDetail1apps/backend/src/audiobookWorker.tsEDIT riadok 31soundscapeIntegration.js → soundscapeCompat.js2apps/backend/src/index.tsEDIT riadok 69soundscapeIntegration.js → soundscapeCompat.js3apps/backend/src/soundscapeCompat.tsVERIFYOveriť, že exportuje: applySoundscapeToChapter, resolveChapterAudioPath, getSoundscapeThemeOptions4apps/backend/src/soundscapeCompat.tsEDIT ak trebaPridať stub getSoundscapeThemeOptions() ak chýba5.env / Cloud Run envSETSOUNDSCAPE_ENABLED=true6soundscape/assets/voicelibri_assets_catalog.csvVERIFYExistuje, má správne stĺpce7apps/backend/src/soundscapeIntegration.tsKEEP (zatiaľ)Nemazať kým smoke test neprejdeCelkový rozsah zmeny: 2 riadky importov + max 1 stub funkcia.
+
+
+9. RIZIKOVÉ BODY A MITIGÁCIA
+
+RizikoPravdepodobnosťMitigáciaMerge konfliktyStrednáStarý súbor zachovať, len pridať novýGemini API rate limit pri build embeddingIstá (prvý beh)EMBEDDING_CONCURRENCY=5 + 50ms delay je nastavenýCSV katalóg chýba alebo má zlý formátNízkacatalogLoader.ts loguje warning a vráti []Gemini API zlyhanie pri scénickej analýzeNízkabuildFallbackScene() sa automaticky aktivujegetSoundscapeThemeOptions chýba v novom moduleStrednáStub funkcia (5 riadkov)FFmpeg chýba na serveriNízkaExistujúci systém už FFmpeg používa
+
+10. VERIFIKAČNÁ CHECKLIST
+
+Po implementácii krokov 1-5 skontrolovať:
+
+• npx tsc --noEmit — žiadna TypeScript chyba
+
+• Server štartuje bez errors
+
+• Log obsahuje 📋 Loaded N assets from catalog
+
+• Pri prvom behu: 🔊 Building ambient embedding index... → 💾 Embedding index saved
+
+• Pri generácii kapitoly: 🎬 Analyzing scene... → ✓ Matched: → ✓ Chapter ambient ready
+
+• Výstupný .ogg súbor obsahuje ambient pod naráciou
+
+• SFX sú počuteľné v pauzách medzi vetami
+
+• Žiadne importy zo soundscapeIntegration.js okrem prípadného legacy fallbacku
+
+
+Toto je kompletný manuál. Dva riadky importov sú celá zmena — všetko ostatné už je implementované, len nepripojené.
+
+
+
