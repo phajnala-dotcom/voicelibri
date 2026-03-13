@@ -27,6 +27,7 @@ import {
 } from './audiobookManager.js';
 import { Chapter } from './bookChunker.js';
 import { ChunkInfo } from './chapterChunker.js';
+import { applySoundscapeToChapter } from './soundscapeCompat.js';
 
 
 // ========================================
@@ -286,6 +287,22 @@ class AudiobookGenerationWorker extends EventEmitter {
         consolidatedCount++;
         this.updateProgress(bookTitle, { chaptersConsolidated: consolidatedCount });
         console.log(`  ✓ Chapter ${chapterIndex} consolidated (${consolidatedCount}/${chapterChunks.size})`);
+
+        // Generate soundscape ambient track for this chapter
+        try {
+          const chapterText = chapterTextMap.get(chapterIndex) ?? '';
+          await applySoundscapeToChapter({
+            bookTitle,
+            chapterIndex,
+            chapterPath,
+            chapterText,
+            // subChunks not available in worker path — soundscapeCompat handles this
+            // by falling back to chapter-level ambient (no per-subchunk SFX timing)
+          });
+        } catch (scErr) {
+          console.error(`  ⚠️ Soundscape failed for chapter ${chapterIndex}:`, scErr instanceof Error ? scErr.message : scErr);
+          // Non-fatal — voice audio is still usable without soundscape
+        }
       } catch (error) {
         console.error(`✗ Failed to consolidate chapter ${chapterIndex}:`, error);
         // Log error but continue with other chapters

@@ -252,6 +252,7 @@ export function resolveByKeyword(
   searchSnippets: string[],
   catalog: SoundAsset[]
 ): SoundAsset | null {
+  console.warn(`⚠️ resolveByKeyword() activated — embedding resolution failed, falling back to keyword matching. Snippets: ${JSON.stringify(searchSnippets).substring(0, 200)}`);
   // Collect all words from all snippets
   const queryWords = new Set(
     searchSnippets.flatMap((s) => s.toLowerCase().split(/\s+/))

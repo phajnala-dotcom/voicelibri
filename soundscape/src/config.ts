@@ -58,7 +58,7 @@ export const AUDIO_CODEC = 'libopus';
 // ========================================
 
 /** dB level for ambient loop under narration */
-export const AMBIENT_DEFAULT_DB = -6;
+export const AMBIENT_DEFAULT_DB = -3;
 
 /** Fade durations for ambient entry/exit (ms) */
 export const AMBIENT_FADE_MS = 2000;

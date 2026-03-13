@@ -24,22 +24,33 @@
 
 import fs from 'fs';
 import path from 'path';
-import { isSoundscapeEnabled, INTRO_NARRATOR_VOICE } from '../../../soundscape/src/config.js';
-import { loadCatalog } from '../../../soundscape/src/catalogLoader.js';
-import { initIntroGenerator, generateIntro, buildBookIntroSpec, buildChapterIntroSpec } from '../../../soundscape/src/introGenerator.js';
-import { generateSubchunkAmbientTrack, concatenateSubchunkAmbientTracks } from '../../../soundscape/src/ambientLayer.js';
-import { selectMusicTrack } from '../../../soundscape/src/musicSelector.js';
-import { resolveByKeyword, resolveAmbientAsset, resolveSfxEvents, resolveSceneSegmentAssets } from '../../../soundscape/src/assetResolver.js';
-import { analyzeChapterScene, buildFallbackScene } from '../../../soundscape/src/llmDirector.js';
-import { getAudioDuration, detectSilenceGaps, runFfmpeg } from '../../../soundscape/src/ffmpegRunner.js';
 import {
+  isSoundscapeEnabled,
+  INTRO_NARRATOR_VOICE,
+  loadCatalog,
+  initIntroGenerator,
+  generateIntro,
+  buildBookIntroSpec,
+  buildChapterIntroSpec,
+  generateSubchunkAmbientTrack,
+  concatenateSubchunkAmbientTracks,
+  selectMusicTrack,
+  resolveByKeyword,
+  resolveAmbientAsset,
+  resolveSfxEvents,
+  resolveSceneSegmentAssets,
+  analyzeChapterScene,
+  buildFallbackScene,
+  getAudioDuration,
+  detectSilenceGaps,
+  runFfmpeg,
   buildSubchunkSegmentInfos,
   mapSfxEventsToSubchunks,
   groupMappedEventsBySubchunk,
   buildPlacedSfxEvents,
   calculateSfxOffsetFromGaps,
-} from '../../../soundscape/src/subchunkSoundscape.js';
-import type { SoundscapePreferences, BookInfo, SceneAnalysis, SceneSegment, SoundAsset } from '../../../soundscape/src/types.js';
+} from '../../../soundscape/src/index.js';
+import type { SoundscapePreferences, BookInfo, SceneAnalysis, SceneSegment, SoundAsset } from '../../../soundscape/src/index.js';
 
 import { synthesizeText } from './ttsClient.js';
 import { loadAudiobookMetadata, getSubChunkPath } from './audiobookManager.js';
@@ -215,8 +226,8 @@ export async function generateAmbientBed(options: {
 
   const estimatedDurationMs = options.chapterText.length * 150;
 
-  // Q3: intensity-adjusted volume (base -3 dB for audible ambient, adjusted by scene intensity)
-  const volumeDb = -3 - (1 - options.scene.intensity) * 3;
+  // Q3: intensity-adjusted volume (base 0 dB for audible ambient, adjusted by scene intensity)
+  const volumeDb = 0 - (1 - options.scene.intensity) * 3;
 
   // Build ambient segments from scene segments + resolved assets
   // Q1: skip pushing a segment if its asset.filePath equals the previous segment's
@@ -480,7 +491,7 @@ export async function applySoundscapeToChapter(options: {
           // Per-subchunk ambient + SFX pipeline
           await generateChapterSoundscapeFromSubchunks({
             scene,
-            ambientVolumeDb: -3,
+            ambientVolumeDb: 0,
             chapterPath: options.chapterPath,
             ambientPath,
             bookTitle: options.bookTitle,
@@ -531,6 +542,32 @@ export async function applySoundscapeToChapter(options: {
       } catch (error) {
         console.warn('⚠️ Intro generation failed:', error);
       }
+    }
+  }
+
+  // ── Temporary: mix voice + ambient into single file for timing verification ──
+  const finalAmbientPath = getAmbientTrackPath(options.chapterPath);
+  if (fs.existsSync(finalAmbientPath) && fs.existsSync(options.chapterPath)) {
+    const mixedPath = options.chapterPath.replace(/\.ogg$/i, '_mixed.ogg');
+    try {
+      console.log(`  🔀 Mixing voice + ambient → ${path.basename(mixedPath)} (TEMP for timing check)`);
+      const mixResult = await runFfmpeg([
+        '-i', options.chapterPath,
+        '-i', finalAmbientPath,
+        '-filter_complex',
+        '[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=2',
+        '-ar', '48000',
+        '-ac', '2',
+        '-c:a', 'libopus',
+        mixedPath,
+      ]);
+      if (mixResult.code === 0) {
+        console.log(`  ✅ Mixed file: ${path.basename(mixedPath)}`);
+      } else {
+        console.warn(`  ⚠️ Mix failed: ${mixResult.stderr.substring(0, 200)}`);
+      }
+    } catch (mixErr) {
+      console.warn(`  ⚠️ Mix error:`, mixErr instanceof Error ? mixErr.message : mixErr);
     }
   }
 

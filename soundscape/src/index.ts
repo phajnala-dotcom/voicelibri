@@ -14,8 +14,8 @@
  *   assetResolver.ts   → Embedding search for ambient asset matching
  *   introGenerator.ts  → Music bed + voice overlay intros
  *   ambientLayer.ts    → Per-chapter ambient WAV generation
- *   audioMixer.ts      → Final merge: voice + ambient + intro
  */
+
 
 // Types
 export type {
@@ -138,7 +138,3 @@ export type {
   PlacedSfxEvent,
 } from './subchunkSoundscape.js';
 
-// Audio mixer
-export {
-  prependIntro,
-} from './audioMixer.js';

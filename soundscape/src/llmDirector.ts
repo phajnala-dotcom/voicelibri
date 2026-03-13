@@ -292,6 +292,7 @@ export function buildFallbackScene(
   chapterText: string,
   bookInfo: BookInfo
 ): SceneAnalysis {
+  console.warn(`⚠️ buildFallbackScene() activated for chapter ${chapterIndex} — LLM scene analysis failed, using keyword-based fallback`);
   const lower = chapterText.toLowerCase();
   const soundElements: string[] = [];
   let environment = 'interior';
