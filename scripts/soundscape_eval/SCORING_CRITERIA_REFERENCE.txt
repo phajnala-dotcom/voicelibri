@@ -1,0 +1,107 @@
+VoiceLibri Soundscape Evaluation — Scoring Criteria Reference v2
+=================================================================
+
+7 criteria, weights sum to 100. Each criterion scores 0–100.
+
+┌───┬─────────────────────┬────────┬──────────────────────────────────────────────┐
+│ # │ Criterion           │ Weight │ What it measures                             │
+├───┼─────────────────────┼────────┼──────────────────────────────────────────────┤
+│ 1 │ ambientOccurrence   │   15   │ Ambient environments resolved vs expected    │
+│ 2 │ sfxOccurrence       │   15   │ SFX events resolved vs expected              │
+│ 3 │ ambientSimilarity   │   15   │ Avg cosine similarity of ambient assets      │
+│ 4 │ sfxSimilarity       │   15   │ Avg cosine similarity of SFX assets          │
+│ 5 │ ambientCoverage     │   15   │ Temporal: ambient duration / voice duration   │
+│ 6 │ ambientVolume       │   15   │ LUFS offset from voice (EBU R128)            │
+│ 7 │ sfxAudibility       │   10   │ SFX loudness contrast above ambient bed      │
+└───┴─────────────────────┴────────┴──────────────────────────────────────────────┘
+
+Data Sources
+─────────────
+Criteria 1-4:  soundscape_resolution_chapter_N.json  (pipeline output)
+Criteria 5-6:  Audio files analyzed with FFmpeg (duration, LUFS via ebur128)
+Criterion 7:   Volume spike detection in ambient track (FFmpeg astats)
+
+Detailed Criterion Definitions
+───────────────────────────────
+
+1. ambientOccurrence (weight=15)
+   Formula:  min(1.0, resolved_ambient_count / expected_ambient_count) × 100
+   Source:   Resolution JSON → ambientResolutions where resolvedAsset != null
+   Template: expectedAmbientCount per chapter
+   Score 100 = all expected environments got an asset
+   Score 0   = no resolution data or zero resolved
+
+2. sfxOccurrence (weight=15)
+   Formula:  min(1.0, resolved_sfx_count / expected_sfx_count) × 100
+   Source:   Resolution JSON → sfxResolutions where resolvedAsset != null
+   Template: expectedSfxCount per chapter
+   Score 100 = all expected SFX got an asset
+   Score 0   = no resolution data or zero resolved
+
+3. ambientSimilarity (weight=15)
+   Formula:  avg(cosine_similarity_scores) × 100
+   Source:   Resolution JSON → ambientResolutions[].cosineSimilarity
+   Only includes resolved assets (those with non-null asset).
+   Cosine similarity is computed by the pipeline during embedding-based
+   asset resolution (not re-computed by eval tool).
+   Score 100 = perfect semantic match (cosine sim = 1.0)
+   Score 0   = no data or terrible matches
+
+4. sfxSimilarity (weight=15)
+   Formula:  avg(cosine_similarity_scores) × 100
+   Source:   Resolution JSON → sfxResolutions[].cosineSimilarity
+   Same approach as ambientSimilarity but for SFX events.
+
+5. ambientCoverage (weight=15)
+   Formula:  min(1.0, ambient_duration / voice_duration) × 100
+   Source:   FFprobe duration of voice and ambient audio files
+   Purely temporal — no volume component.
+   Score 100 = ambient covers entire voice duration (or longer)
+   Score 0   = no ambient file exists
+
+6. ambientVolume (weight=15)
+   Target:   ambient LUFS = voice LUFS + ambientOffsetFromVoice (-15 default)
+   Tolerance: ±toleranceLufs (3 default)
+   Formula:
+     deviation = |actual_offset - target_offset|
+     if deviation ≤ tolerance:           score = 100
+     if deviation ≤ tolerance × 2:       score = 100 → 50 (linear)
+     if deviation ≤ tolerance × 4:       score = 50 → 0  (linear)
+     else:                               score = 0
+   Source:   FFmpeg ebur128 filter → integrated LUFS for voice and ambient
+   Score 100 = ambient is exactly voice−15 LUFS (±3)
+   Score 0   = offset deviation > 12 LUFS or measurement failed
+
+7. sfxAudibility (weight=10)
+   Measures whether SFX events are perceptibly louder than the ambient bed.
+   Uses volume spike detection (6dB+ jumps above ambient mean).
+   Formula:
+     spike_contrast = avg_spike_rms - ambient_mean_volume
+     if contrast ≥ 6dB:    score = 100
+     if contrast ≥ 3dB:    score = 50-100 (linear)
+     if contrast > 0dB:    score = 0-50 (linear)
+     else:                 score = 0
+   Source:   FFmpeg astats for spike detection, volumedetect for ambient mean
+   Score 100 = SFX clearly stand out above ambient
+   Score 0   = no spikes or SFX buried in ambient
+
+LUFS Targets (from template)
+─────────────────────────────
+  ambientOffsetFromVoice:  -15 LUFS  (ambient should be 15 LUFS quieter than voice)
+  sfxOffsetFromVoice:      -8  LUFS  (SFX should be 8 LUFS quieter than voice)
+  toleranceLufs:            3  LUFS  (acceptable deviation range)
+
+Grade Scale
+────────────
+  A: 90-100    B: 80-89    C: 70-79    D: 60-69    E: 40-59    F: 0-39
+
+File Structure
+───────────────
+  ideal_template.json                  — Human-curated ground truth
+  evaluate.py                          — Evaluation tool (this scoring engine)
+  tracking.csv                         — Cumulative gate-by-gate results
+  SCORING_CRITERIA_REFERENCE.txt       — This file
+  <audiobook_dir>/
+    soundscape_resolution_chapter_N.json  — Pipeline resolution results
+    scene_analysis_chapter_N.json         — LLM scene analysis
+    soundscape_eval_report.json           — Evaluation output

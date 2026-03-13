@@ -1,2 +1,0 @@
-timestamp,audiobook_dir,gate,attempt,total_score,grade,ch1_score,ch1_grade,ch2_score,ch2_grade,avg_sceneSegmentCount,avg_sceneEnvAccuracy,avg_ambientSegmentCoverage,avg_ambientVolume,avg_sfxEventCount,avg_sfxEventPlacement,avg_sfxMatchAccuracy,avg_sfxAudibility,avg_sceneTransitions,avg_overallRealization,notes
-2026-03-13T16:44:48.931826,soundscape_test_story_Gate 0.1,0,1,2.5,F,2.0,F,3.0,F,20.8,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,4.2,Baseline - redesigned eval criteria

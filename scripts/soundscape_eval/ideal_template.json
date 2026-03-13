@@ -1,7 +1,7 @@
 {
   "testStory": "soundscape_test_story.txt",
   "title": "The Shadow of Thornwood Castle",
-  "description": "Purpose-built test text for systematic soundscape evaluation. 2 chapters, ~690 words, ~5 min TTS. Exercises 7 scene transitions, ~20 SFX events, 6 environments, 3 weather states, intensity arc.",
+  "description": "Purpose-built test text for systematic soundscape evaluation. 2 chapters, ~690 words, ~5 min TTS. 4+3 environments, ~21 SFX events, 3 weather states, intensity arc.",
   "chapters": [
     {
       "chapterIndex": 1,
@@ -9,17 +9,10 @@
       "expectedSceneSegments": [
         {
           "environment": "forest",
-          "description": "Dense forest with birdsong, morning sun, walking on leaves",
+          "description": "Dense forest with birdsong, morning sun, walking on leaves. Stream is a salient entity within this environment (long-duration SFX, not separate scene).",
           "acceptableEnvironments": ["forest", "dense forest", "woodland", "ancient forest", "forest path"],
           "expectedSounds": ["birdsong", "leaves crunching", "wind in trees"],
           "startRegion": "beginning"
-        },
-        {
-          "environment": "stream/river",
-          "description": "Rushing stream, water over rocks, frog",
-          "acceptableEnvironments": ["stream", "river", "creek", "stream bank", "forest stream", "rushing stream"],
-          "expectedSounds": ["water flowing", "stream", "frog"],
-          "startRegion": "early-mid"
         },
         {
           "environment": "open meadow",
@@ -46,6 +39,7 @@
       "expectedSfxEvents": [
         {"description": "twig snapping", "query": "twig snap branch breaking", "region": "early"},
         {"description": "woodpecker pecking", "query": "woodpecker hammering pecking tree", "region": "early"},
+        {"description": "rushing stream / water flowing", "query": "rushing stream water flowing over rocks creek", "region": "early-mid"},
         {"description": "frog croaking/jumping", "query": "frog croak splash water plop", "region": "early-mid"},
         {"description": "sheep bleating", "query": "sheep bleating distant farm", "region": "mid"},
         {"description": "thunder rumble", "query": "thunder rumble distant low growl", "region": "mid"},
@@ -61,10 +55,8 @@
         "intensityRange": [0.5, 0.9],
         "expectedMoods": ["mysterious", "ominous", "tense"]
       },
-      "minSceneSegments": 3,
-      "idealSceneSegments": 5,
-      "minSfxEvents": 5,
-      "idealSfxEvents": 10
+      "expectedAmbientCount": 4,
+      "expectedSfxCount": 11
     },
     {
       "chapterIndex": 2,
@@ -111,36 +103,33 @@
         "intensityRange": [0.4, 0.8],
         "expectedMoods": ["eerie", "dark", "mysterious", "gothic"]
       },
-      "minSceneSegments": 2,
-      "idealSceneSegments": 3,
-      "minSfxEvents": 5,
-      "idealSfxEvents": 11
+      "expectedAmbientCount": 3,
+      "expectedSfxCount": 11
     }
   ],
   "scoring": {
     "weights": {
-      "sceneSegmentCount": 10,
-      "sceneEnvironmentAccuracy": 15,
-      "ambientSegmentCoverage": 10,
-      "ambientVolume": 10,
-      "sfxEventCount": 10,
-      "sfxEventPlacement": 10,
-      "sfxMatchAccuracy": 10,
-      "sfxAudibility": 10,
-      "sceneTransitions": 5,
-      "overallRealization": 10
+      "ambientOccurrence": 15,
+      "sfxOccurrence": 15,
+      "ambientSimilarity": 15,
+      "sfxSimilarity": 15,
+      "ambientCoverage": 15,
+      "ambientVolume": 15,
+      "sfxAudibility": 10
     },
     "description": {
-      "sceneSegmentCount": "Were the right number of scene segments detected? (min/ideal comparison)",
-      "sceneEnvironmentAccuracy": "Per-scene: does selected ambient match the expected environment?",
-      "ambientSegmentCoverage": "What % of chapter duration has audible ambient coverage (volume-gated)?",
-      "ambientVolume": "Is ambient volume in useful range (-30 to -10dB) relative to voice?",
-      "sfxEventCount": "Were enough SFX events generated vs template expectation?",
-      "sfxEventPlacement": "Are SFX events in roughly the right temporal positions?",
-      "sfxMatchAccuracy": "Do resolved SFX match the expected sound descriptions?",
-      "sfxAudibility": "Can SFX events be distinguished from the ambient bed? (volume spikes)",
-      "sceneTransitions": "Are there audible transitions between scenes? (0 if expected scenes missing)",
-      "overallRealization": "Strict holistic score: average of key soundscape quality indicators"
+      "ambientOccurrence": "How many ambient environments were resolved (with assets) vs expected count?",
+      "sfxOccurrence": "How many SFX events were resolved (with assets) vs expected count?",
+      "ambientSimilarity": "Average cosine similarity of resolved ambient assets (from pipeline resolution)",
+      "sfxSimilarity": "Average cosine similarity of resolved SFX assets (from pipeline resolution)",
+      "ambientCoverage": "Purely temporal: what fraction of chapter voice duration is covered by ambient audio?",
+      "ambientVolume": "Is ambient LUFS in target range relative to voice? (EBU R128)",
+      "sfxAudibility": "Are SFX events perceptibly louder than ambient bed? (LUFS contrast)"
+    },
+    "lufsTargets": {
+      "ambientOffsetFromVoice": -15,
+      "sfxOffsetFromVoice": -8,
+      "toleranceLufs": 3
     }
   }
 }

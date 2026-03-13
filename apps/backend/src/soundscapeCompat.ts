@@ -504,6 +504,7 @@ export async function applySoundscapeToChapter(options: {
             chapterPath: options.chapterPath,
             ambientPath,
             bookTitle: options.bookTitle,
+            bookDir,
             chapterIndex: options.chapterIndex,
             subChunks: options.subChunks,
             chapterText: options.chapterText,
@@ -607,13 +608,14 @@ async function generateChapterSoundscapeFromSubchunks(options: {
   chapterPath: string;
   ambientPath: string;
   bookTitle: string;
+  bookDir: string;
   chapterIndex: number;
   subChunks: TwoSpeakerChunk[];
   chapterText: string;
 }): Promise<void> {
   const {
     scene, ambientVolumeDb,
-    chapterPath, ambientPath, bookTitle, chapterIndex, subChunks, chapterText,
+    chapterPath, ambientPath, bookTitle, bookDir, chapterIndex, subChunks, chapterText,
   } = options;
 
   console.log(`  🎯 Per-subchunk soundscape: ${subChunks.length} subchunks, ${scene.sceneSegments.length} scene segment(s), ${scene.sfxEvents.length} SFX events`);
@@ -659,6 +661,43 @@ async function generateChapterSoundscapeFromSubchunks(options: {
     } catch (sfxErr) {
       console.log(`  🎯 SFX: Resolution failed (non-critical): ${sfxErr instanceof Error ? sfxErr.message : sfxErr}`);
     }
+  }
+
+  // Save resolution results for evaluation tool
+  try {
+    const resolutionData = {
+      chapterIndex,
+      timestamp: new Date().toISOString(),
+      ambientResolutions: segmentAssets.map((r) => ({
+        environment: r.segment.environment,
+        searchSnippets: r.segment.searchSnippets,
+        resolvedAsset: r.asset ? {
+          id: r.asset.id,
+          description: r.asset.description,
+          filePath: r.asset.filePath,
+        } : null,
+        cosineSimilarity: r.score,
+      })),
+      sfxResolutions: scene.sfxEvents.map((evt) => {
+        const resolved = sfxAssetMap.get(evt.query);
+        return {
+          query: evt.query,
+          description: evt.description,
+          charIndex: evt.charIndex,
+          resolvedAsset: resolved ? {
+            id: resolved.asset.id,
+            description: resolved.asset.description,
+            filePath: resolved.asset.filePath,
+          } : null,
+          cosineSimilarity: resolved?.score ?? 0,
+        };
+      }),
+    };
+    const resJsonPath = path.join(bookDir, `soundscape_resolution_chapter_${chapterIndex}.json`);
+    fs.writeFileSync(resJsonPath, JSON.stringify(resolutionData, null, 2), 'utf-8');
+    console.log(`  📋 Resolution results saved: ${path.basename(resJsonPath)}`);
+  } catch (resErr) {
+    console.warn(`  ⚠️ Failed to save resolution JSON:`, resErr instanceof Error ? resErr.message : resErr);
   }
 
   // Pre-fetch SFX asset durations (for no-boundary-crossing constraint)
