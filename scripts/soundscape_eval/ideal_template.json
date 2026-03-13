@@ -121,26 +121,26 @@
     "weights": {
       "sceneSegmentCount": 10,
       "sceneEnvironmentAccuracy": 15,
+      "ambientSegmentCoverage": 10,
+      "ambientVolume": 10,
       "sfxEventCount": 10,
       "sfxEventPlacement": 10,
-      "ambientPresence": 10,
-      "ambientDuration": 5,
-      "ambientVolumeRange": 5,
+      "sfxMatchAccuracy": 10,
       "sfxAudibility": 10,
-      "sceneTransitions": 10,
-      "overallCoverage": 15
+      "sceneTransitions": 5,
+      "overallRealization": 10
     },
     "description": {
       "sceneSegmentCount": "Were the right number of scene segments detected? (min/ideal comparison)",
-      "sceneEnvironmentAccuracy": "Do the detected environments match the expected ones?",
-      "sfxEventCount": "Were enough SFX events detected and placed?",
+      "sceneEnvironmentAccuracy": "Per-scene: does selected ambient match the expected environment?",
+      "ambientSegmentCoverage": "What % of chapter duration has audible ambient coverage (volume-gated)?",
+      "ambientVolume": "Is ambient volume in useful range (-30 to -10dB) relative to voice?",
+      "sfxEventCount": "Were enough SFX events generated vs template expectation?",
       "sfxEventPlacement": "Are SFX events in roughly the right temporal positions?",
-      "ambientPresence": "Does each chapter have an ambient track generated?",
-      "ambientDuration": "Is the ambient track duration close to the voice track duration?",
-      "ambientVolumeRange": "Is the ambient volume in an audible but not overwhelming range?",
+      "sfxMatchAccuracy": "Do resolved SFX match the expected sound descriptions?",
       "sfxAudibility": "Can SFX events be distinguished from the ambient bed? (volume spikes)",
-      "sceneTransitions": "Are there audible transitions between different ambient environments?",
-      "overallCoverage": "What percentage of the story's sound-scape potential was realized?"
+      "sceneTransitions": "Are there audible transitions between scenes? (0 if expected scenes missing)",
+      "overallRealization": "Strict holistic score: average of key soundscape quality indicators"
     }
   }
 }

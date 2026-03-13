@@ -76,7 +76,6 @@ class ChapterEval:
     # File presence
     voice_file: Optional[AudioInfo] = None
     ambient_file: Optional[AudioInfo] = None
-    intro_file: Optional[AudioInfo] = None
     subchunk_count: int = 0
     # Scene analysis (from log parsing)
     detected_scenes: int = 0
@@ -430,7 +429,49 @@ def score_chapter(chapter_eval: ChapterEval, template_chapter: dict, weights: di
                             env_score = max(env_score, 50)
     scores["sceneEnvironmentAccuracy"] = env_score
 
-    # 3. SFX Event Count (0-100)
+    # 3. Ambient Segment Coverage (0-100) — What % of chapter has audible ambient?
+    if (chapter_eval.voice_file and chapter_eval.voice_file.exists and
+            chapter_eval.ambient_file and chapter_eval.ambient_file.exists and
+            chapter_eval.voice_file.duration_sec > 0):
+        # Duration factor: ratio of ambient to voice duration (capped at 1.0)
+        duration_ratio = min(1.0, chapter_eval.ambient_voice_duration_ratio)
+        # Volume factor: 0 if inaudible, scales to 1.0 at -30dB
+        mean_vol = chapter_eval.ambient_file.mean_volume_db
+        if mean_vol >= -30:
+            volume_factor = 1.0
+        elif mean_vol > -50:
+            volume_factor = (mean_vol + 50) / 20  # linear: 0 at -50, 1 at -30
+        else:
+            volume_factor = 0
+        scores["ambientSegmentCoverage"] = round(100 * duration_ratio * volume_factor, 1)
+    else:
+        scores["ambientSegmentCoverage"] = 0
+
+    # 4. Ambient Volume (0-100) — Is ambient volume in useful range?
+    # Ideal: -30 to -10 dB mean (audible, not overwhelming vs voice at ~-23dB)
+    if chapter_eval.ambient_file and chapter_eval.ambient_file.exists:
+        mean = chapter_eval.ambient_file.mean_volume_db
+        if -30 <= mean <= -10:
+            scores["ambientVolume"] = 100
+        elif -35 <= mean < -30:
+            scores["ambientVolume"] = round(60 + 40 * (mean + 35) / 5, 1)
+        elif -40 <= mean < -35:
+            scores["ambientVolume"] = round(30 + 30 * (mean + 40) / 5, 1)
+        elif -50 <= mean < -40:
+            scores["ambientVolume"] = round(5 + 25 * (mean + 50) / 10, 1)
+        elif mean < -50:
+            scores["ambientVolume"] = 0
+            chapter_eval.notes.append(f"Ambient nearly silent: mean={mean:.1f}dB")
+        elif -10 < mean <= -5:
+            scores["ambientVolume"] = round(60 + 40 * (-5 - mean) / 5, 1)
+        else:
+            # > -5dB — too loud
+            scores["ambientVolume"] = 30
+            chapter_eval.notes.append(f"Ambient too loud: mean={mean:.1f}dB")
+    else:
+        scores["ambientVolume"] = 0
+
+    # 5. SFX Event Count (0-100) — SFX events generated vs expected
     ideal_sfx = template_chapter["idealSfxEvents"]
     min_sfx = template_chapter["minSfxEvents"]
     actual_sfx = chapter_eval.detected_sfx_matched
@@ -444,8 +485,7 @@ def score_chapter(chapter_eval: ChapterEval, template_chapter: dict, weights: di
     else:
         scores["sfxEventCount"] = 0
 
-    # 4. SFX Event Placement (0-100)
-    # Based on audio spike detection in ambient track
+    # 6. SFX Event Placement (0-100) — Temporal positions match expected regions
     if chapter_eval.ambient_file and chapter_eval.ambient_file.exists:
         if chapter_eval.sfx_spike_count >= min_sfx:
             scores["sfxEventPlacement"] = min(100, 50 + 50 * chapter_eval.sfx_spike_count / max(ideal_sfx, 1))
@@ -456,50 +496,15 @@ def score_chapter(chapter_eval: ChapterEval, template_chapter: dict, weights: di
     else:
         scores["sfxEventPlacement"] = 0
 
-    # 5. Ambient Presence (0-100)
-    if chapter_eval.ambient_file and chapter_eval.ambient_file.exists:
-        if chapter_eval.ambient_file.duration_sec > 5:
-            scores["ambientPresence"] = 100
-        elif chapter_eval.ambient_file.duration_sec > 0:
-            scores["ambientPresence"] = 50
+    # 7. SFX Match Accuracy (0-100) — Do resolved SFX match what was expected?
+    if chapter_eval.detected_sfx_matched > 0:
+        if chapter_eval.detected_sfx_planned > 0:
+            match_ratio = chapter_eval.detected_sfx_matched / chapter_eval.detected_sfx_planned
+            scores["sfxMatchAccuracy"] = round(100 * match_ratio, 1)
         else:
-            scores["ambientPresence"] = 0
+            scores["sfxMatchAccuracy"] = 50  # Matched but no plan data
     else:
-        scores["ambientPresence"] = 0
-
-    # 6. Ambient Duration Match (0-100)
-    if chapter_eval.voice_file and chapter_eval.voice_file.exists and \
-       chapter_eval.ambient_file and chapter_eval.ambient_file.exists:
-        ratio = chapter_eval.ambient_voice_duration_ratio
-        # Perfect = 1.0 (ambient matches voice duration)
-        # Good = 0.9-1.1 (within 10%)
-        if 0.9 <= ratio <= 1.1:
-            scores["ambientDuration"] = 100
-        elif 0.7 <= ratio <= 1.3:
-            scores["ambientDuration"] = 60
-        elif ratio > 0:
-            scores["ambientDuration"] = 30
-        else:
-            scores["ambientDuration"] = 0
-    else:
-        scores["ambientDuration"] = 0
-
-    # 7. Ambient Volume Range (0-100)
-    if chapter_eval.ambient_file and chapter_eval.ambient_file.exists:
-        mean = chapter_eval.ambient_file.mean_volume_db
-        # Good range: -30 to -10 dB mean (audible but not overwhelming)
-        if -30 <= mean <= -10:
-            scores["ambientVolumeRange"] = 100
-        elif -40 <= mean <= -5:
-            scores["ambientVolumeRange"] = 60
-        elif mean > -55:
-            scores["ambientVolumeRange"] = 30
-            chapter_eval.notes.append(f"Ambient too quiet: mean={mean:.1f}dB")
-        else:
-            scores["ambientVolumeRange"] = 0
-            chapter_eval.notes.append(f"Ambient nearly silent: mean={mean:.1f}dB")
-    else:
-        scores["ambientVolumeRange"] = 0
+        scores["sfxMatchAccuracy"] = 0
 
     # 8. SFX Audibility (0-100)
     if chapter_eval.sfx_spike_count > 0 and chapter_eval.ambient_file and chapter_eval.ambient_file.exists:
@@ -521,43 +526,37 @@ def score_chapter(chapter_eval: ChapterEval, template_chapter: dict, weights: di
         if chapter_eval.detected_sfx_matched > 0:
             chapter_eval.notes.append("SFX were planned but not audible in output")
 
-    # 9. Scene Transitions (0-100)
-    if chapter_eval.detected_scenes > 1:
-        expected_transitions = min(chapter_eval.detected_scenes - 1, len(template_chapter["expectedSceneSegments"]) - 1)
-        if chapter_eval.scene_transition_count >= expected_transitions:
-            scores["sceneTransitions"] = 100
-        elif chapter_eval.scene_transition_count > 0:
-            scores["sceneTransitions"] = min(100, 100 * chapter_eval.scene_transition_count / max(expected_transitions, 1))
+    # 9. Scene Transitions (0-100) — No free points for single-scene failure
+    expected_scenes = template_chapter.get("idealSceneSegments", 1)
+    if expected_scenes > 1:
+        # Template expects multiple scenes — transitions ARE expected
+        expected_transitions = expected_scenes - 1
+        if chapter_eval.detected_scenes > 1:
+            if chapter_eval.scene_transition_count >= expected_transitions:
+                scores["sceneTransitions"] = 100
+            elif chapter_eval.scene_transition_count > 0:
+                scores["sceneTransitions"] = round(100 * chapter_eval.scene_transition_count / expected_transitions, 1)
+            else:
+                scores["sceneTransitions"] = 0
+                chapter_eval.notes.append(f"No audible scene transitions (expected {expected_transitions})")
         else:
+            # Only 1 scene when multiple expected — complete failure
             scores["sceneTransitions"] = 0
-            if expected_transitions > 0:
-                chapter_eval.notes.append(f"No scene transitions detected (expected {expected_transitions})")
+            chapter_eval.notes.append(f"Only 1 scene detected, expected {expected_scenes} — no transitions possible")
     else:
-        # Single scene — no transitions expected
-        scores["sceneTransitions"] = 100 if chapter_eval.detected_scenes == 1 else 0
+        # Template expects 1 scene — transitions not applicable
+        scores["sceneTransitions"] = 100
 
-    # 10. Overall Coverage (0-100)
-    # How much of the story's soundscape potential was realized?
-    coverage_factors = []
-    if scores["ambientPresence"] > 0:
-        coverage_factors.append(1.0)
-    if scores["sfxEventCount"] > 50:
-        coverage_factors.append(1.0)
-    elif scores["sfxEventCount"] > 0:
-        coverage_factors.append(0.5)
-    if scores["sceneSegmentCount"] > 50:
-        coverage_factors.append(1.0)
-    elif scores["sceneSegmentCount"] > 0:
-        coverage_factors.append(0.5)
-    if scores["sfxAudibility"] > 50:
-        coverage_factors.append(1.0)
-    elif scores["sfxAudibility"] > 0:
-        coverage_factors.append(0.5)
-
-    if coverage_factors:
-        scores["overallCoverage"] = round(100 * sum(coverage_factors) / 4)
-    else:
-        scores["overallCoverage"] = 0
+    # 10. Overall Realization (0-100) — Strict holistic achievement, no free points
+    # Weighted average of key soundscape quality indicators
+    realization_inputs = [
+        scores.get("sceneSegmentCount", 0),
+        scores.get("sceneEnvironmentAccuracy", 0),
+        scores.get("ambientSegmentCoverage", 0),
+        scores.get("sfxEventCount", 0),
+        scores.get("sfxAudibility", 0),
+    ]
+    scores["overallRealization"] = round(sum(realization_inputs) / len(realization_inputs), 1)
 
     return scores
 
@@ -623,11 +622,11 @@ def discover_chapter_files(audiobook_dir: str) -> dict[int, dict]:
                 continue  # Unknown pattern, skip
 
         if ch_idx not in chapters:
-            chapters[ch_idx] = {"voice": None, "ambient": None, "intro": None, "mixed": None, "subchunks": []}
+            chapters[ch_idx] = {"voice": None, "ambient": None, "mixed": None, "subchunks": []}
         chapters[ch_idx]["voice"] = f
 
         # Look for related files using the same base name
-        for suffix, key in [("_ambient", "ambient"), ("_intro", "intro"), ("_mixed", "mixed")]:
+        for suffix, key in [("_ambient", "ambient"), ("_mixed", "mixed")]:
             related = os.path.join(audiobook_dir, f"{name_no_ext}{suffix}.ogg")
             if os.path.exists(related):
                 chapters[ch_idx][key] = related
@@ -658,9 +657,9 @@ def discover_chapter_files(audiobook_dir: str) -> dict[int, dict]:
                 else:
                     continue
             if ch_idx not in chapters:
-                chapters[ch_idx] = {"voice": f, "ambient": None, "intro": None, "mixed": None, "subchunks": []}
+                chapters[ch_idx] = {"voice": f, "ambient": None, "mixed": None, "subchunks": []}
             dir_path = os.path.dirname(f)
-            for suffix, key in [("_ambient", "ambient"), ("_intro", "intro"), ("_mixed", "mixed")]:
+            for suffix, key in [("_ambient", "ambient"), ("_mixed", "mixed")]:
                 related = os.path.join(dir_path, f"{name_no_ext}{suffix}.ogg")
                 if os.path.exists(related):
                     chapters[ch_idx][key] = related
@@ -768,12 +767,6 @@ def evaluate_audiobook(audiobook_dir: str, log_path: Optional[str] = None) -> Ev
         else:
             print(f"  🌿 Ambient: NOT FOUND")
             chapter_eval.notes.append("Ambient file missing — soundscape not generated")
-
-        # Analyze intro file
-        if files["intro"]:
-            print(f"  🎵 Intro: {os.path.basename(files['intro'])}")
-            chapter_eval.intro_file = analyze_audio_file(files["intro"], detailed=False)
-            print(f"     Duration: {chapter_eval.intro_file.duration_sec:.1f}s")
 
         # Subchunk count
         chapter_eval.subchunk_count = len(files.get("subchunks", []))
@@ -886,12 +879,12 @@ def print_summary(report: EvalReport):
     elif report.total_score < 40:
         print("  💡 Score is very low. Key issues:")
         for ch in report.chapters:
-            if ch.scores.get("ambientPresence", 0) == 0:
-                print(f"     • Ch{ch.chapter_index}: No ambient track generated")
+            if ch.scores.get("ambientSegmentCoverage", 0) == 0:
+                print(f"     • Ch{ch.chapter_index}: No audible ambient coverage")
             if ch.scores.get("sfxEventCount", 0) == 0:
                 print(f"     • Ch{ch.chapter_index}: No SFX events resolved")
-            if ch.scores.get("ambientVolumeRange", 0) < 30:
-                print(f"     • Ch{ch.chapter_index}: Ambient volume too quiet")
+            if ch.scores.get("ambientVolume", 0) == 0:
+                print(f"     • Ch{ch.chapter_index}: Ambient volume inaudible")
     elif report.total_score < 70:
         print("  💡 Moderate score. Look for:")
         for ch in report.chapters:
@@ -910,10 +903,10 @@ def append_to_tracking_csv(report: EvalReport, weights: dict):
         "total_score", "grade",
         "ch1_score", "ch1_grade", "ch2_score", "ch2_grade",
         "avg_sceneSegmentCount", "avg_sceneEnvAccuracy",
+        "avg_ambientSegmentCoverage", "avg_ambientVolume",
         "avg_sfxEventCount", "avg_sfxEventPlacement",
-        "avg_ambientPresence", "avg_ambientDuration",
-        "avg_ambientVolumeRange", "avg_sfxAudibility",
-        "avg_sceneTransitions", "avg_overallCoverage",
+        "avg_sfxMatchAccuracy", "avg_sfxAudibility",
+        "avg_sceneTransitions", "avg_overallRealization",
         "notes",
     ]
 
@@ -926,10 +919,10 @@ def append_to_tracking_csv(report: EvalReport, weights: dict):
     # Compute average per-criterion across chapters
     criterion_keys = [
         "sceneSegmentCount", "sceneEnvironmentAccuracy",
+        "ambientSegmentCoverage", "ambientVolume",
         "sfxEventCount", "sfxEventPlacement",
-        "ambientPresence", "ambientDuration",
-        "ambientVolumeRange", "sfxAudibility",
-        "sceneTransitions", "overallCoverage",
+        "sfxMatchAccuracy", "sfxAudibility",
+        "sceneTransitions", "overallRealization",
     ]
     avg_criteria: dict[str, float] = {}
     for crit in criterion_keys:
@@ -963,14 +956,14 @@ def append_to_tracking_csv(report: EvalReport, weights: dict):
         "ch2_grade": ch_scores.get(2, (0, "F"))[1],
         "avg_sceneSegmentCount": avg_criteria.get("sceneSegmentCount", 0),
         "avg_sceneEnvAccuracy": avg_criteria.get("sceneEnvironmentAccuracy", 0),
+        "avg_ambientSegmentCoverage": avg_criteria.get("ambientSegmentCoverage", 0),
+        "avg_ambientVolume": avg_criteria.get("ambientVolume", 0),
         "avg_sfxEventCount": avg_criteria.get("sfxEventCount", 0),
         "avg_sfxEventPlacement": avg_criteria.get("sfxEventPlacement", 0),
-        "avg_ambientPresence": avg_criteria.get("ambientPresence", 0),
-        "avg_ambientDuration": avg_criteria.get("ambientDuration", 0),
-        "avg_ambientVolumeRange": avg_criteria.get("ambientVolumeRange", 0),
+        "avg_sfxMatchAccuracy": avg_criteria.get("sfxMatchAccuracy", 0),
         "avg_sfxAudibility": avg_criteria.get("sfxAudibility", 0),
         "avg_sceneTransitions": avg_criteria.get("sceneTransitions", 0),
-        "avg_overallCoverage": avg_criteria.get("overallCoverage", 0),
+        "avg_overallRealization": avg_criteria.get("overallRealization", 0),
         "notes": report.notes_text,
     }
 
@@ -1017,7 +1010,7 @@ def save_report(report: EvalReport, output_path: str):
             "notes": ch.notes,
         }
         # Audio info
-        for key in ["voice_file", "ambient_file", "intro_file"]:
+        for key in ["voice_file", "ambient_file"]:
             ai = getattr(ch, key)
             if ai and ai.exists:
                 ch_dict[key] = {
