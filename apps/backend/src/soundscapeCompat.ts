@@ -468,6 +468,15 @@ export async function applySoundscapeToChapter(options: {
         }
       }
 
+      // Save scene analysis JSON to audiobook folder for debugging/evaluation
+      try {
+        const sceneJsonPath = path.join(bookDir, `scene_analysis_chapter_${options.chapterIndex}.json`);
+        fs.writeFileSync(sceneJsonPath, JSON.stringify(scene, null, 2), 'utf-8');
+        console.log(`  📋 Scene analysis saved: ${path.basename(sceneJsonPath)}`);
+      } catch (sceneErr) {
+        console.warn(`  ⚠️ Failed to save scene analysis JSON:`, sceneErr instanceof Error ? sceneErr.message : sceneErr);
+      }
+
       // Resolve ambient asset (using dominant scene segment for chapter-level check)
       let ambientAsset = null;
       let resolveMethod = 'none';

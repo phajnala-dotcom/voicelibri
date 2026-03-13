@@ -1,0 +1,2 @@
+timestamp,audiobook_dir,gate,attempt,total_score,grade,ch1_score,ch1_grade,ch2_score,ch2_grade,avg_sceneSegmentCount,avg_sceneEnvAccuracy,avg_sfxEventCount,avg_sfxEventPlacement,avg_ambientPresence,avg_ambientDuration,avg_ambientVolumeRange,avg_sfxAudibility,avg_sceneTransitions,avg_overallCoverage,notes
+2026-03-13T16:10:54.010530,soundscape_test_story_Gate 0.1,0,1,31.8,F,30.4,F,33.2,F,20.8,0.0,0.0,0.0,100.0,65.0,15.0,0.0,100.0,38.0,Baseline post-wiring

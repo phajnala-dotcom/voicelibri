@@ -7,16 +7,27 @@ Uses ffprobe/ffmpeg to analyze generated audio, compares against
 an ideal template, and produces a detailed scorecard.
 
 Usage:
-  python scripts/soundscape_eval/evaluate.py <audiobook_dir> [--log <pipeline_log>]
+  python scripts/soundscape_eval/evaluate.py <audiobook_dir> [options]
+
+Options:
+  --log <pipeline_log>   Parse pipeline generation log for scene/SFX data
+  --gate <gate_id>       Gate identifier (e.g. "0", "1", "2a") for tracking
+  --attempt <number>     Attempt number within this gate (default: auto-increment)
+  --notes <text>         Free-text annotation for this evaluation run
+
+Examples:
   python scripts/soundscape_eval/evaluate.py audiobooks/The_Shadow_of_Thornwood_Castle
   python scripts/soundscape_eval/evaluate.py audiobooks/The_Shadow_of_Thornwood_Castle --log generation.log
+  python scripts/soundscape_eval/evaluate.py audiobooks/soundscape_test_story --gate 0 --attempt 1 --notes "Baseline"
 
 Output:
   - Detailed per-chapter analysis to console
   - Summary scorecard with total score (0-100)
   - JSON report at <audiobook_dir>/soundscape_eval_report.json
+  - Append row to scripts/soundscape_eval/tracking.csv (cumulative history)
 """
 
+import csv
 import json
 import os
 import re
@@ -34,6 +45,7 @@ from typing import Optional
 
 SCRIPT_DIR = Path(__file__).parent
 TEMPLATE_PATH = SCRIPT_DIR / "ideal_template.json"
+TRACKING_CSV_PATH = SCRIPT_DIR / "tracking.csv"
 
 
 # ========================================
@@ -93,6 +105,10 @@ class EvalReport:
     max_score: float = 100.0
     grade: str = ""
     summary: list = field(default_factory=list)
+    # Gate tracking
+    gate: str = ""
+    attempt: int = 0
+    notes_text: str = ""
 
 
 # ========================================
@@ -576,34 +592,45 @@ def grade_from_score(score: float) -> str:
 def discover_chapter_files(audiobook_dir: str) -> dict[int, dict]:
     """
     Discover chapter voice and ambient files in an audiobook directory.
-    Returns {chapter_index: {voice: path, ambient: path, intro: path, subchunks: [paths]}}
+    Supports two naming conventions:
+      Legacy:  chapter_N.ogg, chapter_N_ambient.ogg, chapter_N_intro.ogg
+      Current: NN_N Title.ogg, NN_N Title_ambient.ogg, NN_N Title_intro.ogg
+    Returns {chapter_index: {voice, ambient, intro, mixed, subchunks}}
     """
     chapters = {}
 
-    # Pattern: chapter_N.ogg (voice), chapter_N_ambient.ogg, chapter_N_intro.ogg
-    for f in sorted(glob.glob(os.path.join(audiobook_dir, "chapter_*.ogg"))):
-        basename = os.path.basename(f)
+    # Collect all OGG files in the directory
+    all_oggs = sorted(glob.glob(os.path.join(audiobook_dir, "*.ogg")))
 
-        # Skip ambient and intro files in this pass
-        if "_ambient" in basename or "_intro" in basename:
+    for f in all_oggs:
+        basename = os.path.basename(f)
+        name_no_ext = os.path.splitext(basename)[0]
+
+        # Skip suffixed variants (ambient, intro, mixed)
+        if name_no_ext.endswith("_ambient") or name_no_ext.endswith("_intro") or name_no_ext.endswith("_mixed"):
             continue
 
-        ch_match = re.match(r"chapter_(\d+)\.ogg$", basename)
+        # Try legacy pattern: chapter_N.ogg
+        ch_match = re.match(r"chapter_(\d+)$", name_no_ext)
         if ch_match:
             ch_idx = int(ch_match.group(1))
-            if ch_idx not in chapters:
-                chapters[ch_idx] = {"voice": None, "ambient": None, "intro": None, "subchunks": []}
-            chapters[ch_idx]["voice"] = f
+        else:
+            # Try current pattern: NN_N Title.ogg (e.g., "01_1 The Forest Path")
+            new_match = re.match(r"\d+_(\d+)\s", name_no_ext)
+            if new_match:
+                ch_idx = int(new_match.group(1))
+            else:
+                continue  # Unknown pattern, skip
 
-    # Find ambient and intro files
-    for ch_idx in list(chapters.keys()):
-        ambient_path = os.path.join(audiobook_dir, f"chapter_{ch_idx}_ambient.ogg")
-        if os.path.exists(ambient_path):
-            chapters[ch_idx]["ambient"] = ambient_path
+        if ch_idx not in chapters:
+            chapters[ch_idx] = {"voice": None, "ambient": None, "intro": None, "mixed": None, "subchunks": []}
+        chapters[ch_idx]["voice"] = f
 
-        intro_path = os.path.join(audiobook_dir, f"chapter_{ch_idx}_intro.ogg")
-        if os.path.exists(intro_path):
-            chapters[ch_idx]["intro"] = intro_path
+        # Look for related files using the same base name
+        for suffix, key in [("_ambient", "ambient"), ("_intro", "intro"), ("_mixed", "mixed")]:
+            related = os.path.join(audiobook_dir, f"{name_no_ext}{suffix}.ogg")
+            if os.path.exists(related):
+                chapters[ch_idx][key] = related
 
     # Find subchunk files
     for f in sorted(glob.glob(os.path.join(audiobook_dir, "temp", "subchunk_*_*.wav"))):
@@ -614,23 +641,29 @@ def discover_chapter_files(audiobook_dir: str) -> dict[int, dict]:
             if ch_idx in chapters:
                 chapters[ch_idx]["subchunks"].append(f)
 
-    # Also check for WAV chapter files if OGG not found
+    # Fallback: recursive search in subdirectories
     if not chapters:
         for f in sorted(glob.glob(os.path.join(audiobook_dir, "**", "*.ogg"), recursive=True)):
             basename = os.path.basename(f)
-            ch_match = re.match(r"chapter_(\d+)\.ogg$", basename)
-            if ch_match and "_ambient" not in basename and "_intro" not in basename:
+            name_no_ext = os.path.splitext(basename)[0]
+            if name_no_ext.endswith("_ambient") or name_no_ext.endswith("_intro") or name_no_ext.endswith("_mixed"):
+                continue
+            ch_match = re.match(r"chapter_(\d+)$", name_no_ext)
+            if ch_match:
                 ch_idx = int(ch_match.group(1))
-                if ch_idx not in chapters:
-                    chapters[ch_idx] = {"voice": f, "ambient": None, "intro": None, "subchunks": []}
-                # Check for adjacent ambient/intro
-                dir_path = os.path.dirname(f)
-                ambient_path = os.path.join(dir_path, f"chapter_{ch_idx}_ambient.ogg")
-                intro_path = os.path.join(dir_path, f"chapter_{ch_idx}_intro.ogg")
-                if os.path.exists(ambient_path):
-                    chapters[ch_idx]["ambient"] = ambient_path
-                if os.path.exists(intro_path):
-                    chapters[ch_idx]["intro"] = intro_path
+            else:
+                new_match = re.match(r"\d+_(\d+)\s", name_no_ext)
+                if new_match:
+                    ch_idx = int(new_match.group(1))
+                else:
+                    continue
+            if ch_idx not in chapters:
+                chapters[ch_idx] = {"voice": f, "ambient": None, "intro": None, "mixed": None, "subchunks": []}
+            dir_path = os.path.dirname(f)
+            for suffix, key in [("_ambient", "ambient"), ("_intro", "intro"), ("_mixed", "mixed")]:
+                related = os.path.join(dir_path, f"{name_no_ext}{suffix}.ogg")
+                if os.path.exists(related):
+                    chapters[ch_idx][key] = related
 
     return chapters
 
@@ -867,6 +900,89 @@ def print_summary(report: EvalReport):
                 print(f"     • Ch{ch.chapter_index} weak areas: {', '.join(low_scores.keys())}")
 
 
+def append_to_tracking_csv(report: EvalReport, weights: dict):
+    """Append evaluation results as a new row to the cumulative tracking CSV."""
+    csv_path = TRACKING_CSV_PATH
+    file_exists = csv_path.exists()
+
+    columns = [
+        "timestamp", "audiobook_dir", "gate", "attempt",
+        "total_score", "grade",
+        "ch1_score", "ch1_grade", "ch2_score", "ch2_grade",
+        "avg_sceneSegmentCount", "avg_sceneEnvAccuracy",
+        "avg_sfxEventCount", "avg_sfxEventPlacement",
+        "avg_ambientPresence", "avg_ambientDuration",
+        "avg_ambientVolumeRange", "avg_sfxAudibility",
+        "avg_sceneTransitions", "avg_overallCoverage",
+        "notes",
+    ]
+
+    # Compute per-chapter weighted scores
+    ch_scores: dict[int, tuple[float, str]] = {}
+    for ch in report.chapters:
+        ch_w = compute_weighted_score(ch.scores, weights)
+        ch_scores[ch.chapter_index] = (ch_w, grade_from_score(ch_w))
+
+    # Compute average per-criterion across chapters
+    criterion_keys = [
+        "sceneSegmentCount", "sceneEnvironmentAccuracy",
+        "sfxEventCount", "sfxEventPlacement",
+        "ambientPresence", "ambientDuration",
+        "ambientVolumeRange", "sfxAudibility",
+        "sceneTransitions", "overallCoverage",
+    ]
+    avg_criteria: dict[str, float] = {}
+    for crit in criterion_keys:
+        vals = [ch.scores.get(crit, 0) for ch in report.chapters if ch.scores]
+        avg_criteria[crit] = round(sum(vals) / len(vals), 1) if vals else 0
+
+    # Auto-increment attempt if not explicitly specified
+    attempt = report.attempt
+    if attempt == 0 and report.gate:
+        if file_exists:
+            try:
+                with open(csv_path, "r", newline="", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    existing = sum(1 for row in reader if row.get("gate", "") == report.gate)
+                attempt = existing + 1
+            except Exception:
+                attempt = 1
+        else:
+            attempt = 1
+
+    row = {
+        "timestamp": report.timestamp,
+        "audiobook_dir": os.path.basename(report.audiobook_dir),
+        "gate": report.gate,
+        "attempt": attempt,
+        "total_score": report.total_score,
+        "grade": report.grade,
+        "ch1_score": ch_scores.get(1, (0, "F"))[0],
+        "ch1_grade": ch_scores.get(1, (0, "F"))[1],
+        "ch2_score": ch_scores.get(2, (0, "F"))[0],
+        "ch2_grade": ch_scores.get(2, (0, "F"))[1],
+        "avg_sceneSegmentCount": avg_criteria.get("sceneSegmentCount", 0),
+        "avg_sceneEnvAccuracy": avg_criteria.get("sceneEnvironmentAccuracy", 0),
+        "avg_sfxEventCount": avg_criteria.get("sfxEventCount", 0),
+        "avg_sfxEventPlacement": avg_criteria.get("sfxEventPlacement", 0),
+        "avg_ambientPresence": avg_criteria.get("ambientPresence", 0),
+        "avg_ambientDuration": avg_criteria.get("ambientDuration", 0),
+        "avg_ambientVolumeRange": avg_criteria.get("ambientVolumeRange", 0),
+        "avg_sfxAudibility": avg_criteria.get("sfxAudibility", 0),
+        "avg_sceneTransitions": avg_criteria.get("sceneTransitions", 0),
+        "avg_overallCoverage": avg_criteria.get("overallCoverage", 0),
+        "notes": report.notes_text,
+    }
+
+    with open(csv_path, "a", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=columns)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)
+    print(f"\n📊 Tracking CSV updated: {csv_path}")
+    print(f"   Gate={report.gate or '—'} Attempt={attempt} Score={report.total_score} [{report.grade}]")
+
+
 def save_report(report: EvalReport, output_path: str):
     """Save evaluation report as JSON."""
     # Convert dataclasses to dicts for JSON serialization
@@ -874,6 +990,9 @@ def save_report(report: EvalReport, output_path: str):
         "audiobook_dir": report.audiobook_dir,
         "template_name": report.template_name,
         "timestamp": report.timestamp,
+        "gate": report.gate,
+        "attempt": report.attempt,
+        "notes": report.notes_text,
         "total_score": report.total_score,
         "max_score": report.max_score,
         "grade": report.grade,
@@ -955,16 +1074,47 @@ def main():
             if not os.path.isabs(log_path):
                 log_path = os.path.join(os.getcwd(), log_path)
 
+    gate = ""
+    if "--gate" in sys.argv:
+        gate_idx = sys.argv.index("--gate")
+        if gate_idx + 1 < len(sys.argv):
+            gate = sys.argv[gate_idx + 1]
+
+    attempt = 0
+    if "--attempt" in sys.argv:
+        att_idx = sys.argv.index("--attempt")
+        if att_idx + 1 < len(sys.argv):
+            try:
+                attempt = int(sys.argv[att_idx + 1])
+            except ValueError:
+                print("⚠ Invalid --attempt value, using auto-increment")
+
+    notes = ""
+    if "--notes" in sys.argv:
+        notes_idx = sys.argv.index("--notes")
+        if notes_idx + 1 < len(sys.argv):
+            notes = sys.argv[notes_idx + 1]
+
     print("🎧 VoiceLibri Soundscape Evaluation Tool")
     print(f"   Template: {TEMPLATE_PATH.name}")
+    if gate:
+        print(f"   Gate: {gate}  Attempt: {attempt or 'auto'}")
     print()
 
     report = evaluate_audiobook(audiobook_dir, log_path)
+    report.gate = gate
+    report.attempt = attempt
+    report.notes_text = notes
     print_summary(report)
 
-    # Save JSON report
+    # Save JSON report to audiobook folder
     report_path = os.path.join(audiobook_dir, "soundscape_eval_report.json")
     save_report(report, report_path)
+
+    # Append to cumulative tracking CSV
+    with open(TEMPLATE_PATH, "r", encoding="utf-8") as f:
+        template = json.load(f)
+    append_to_tracking_csv(report, template["scoring"]["weights"])
 
 
 if __name__ == "__main__":
