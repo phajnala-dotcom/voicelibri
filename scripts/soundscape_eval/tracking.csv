@@ -1,0 +1,4 @@
+timestamp,audiobook_dir,gate,attempt,total_score,grade,ch1_score,ch1_grade,ch2_score,ch2_grade,avg_ambientOccurrence,avg_sfxOccurrence,avg_ambientSimilarity,avg_sfxSimilarity,avg_ambientCoverage,avg_ambientVolume,avg_sfxAudibility,notes
+2026-03-13T22:53:34.949428,soundscape_test_story_Gate 0.1,0,1,10.1,F,5.2,F,15.0,F,0.0,0.0,0.0,0.0,67.2,0.0,0.0,"Baseline - 7 criteria, no resolution JSONs"
+2026-03-13T23:35:25.942317,soundscape_test_story,0,2,44.6,E,57.3,E,31.9,F,66.7,50.0,80.3,37.8,62.4,0.0,0.0,Regenerated with resolution JSONs
+2026-03-13T23:39:07.021676,soundscape_test_story,0,3,46.6,E,61.4,D,31.9,F,66.7,50.0,80.3,37.8,62.4,13.8,0.0,LUFS fix applied

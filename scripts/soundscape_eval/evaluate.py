@@ -192,12 +192,12 @@ def measure_lufs(filepath: str) -> float:
             ],
             capture_output=True, text=True, timeout=120,
         )
-        # ebur128 outputs summary at end of stderr like:
-        #   Integrated loudness:
-        #     I:         -23.0 LUFS
-        lufs_match = re.search(r"I:\s+([-\d.]+)\s+LUFS", result.stderr)
+        # ebur128 outputs "I: -70.0 LUFS" in per-frame lines AND in the final
+        # Summary section. We need the LAST occurrence (the final integrated value).
+        lufs_matches = re.findall(r"I:\s+([-\d.]+)\s+LUFS", result.stderr)
+        lufs_match = lufs_matches[-1] if lufs_matches else None
         if lufs_match:
-            return float(lufs_match.group(1))
+            return float(lufs_match)
     except Exception as e:
         print(f"  ⚠ LUFS measurement failed for {filepath}: {e}")
     return -100.0
