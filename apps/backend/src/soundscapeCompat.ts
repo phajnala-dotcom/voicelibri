@@ -224,7 +224,17 @@ export async function generateAmbientBed(options: {
   // Already exists — skip (either bed or full version)
   if (fs.existsSync(ambientPath)) return ambientPath;
 
-  const estimatedDurationMs = options.chapterText.length * 150;
+  // Use actual voice file duration if available, otherwise estimate from char count
+  let estimatedDurationMs = options.chapterText.length * 150;
+  if (fs.existsSync(options.chapterPath)) {
+    try {
+      const voiceDurSec = await getAudioDuration(options.chapterPath);
+      if (voiceDurSec > 0) {
+        estimatedDurationMs = voiceDurSec * 1000;
+        console.log(`  🔊 Ambient bed: Using actual voice duration ${voiceDurSec.toFixed(1)}s (vs estimate ${(options.chapterText.length * 150 / 1000).toFixed(1)}s)`);
+      }
+    } catch { /* fallback to char estimate */ }
+  }
 
   // Q3: intensity-adjusted volume (base 0 dB for audible ambient, adjusted by scene intensity)
   const volumeDb = 0 - (1 - options.scene.intensity) * 3;
@@ -430,10 +440,13 @@ export async function applySoundscapeToChapter(options: {
   const ambientPath = getAmbientTrackPath(options.chapterPath);
 
   // ── Ambient track ──
-  // Alt 4: Delete existing ambient bed before regenerating with full SFX
+  // Alt 4: Backup existing ambient bed; regenerate with full SFX; restore if regeneration fails
+  const earlyBedBackupPath = ambientPath + '.early_backup';
+  let hasEarlyBed = false;
   if (ambientEnabled && fs.existsSync(ambientPath)) {
-    console.log(`  🔊 Ambient: Deleting existing ambient bed to regenerate with full SFX`);
-    fs.unlinkSync(ambientPath);
+    console.log(`  🔊 Ambient: Backing up existing ambient bed before regeneration with full SFX`);
+    fs.renameSync(ambientPath, earlyBedBackupPath);
+    hasEarlyBed = true;
   }
   const cacheKey = `${options.bookTitle}:${options.chapterIndex}`;
   if (ambientEnabled && !fs.existsSync(ambientPath)) {
@@ -519,6 +532,16 @@ export async function applySoundscapeToChapter(options: {
 
     // Clean up cache entry after use
     earlyAmbientCache.delete(cacheKey);
+
+    // If per-subchunk pipeline failed to produce ambient, restore early bed backup
+    if (hasEarlyBed && !fs.existsSync(ambientPath) && fs.existsSync(earlyBedBackupPath)) {
+      console.log(`  🔊 Ambient: Per-subchunk pipeline produced no output — restoring early ambient bed`);
+      fs.renameSync(earlyBedBackupPath, ambientPath);
+    }
+  }
+  // Clean up backup if ambient was successfully regenerated
+  if (fs.existsSync(earlyBedBackupPath)) {
+    try { fs.unlinkSync(earlyBedBackupPath); } catch { /* ignore */ }
   }
 
   // ── Intro ──
@@ -565,7 +588,7 @@ export async function applySoundscapeToChapter(options: {
         '-i', options.chapterPath,
         '-i', finalAmbientPath,
         '-filter_complex',
-        '[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=2',
+        '[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=2:normalize=0',
         '-ar', '48000',
         '-ac', '2',
         '-c:a', 'libopus',
@@ -743,6 +766,10 @@ async function generateChapterSoundscapeFromSubchunks(options: {
       } catch {
         subchunkDurationMs = info.charCount * 150; // fallback estimate
       }
+    } else {
+      // WAV file missing — use char-count estimate (no silence gaps available for SFX timing)
+      subchunkDurationMs = info.charCount * 150;
+      console.log(`    Subchunk ${info.subchunkIndex}: WAV missing, using estimate ${(subchunkDurationMs / 1000).toFixed(1)}s (no SFX timing)`);
     }
 
     if (subchunkDurationMs <= 0) {

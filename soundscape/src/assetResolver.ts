@@ -396,9 +396,9 @@ export async function resolveSfxEvents(
   const batchResults = await searchEmbeddingsBatch(index, queries, 3);
 
   return sfxEvents.map((sfxEvent, i) => {
-    // Top-1 result for this query
+    // Top-1 result for this query — reject below 0.72 (no sound better than wrong sound)
     const topResult = batchResults[i]?.results[0];
-    if (!topResult || topResult.score < 0.5) {
+    if (!topResult || topResult.score < 0.72) {
       return { sfxEvent, asset: null, score: 0 };
     }
 
