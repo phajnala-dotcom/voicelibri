@@ -7,7 +7,7 @@
  *
  * Architecture (per prompt spec):
  *   - Voice and soundscape are rendered as two INDEPENDENT OGG Opus tracks — no mixing.
- *   - Ambient track is generated as a separate _ambient.ogg file.
+ *   - Ambient track is generated as a separate _soundscape.ogg file.
  *   - Intro is generated as a separate _intro.ogg file and prepended to voice only.
  *   - LLM Director is used for scene analysis (supports all languages).
  *   - ffprobe is used for exact audio durations.
@@ -159,9 +159,9 @@ function getIntroPath(chapterPath: string): string {
   return chapterPath.replace(/\.ogg$/i, '_intro.ogg');
 }
 
-/** Path for the independent ambient track (separate from voice) */
+/** Path for the independent soundscape track (separate from voice) */
 function getAmbientTrackPath(chapterPath: string): string {
-  return chapterPath.replace(/\.ogg$/i, '_ambient.ogg');
+  return chapterPath.replace(/\.ogg$/i, '_soundscape.ogg');
 }
 
 function normalizeTargetLanguage(raw?: string | null): string | null {
@@ -589,15 +589,15 @@ export async function prepareEarlyAmbient(options: {
  *     3. SFX events resolution (per-event, charIndex preserved)
  *     4. Map SFX events → subchunks (proportional charIndex mapping)
  *     5. For each subchunk: get actual TTS duration, calc SFX offsetMs,
- *        generate subchunk_N_M_ambient.ogg
- *     6. Concat all subchunk ambient OGGs → chapter_N_ambient.ogg
+ *        generate subchunk_N_M_soundscape.ogg
+ *     6. Concat all subchunk soundscape OGGs → chapter_N_soundscape.ogg
  *
  * When `subChunks` is absent (legacy path):
  *   ─ Falls back to the chapter-level ambient (ambient bed only, no SFX).
  *
  * Architecture: voice and ambient are SEPARATE independent OGG files.
  *   - Voice chapter: {chapter}.ogg (unchanged)
- *   - Ambient track: {chapter}_ambient.ogg (independent)
+ *   - Ambient track: {chapter}_soundscape.ogg (independent)
  *   - Intro: {chapter}_intro.ogg (standalone, served as chapter 0)
  */
 export async function applySoundscapeToChapter(options: {
@@ -814,6 +814,20 @@ export async function applySoundscapeToChapter(options: {
       ]);
       if (mixResult.code === 0) {
         console.log(`  ✅ Mixed file: ${path.basename(mixedPath)}`);
+
+        // Persist LUFS normalization data for evaluation tool
+        try {
+          const lufsDataPath = path.join(path.dirname(options.chapterPath), `lufs_normalization_chapter_${options.chapterIndex}.json`);
+          fs.writeFileSync(lufsDataPath, JSON.stringify({
+            chapterIndex: options.chapterIndex,
+            voiceLufs: voiceLufs,
+            rawAmbientLufs: ambientLufs,
+            effectiveAmbientLufs: (voiceLufs !== null && ambientLufs !== null) ? ambientLufs + volumeAdjustDb : null,
+            targetOffset: AMBIENT_LUFS_OFFSET_DB,
+            volumeAdjustDb,
+            timestamp: new Date().toISOString(),
+          }, null, 2), 'utf-8');
+        } catch { /* non-critical */ }
       } else {
         console.warn(`  ⚠️ Mix failed: ${mixResult.stderr.substring(0, 200)}`);
       }
@@ -838,8 +852,8 @@ export async function applySoundscapeToChapter(options: {
  *   3. Map scene segments (charIndex) → silence gap offsets for ambient changes
  *   4. Map SFX events → silence gap offsets; apply no-layering, no-boundary-crossing,
  *      no-ambient-crossfade-overlap constraints
- *   5. Generate subchunk_N_M_ambient.ogg (multi-ambient + timed SFX)
- * After all subchunks: concat → chapter_N_ambient.ogg (with 2s fade-in/out)
+ *   5. Generate subchunk_N_M_soundscape.ogg (multi-ambient + timed SFX)
+ * After all subchunks: concat → chapter_N_soundscape.ogg (with 2s fade-in/out)
  *
  * @internal — called from applySoundscapeToChapter when subChunks are provided
  */
@@ -959,7 +973,7 @@ async function generateChapterSoundscapeFromSubchunks(options: {
   for (const info of segmentInfos) {
     const subchunkAmbientPath = path.join(
       chapterDir,
-      `chapter_${chapterIndex}_sub${info.subchunkIndex}_ambient.ogg`
+      `chapter_${chapterIndex}_sub${info.subchunkIndex}_soundscape.ogg`
     );
 
     // Skip if already generated (resume support)

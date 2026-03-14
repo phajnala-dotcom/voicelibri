@@ -102,6 +102,7 @@ class ChapterEval:
     # File presence
     voice_file: Optional[AudioInfo] = None
     ambient_file: Optional[AudioInfo] = None
+    mixed_file: Optional[AudioInfo] = None
     subchunk_count: int = 0
     # Resolution data (from pipeline JSONs)
     resolution: Optional[ResolutionData] = None
@@ -370,7 +371,7 @@ def parse_scene_analysis_json(audiobook_dir: str, chapter_index: int) -> Optiona
 # Scoring Engine (7 Criteria)
 # ========================================
 
-def score_chapter(chapter_eval: ChapterEval, template_chapter: dict, scoring: dict) -> dict:
+def score_chapter(chapter_eval: ChapterEval, template_chapter: dict, scoring: dict, audiobook_dir: str) -> dict:
     """
     Score a single chapter against the ideal template using 7 criteria.
     Each criterion scores 0-100, weighted by scoring["weights"].
@@ -442,14 +443,39 @@ def score_chapter(chapter_eval: ChapterEval, template_chapter: dict, scoring: di
     # ── 6. ambientVolume (15%) — LUFS ───────────────────────────
     # Is ambient LUFS in target range relative to voice?
     # Target: ambient should be (voice + ambientOffsetFromVoice) LUFS, ±toleranceLufs
+    #
+    # The pipeline applies LUFS normalization during mixing (G1-B), so the raw
+    # _soundscape.ogg file has PRE-normalization levels. We use the persisted
+    # lufs_normalization_chapter_N.json for the EFFECTIVE ambient LUFS.
+    # Fallback: raw ambient LUFS if normalization JSON not available.
     target_offset = lufs_targets.get("ambientOffsetFromVoice", -15)
     tolerance = lufs_targets.get("toleranceLufs", 3)
 
-    if (chapter_eval.voice_file and chapter_eval.voice_file.exists and
-            chapter_eval.ambient_file and chapter_eval.ambient_file.exists and
-            chapter_eval.voice_file.lufs > -100 and chapter_eval.ambient_file.lufs > -100):
-        voice_lufs = chapter_eval.voice_file.lufs
-        ambient_lufs = chapter_eval.ambient_file.lufs
+    # Try to load LUFS normalization data from pipeline
+    lufs_norm_path = os.path.join(audiobook_dir, f"lufs_normalization_chapter_{chapter_eval.chapter_index}.json")
+    voice_lufs = None
+    ambient_lufs = None
+    lufs_source = "raw"
+
+    if os.path.exists(lufs_norm_path):
+        try:
+            with open(lufs_norm_path, "r", encoding="utf-8") as lf:
+                lufs_norm = json.load(lf)
+            voice_lufs = lufs_norm.get("voiceLufs")
+            effective = lufs_norm.get("effectiveAmbientLufs")
+            if voice_lufs is not None and effective is not None:
+                ambient_lufs = effective
+                lufs_source = "normalized"
+        except Exception:
+            pass
+
+    # Fallback to raw file measurement
+    if voice_lufs is None and chapter_eval.voice_file and chapter_eval.voice_file.exists:
+        voice_lufs = chapter_eval.voice_file.lufs if chapter_eval.voice_file.lufs > -100 else None
+    if ambient_lufs is None and chapter_eval.ambient_file and chapter_eval.ambient_file.exists:
+        ambient_lufs = chapter_eval.ambient_file.lufs if chapter_eval.ambient_file.lufs > -100 else None
+
+    if voice_lufs is not None and ambient_lufs is not None:
         actual_offset = ambient_lufs - voice_lufs  # Should be close to target_offset
         deviation = abs(actual_offset - target_offset)
 
@@ -467,7 +493,7 @@ def score_chapter(chapter_eval: ChapterEval, template_chapter: dict, scoring: di
             scores["ambientVolume"] = 0
 
         chapter_eval.notes.append(
-            f"LUFS: voice={voice_lufs:.1f}, ambient={ambient_lufs:.1f}, "
+            f"LUFS [{lufs_source}]: voice={voice_lufs:.1f}, ambient={ambient_lufs:.1f}, "
             f"offset={actual_offset:.1f} (target={target_offset}, tol=±{tolerance})"
         )
     else:
@@ -480,11 +506,13 @@ def score_chapter(chapter_eval: ChapterEval, template_chapter: dict, scoring: di
 
     # ── 7. sfxAudibility (10%) — LUFS contrast ─────────────────
     # Are SFX events perceptibly louder than the ambient bed?
-    # Uses volume spikes detected in the ambient+SFX mixed track as proxy.
-    if (chapter_eval.ambient_file and chapter_eval.ambient_file.exists and
-            chapter_eval.ambient_file.volume_spikes):
-        spike_rms_values = [s["rms_db"] for s in chapter_eval.ambient_file.volume_spikes]
-        ambient_mean = chapter_eval.ambient_file.mean_volume_db
+    # Uses volume spikes detected in the mixed track (voice+soundscape) as proxy.
+    # Prefer mixed_file (post-normalization) over raw ambient_file.
+    sfx_source_file = chapter_eval.mixed_file if (chapter_eval.mixed_file and chapter_eval.mixed_file.exists) else chapter_eval.ambient_file
+    if (sfx_source_file and sfx_source_file.exists and
+            sfx_source_file.volume_spikes):
+        spike_rms_values = [s["rms_db"] for s in sfx_source_file.volume_spikes]
+        ambient_mean = sfx_source_file.mean_volume_db
 
         if spike_rms_values and ambient_mean > -100:
             avg_spike_rms = sum(spike_rms_values) / len(spike_rms_values)
@@ -543,8 +571,8 @@ def discover_chapter_files(audiobook_dir: str) -> dict[int, dict]:
     """
     Discover chapter voice and ambient files in an audiobook directory.
     Supports two naming conventions:
-      Legacy:  chapter_N.ogg, chapter_N_ambient.ogg
-      Current: NN_N Title.ogg, NN_N Title_ambient.ogg
+      Legacy:  chapter_N.ogg, chapter_N_soundscape.ogg
+      Current: NN_N Title.ogg, NN_N Title_soundscape.ogg
     Returns {chapter_index: {voice, ambient, mixed, subchunks}}
     """
     chapters = {}
@@ -555,7 +583,7 @@ def discover_chapter_files(audiobook_dir: str) -> dict[int, dict]:
         basename = os.path.basename(f)
         name_no_ext = os.path.splitext(basename)[0]
 
-        if name_no_ext.endswith("_ambient") or name_no_ext.endswith("_intro") or name_no_ext.endswith("_mixed"):
+        if name_no_ext.endswith("_soundscape") or name_no_ext.endswith("_intro") or name_no_ext.endswith("_mixed"):
             continue
 
         ch_match = re.match(r"chapter_(\d+)$", name_no_ext)
@@ -572,7 +600,7 @@ def discover_chapter_files(audiobook_dir: str) -> dict[int, dict]:
             chapters[ch_idx] = {"voice": None, "ambient": None, "mixed": None, "subchunks": []}
         chapters[ch_idx]["voice"] = f
 
-        for suffix, key in [("_ambient", "ambient"), ("_mixed", "mixed")]:
+        for suffix, key in [("_soundscape", "ambient"), ("_mixed", "mixed")]:
             related = os.path.join(audiobook_dir, f"{name_no_ext}{suffix}.ogg")
             if os.path.exists(related):
                 chapters[ch_idx][key] = related
@@ -591,7 +619,7 @@ def discover_chapter_files(audiobook_dir: str) -> dict[int, dict]:
         for f in sorted(glob.glob(os.path.join(audiobook_dir, "**", "*.ogg"), recursive=True)):
             basename = os.path.basename(f)
             name_no_ext = os.path.splitext(basename)[0]
-            if name_no_ext.endswith("_ambient") or name_no_ext.endswith("_intro") or name_no_ext.endswith("_mixed"):
+            if name_no_ext.endswith("_soundscape") or name_no_ext.endswith("_intro") or name_no_ext.endswith("_mixed"):
                 continue
             ch_match = re.match(r"chapter_(\d+)$", name_no_ext)
             if ch_match:
@@ -605,7 +633,7 @@ def discover_chapter_files(audiobook_dir: str) -> dict[int, dict]:
             if ch_idx not in chapters:
                 chapters[ch_idx] = {"voice": f, "ambient": None, "mixed": None, "subchunks": []}
             dir_path = os.path.dirname(f)
-            for suffix, key in [("_ambient", "ambient"), ("_mixed", "mixed")]:
+            for suffix, key in [("_soundscape", "ambient"), ("_mixed", "mixed")]:
                 related = os.path.join(dir_path, f"{name_no_ext}{suffix}.ogg")
                 if os.path.exists(related):
                     chapters[ch_idx][key] = related
@@ -642,7 +670,7 @@ def evaluate_audiobook(audiobook_dir: str) -> EvalReport:
 
     if not chapter_files:
         print("❌ No chapter files found! Generate the audiobook first.")
-        print(f"   Expected files like: chapter_1.ogg, chapter_1_ambient.ogg in {audiobook_dir}")
+        print(f"   Expected files like: chapter_1.ogg, chapter_1_soundscape.ogg in {audiobook_dir}")
         report.summary.append("No chapter files found")
         report.total_score = 0
         report.grade = "F"
@@ -736,6 +764,19 @@ def evaluate_audiobook(audiobook_dir: str) -> EvalReport:
             print(f"  🌿 Ambient: NOT FOUND")
             chapter_eval.notes.append("Ambient file missing — soundscape not generated")
 
+        if files["mixed"]:
+            print(f"  🔀 Mixed: {os.path.basename(files['mixed'])}")
+            chapter_eval.mixed_file = analyze_audio_file(files["mixed"], detailed=True)
+            print(f"     Duration: {chapter_eval.mixed_file.duration_sec:.1f}s, "
+                  f"Volume: mean={chapter_eval.mixed_file.mean_volume_db:.1f}dB, "
+                  f"LUFS={chapter_eval.mixed_file.lufs:.1f}")
+            print(f"     Volume spikes (potential SFX): {len(chapter_eval.mixed_file.volume_spikes)}")
+            if chapter_eval.mixed_file.volume_spikes:
+                for spike in chapter_eval.mixed_file.volume_spikes[:8]:
+                    print(f"       @ {spike['time_sec']:.1f}s: {spike['rms_db']:.1f}dB")
+                if len(chapter_eval.mixed_file.volume_spikes) > 8:
+                    print(f"       ... and {len(chapter_eval.mixed_file.volume_spikes) - 8} more")
+
         # Subchunk count
         chapter_eval.subchunk_count = len(files.get("subchunks", []))
         if chapter_eval.subchunk_count:
@@ -751,7 +792,7 @@ def evaluate_audiobook(audiobook_dir: str) -> EvalReport:
             print(f"  📏 Duration ratio (ambient/voice): {chapter_eval.ambient_voice_duration_ratio:.2f}")
 
         # ── Score this chapter ──
-        chapter_eval.scores = score_chapter(chapter_eval, template_chapter, scoring)
+        chapter_eval.scores = score_chapter(chapter_eval, template_chapter, scoring, audiobook_dir)
         chapter_weighted = compute_weighted_score(chapter_eval.scores, weights)
 
         print(f"\n  📊 SCORES:")
@@ -978,7 +1019,7 @@ def save_report(report: EvalReport, output_path: str):
                 "sfx_details": ch.resolution.sfx_details,
             }
         # Audio info
-        for key in ["voice_file", "ambient_file"]:
+        for key in ["voice_file", "ambient_file", "mixed_file"]:
             ai = getattr(ch, key)
             if ai and ai.exists:
                 ch_dict[key] = {
