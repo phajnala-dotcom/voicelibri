@@ -208,12 +208,19 @@ def detect_volume_spikes(filepath: str, window_sec: float = 0.5) -> list[dict]:
     """
     Detect volume spikes (potential SFX events) using astats filter.
     Returns list of {time_sec, rms_db} where volume jumps significantly.
+
+    FFmpeg astats outputs pts_time and RMS_level on separate lines:
+      frame:N  pts:...  pts_time:T
+      lavfi.astats.Overall.RMS_level=V
+    We track the time from the frame line and pair it with the next RMS line.
     """
     try:
+        # reset=25 ≈ 0.5s windows at typical 20ms Opus frame size
+        reset_frames = max(1, int(window_sec / 0.02))
         result = subprocess.run(
             [
                 "ffmpeg", "-i", filepath,
-                "-af", f"astats=metadata=1:reset={int(1/window_sec)},"
+                "-af", f"astats=metadata=1:reset={reset_frames},"
                        f"ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-",
                 "-f", "null", "-",
             ],
@@ -221,16 +228,24 @@ def detect_volume_spikes(filepath: str, window_sec: float = 0.5) -> list[dict]:
         )
         spikes = []
         lines = result.stdout.split("\n") if result.stdout else result.stderr.split("\n")
+        last_time = None
         prev_rms = -100.0
         for line in lines:
             time_match = re.search(r"pts_time:([\d.]+)", line)
-            rms_match = re.search(r"RMS_level=([-\d.]+)", line)
-            if time_match and rms_match:
-                t = float(time_match.group(1))
-                rms = float(rms_match.group(1))
+            rms_match = re.search(r"RMS_level=([-\d.]+(?:\.\d+)?)", line)
+            if time_match:
+                last_time = float(time_match.group(1))
+            if rms_match and last_time is not None:
+                try:
+                    rms = float(rms_match.group(1))
+                except ValueError:
+                    continue
+                if rms < -150:  # skip -inf / unmeasurable
+                    prev_rms = rms
+                    continue
                 # A spike = RMS jumps up by more than 6 dB from previous window
                 if rms - prev_rms > 6 and rms > -40:
-                    spikes.append({"time_sec": round(t, 2), "rms_db": round(rms, 1)})
+                    spikes.append({"time_sec": round(last_time, 2), "rms_db": round(rms, 1)})
                 prev_rms = rms
         return spikes
     except Exception:
@@ -506,9 +521,11 @@ def score_chapter(chapter_eval: ChapterEval, template_chapter: dict, scoring: di
 
     # ── 7. sfxAudibility (10%) — LUFS contrast ─────────────────
     # Are SFX events perceptibly louder than the ambient bed?
-    # Uses volume spikes detected in the mixed track (voice+soundscape) as proxy.
-    # Prefer mixed_file (post-normalization) over raw ambient_file.
-    sfx_source_file = chapter_eval.mixed_file if (chapter_eval.mixed_file and chapter_eval.mixed_file.exists) else chapter_eval.ambient_file
+    # Uses volume spikes detected in the soundscape track (_soundscape.ogg).
+    # We use the raw soundscape file (not mixed) because SFX contrast is
+    # meaningful against the ambient bed; voice in the mixed file masks spikes.
+    # LUFS normalization preserves dynamic range, so raw file contrast = mixed.
+    sfx_source_file = chapter_eval.ambient_file
     if (sfx_source_file and sfx_source_file.exists and
             sfx_source_file.volume_spikes):
         spike_rms_values = [s["rms_db"] for s in sfx_source_file.volume_spikes]
