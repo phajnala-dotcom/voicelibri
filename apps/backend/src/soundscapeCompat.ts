@@ -177,24 +177,46 @@ function normalizeTargetLanguage(raw?: string | null): string | null {
 // Scene Analysis Freeze (deterministic pipeline evaluation)
 // ========================================
 
+/** Root directory for frozen scene analysis files (survives audiobook folder deletion) */
+const FROZEN_SCENES_ROOT = path.join(path.resolve(__dirname, '..', '..', '..'), 'audiobooks', '.frozen_scenes');
+
 /**
- * Load a previously-saved scene analysis JSON from the audiobook folder.
+ * Load a previously-frozen scene analysis JSON.
  *
- * FREEZE MECHANISM: When scene_analysis_chapter_N.json exists on disk, it is
- * loaded verbatim instead of re-running the LLM. This eliminates
- * non-deterministic LLM outputs during pipeline tuning & gate evaluation.
+ * FREEZE MECHANISM: Frozen JSONs are stored in a SEPARATE directory
+ * (audiobooks/.frozen_scenes/{bookTitle}/) so they survive audiobook folder
+ * deletion during regeneration. This eliminates non-deterministic LLM
+ * outputs during pipeline tuning & gate evaluation.
  *
- * TO UNFREEZE: Delete the scene_analysis_chapter_*.json files from the
- * audiobook folder (or the entire audiobook folder) before regenerating.
- * This will be the normal workflow when we move to LLM prompt engineering.
+ * Lookup order:
+ *   1. audiobooks/.frozen_scenes/{bookTitle}/scene_analysis_chapter_N.json  (primary)
+ *   2. {bookDir}/scene_analysis_chapter_N.json  (legacy fallback)
+ *
+ * Use freezeCurrentScenes() to copy scene JSONs to the frozen location.
+ * Use unfreezeScenes() to remove them when ready for prompt engineering.
  *
  * @param bookDir      - Audiobook directory (e.g. audiobooks/title/)
  * @param chapterIndex - 1-based chapter index
- * @returns Parsed SceneAnalysis if JSON exists, null otherwise
+ * @returns Parsed SceneAnalysis if frozen JSON exists, null otherwise
  */
 function loadFrozenSceneAnalysis(bookDir: string, chapterIndex: number): SceneAnalysis | null {
-  const jsonPath = path.join(bookDir, `scene_analysis_chapter_${chapterIndex}.json`);
-  if (!fs.existsSync(jsonPath)) return null;
+  const bookTitle = path.basename(bookDir);
+  const frozenPath = path.join(FROZEN_SCENES_ROOT, bookTitle, `scene_analysis_chapter_${chapterIndex}.json`);
+  const legacyPath = path.join(bookDir, `scene_analysis_chapter_${chapterIndex}.json`);
+
+  // Try frozen location first, then legacy (in-bookDir) location
+  let jsonPath: string | null = null;
+  let source: string = '';
+  if (fs.existsSync(frozenPath)) {
+    jsonPath = frozenPath;
+    source = 'frozen';
+  } else if (fs.existsSync(legacyPath)) {
+    jsonPath = legacyPath;
+    source = 'legacy';
+  }
+
+  if (!jsonPath) return null;
+
   try {
     const data = JSON.parse(fs.readFileSync(jsonPath, 'utf-8')) as SceneAnalysis;
     // Sanity check: must have sceneSegments array
@@ -202,10 +224,126 @@ function loadFrozenSceneAnalysis(bookDir: string, chapterIndex: number): SceneAn
       console.warn(`  ⚠️ Frozen scene analysis invalid (no segments) — will re-run LLM`);
       return null;
     }
-    console.log(`  ❄️ Frozen scene analysis loaded: ${path.basename(jsonPath)} (${data.sceneSegments.length} segments, ${data.sfxEvents?.length ?? 0} SFX)`);
+    console.log(`  ❄️ Frozen scene analysis loaded [${source}]: ${path.basename(jsonPath)} (${data.sceneSegments.length} segments, ${data.sfxEvents?.length ?? 0} SFX)`);
     return data;
   } catch (err) {
     console.warn(`  ⚠️ Failed to load frozen scene analysis:`, err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+/**
+ * Freeze current scene analysis JSONs for a book.
+ *
+ * Copies all scene_analysis_chapter_N.json files from the audiobook folder
+ * to audiobooks/.frozen_scenes/{bookTitle}/ so they survive folder deletion.
+ *
+ * @param bookTitle - Book title (used as folder name)
+ * @param bookDir   - Audiobook directory containing scene_analysis_chapter_*.json files
+ * @returns Number of scene files frozen
+ */
+export function freezeCurrentScenes(bookTitle: string, bookDir: string): number {
+  const frozenDir = path.join(FROZEN_SCENES_ROOT, bookTitle);
+  fs.mkdirSync(frozenDir, { recursive: true });
+
+  const files = fs.readdirSync(bookDir).filter(f => /^scene_analysis_chapter_\d+\.json$/.test(f));
+  let count = 0;
+  for (const file of files) {
+    const src = path.join(bookDir, file);
+    const dst = path.join(frozenDir, file);
+    fs.copyFileSync(src, dst);
+    count++;
+    console.log(`  ❄️ Frozen: ${file} → .frozen_scenes/${bookTitle}/`);
+  }
+  console.log(`  ❄️ Total frozen: ${count} scene analysis file(s) for "${bookTitle}"`);
+  return count;
+}
+
+/**
+ * Unfreeze scene analysis JSONs for a book (delete the frozen copies).
+ *
+ * After unfreezing, the next regeneration will re-run the LLM for scene
+ * analysis, producing fresh (potentially different) results.
+ *
+ * @param bookTitle - Book title
+ * @returns Number of files removed
+ */
+export function unfreezeScenes(bookTitle: string): number {
+  const frozenDir = path.join(FROZEN_SCENES_ROOT, bookTitle);
+  if (!fs.existsSync(frozenDir)) {
+    console.log(`  ❄️ No frozen scenes found for "${bookTitle}"`);
+    return 0;
+  }
+
+  const files = fs.readdirSync(frozenDir).filter(f => f.endsWith('.json'));
+  for (const file of files) {
+    fs.unlinkSync(path.join(frozenDir, file));
+  }
+  // Remove directory if empty
+  try { fs.rmdirSync(frozenDir); } catch { /* ignore if not empty */ }
+
+  console.log(`  🔓 Unfrozen: ${files.length} scene analysis file(s) for "${bookTitle}"`);
+  return files.length;
+}
+
+/**
+ * List all books that have frozen scene analysis files.
+ * @returns Array of { bookTitle, chapterCount } objects
+ */
+export function listFrozenScenes(): Array<{ bookTitle: string; chapterCount: number }> {
+  if (!fs.existsSync(FROZEN_SCENES_ROOT)) return [];
+  const dirs = fs.readdirSync(FROZEN_SCENES_ROOT, { withFileTypes: true })
+    .filter(d => d.isDirectory());
+  return dirs.map(d => {
+    const files = fs.readdirSync(path.join(FROZEN_SCENES_ROOT, d.name))
+      .filter(f => /^scene_analysis_chapter_\d+\.json$/.test(f));
+    return { bookTitle: d.name, chapterCount: files.length };
+  }).filter(r => r.chapterCount > 0);
+}
+
+// ========================================
+// LUFS Measurement (EBU R128)
+// ========================================
+
+/**
+ * Measure the integrated LUFS (loudness) of an audio file using FFmpeg ebur128 filter.
+ *
+ * Uses: ffmpeg -i {file} -af ebur128 -f null -
+ * Parses stderr for "I:" (Integrated) line in the summary block.
+ *
+ * @param filePath - Path to the audio file (OGG, WAV, etc.)
+ * @returns Integrated LUFS value, or null if measurement failed
+ */
+async function measureLufs(filePath: string): Promise<number | null> {
+  try {
+    const result = await runFfmpeg([
+      '-i', filePath,
+      '-af', 'ebur128',
+      '-f', 'null', '-',
+    ]);
+
+    if (result.code !== 0) {
+      console.warn(`  ⚠️ LUFS measurement failed (exit ${result.code}): ${path.basename(filePath)}`);
+      return null;
+    }
+
+    // Parse the summary block — look for "I:" line with LUFS value
+    // Example: "    I:         -22.5 LUFS"
+    const match = result.stderr.match(/I:\s+([-\d.]+)\s+LUFS/);
+    if (!match) {
+      console.warn(`  ⚠️ LUFS: Could not parse integrated loudness from ebur128 output`);
+      return null;
+    }
+
+    const lufs = parseFloat(match[1]);
+    if (isNaN(lufs)) {
+      console.warn(`  ⚠️ LUFS: Parsed value is NaN`);
+      return null;
+    }
+
+    return lufs;
+  } catch (err) {
+    console.warn(`  ⚠️ LUFS measurement error:`, err instanceof Error ? err.message : err);
     return null;
   }
 }
@@ -626,17 +764,41 @@ export async function applySoundscapeToChapter(options: {
     }
   }
 
-  // ── Temporary: mix voice + ambient into single file for timing verification ──
+  // ── LUFS-normalized mix: voice + ambient into single file ──
+  // Target: ambient should be AMBIENT_LUFS_OFFSET_DB below voice (EBU R128)
+  const AMBIENT_LUFS_OFFSET_DB = -15; // ambient sits 15 dB below voice
   const finalAmbientPath = getAmbientTrackPath(options.chapterPath);
   if (fs.existsSync(finalAmbientPath) && fs.existsSync(options.chapterPath)) {
     const mixedPath = options.chapterPath.replace(/\.ogg$/i, '_mixed.ogg');
     try {
-      console.log(`  🔀 Mixing voice + ambient → ${path.basename(mixedPath)} (TEMP for timing check)`);
+      // Measure LUFS of both tracks
+      const [voiceLufs, ambientLufs] = await Promise.all([
+        measureLufs(options.chapterPath),
+        measureLufs(finalAmbientPath),
+      ]);
+
+      let volumeAdjustDb = 0;
+      if (voiceLufs !== null && ambientLufs !== null) {
+        // Current offset = ambientLufs - voiceLufs (negative means ambient is quieter)
+        const currentOffset = ambientLufs - voiceLufs;
+        // We want currentOffset + adjustment = AMBIENT_LUFS_OFFSET_DB
+        volumeAdjustDb = AMBIENT_LUFS_OFFSET_DB - currentOffset;
+        console.log(`  📏 LUFS: voice=${voiceLufs.toFixed(1)}, ambient=${ambientLufs.toFixed(1)}, offset=${currentOffset.toFixed(1)} dB, target=${AMBIENT_LUFS_OFFSET_DB} dB, adjust=${volumeAdjustDb.toFixed(1)} dB`);
+      } else {
+        console.warn(`  ⚠️ LUFS measurement failed (voice=${voiceLufs}, ambient=${ambientLufs}) — mixing without normalization`);
+      }
+
+      // Build filter: apply volume adjustment to ambient [1:a], then amix
+      const volumeFilter = volumeAdjustDb !== 0
+        ? `[1:a]volume=${volumeAdjustDb.toFixed(1)}dB[adj];[0:a][adj]amix=inputs=2:duration=longest:dropout_transition=2:normalize=0`
+        : `[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=2:normalize=0`;
+
+      console.log(`  🔀 Mixing voice + ambient → ${path.basename(mixedPath)} (LUFS-normalized, adjust=${volumeAdjustDb.toFixed(1)}dB)`);
       const mixResult = await runFfmpeg([
         '-i', options.chapterPath,
         '-i', finalAmbientPath,
         '-filter_complex',
-        '[0:a][1:a]amix=inputs=2:duration=longest:dropout_transition=2:normalize=0',
+        volumeFilter,
         '-ar', '48000',
         '-ac', '2',
         '-c:a', 'libopus',
