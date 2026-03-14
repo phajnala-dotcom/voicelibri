@@ -174,6 +174,43 @@ function normalizeTargetLanguage(raw?: string | null): string | null {
 }
 
 // ========================================
+// Scene Analysis Freeze (deterministic pipeline evaluation)
+// ========================================
+
+/**
+ * Load a previously-saved scene analysis JSON from the audiobook folder.
+ *
+ * FREEZE MECHANISM: When scene_analysis_chapter_N.json exists on disk, it is
+ * loaded verbatim instead of re-running the LLM. This eliminates
+ * non-deterministic LLM outputs during pipeline tuning & gate evaluation.
+ *
+ * TO UNFREEZE: Delete the scene_analysis_chapter_*.json files from the
+ * audiobook folder (or the entire audiobook folder) before regenerating.
+ * This will be the normal workflow when we move to LLM prompt engineering.
+ *
+ * @param bookDir      - Audiobook directory (e.g. audiobooks/title/)
+ * @param chapterIndex - 1-based chapter index
+ * @returns Parsed SceneAnalysis if JSON exists, null otherwise
+ */
+function loadFrozenSceneAnalysis(bookDir: string, chapterIndex: number): SceneAnalysis | null {
+  const jsonPath = path.join(bookDir, `scene_analysis_chapter_${chapterIndex}.json`);
+  if (!fs.existsSync(jsonPath)) return null;
+  try {
+    const data = JSON.parse(fs.readFileSync(jsonPath, 'utf-8')) as SceneAnalysis;
+    // Sanity check: must have sceneSegments array
+    if (!data.sceneSegments || !Array.isArray(data.sceneSegments) || data.sceneSegments.length === 0) {
+      console.warn(`  ⚠️ Frozen scene analysis invalid (no segments) — will re-run LLM`);
+      return null;
+    }
+    console.log(`  ❄️ Frozen scene analysis loaded: ${path.basename(jsonPath)} (${data.sceneSegments.length} segments, ${data.sfxEvents?.length ?? 0} SFX)`);
+    return data;
+  } catch (err) {
+    console.warn(`  ⚠️ Failed to load frozen scene analysis:`, err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+// ========================================
 // Alt 4: Early ambient bed cache
 // ========================================
 
@@ -338,15 +375,20 @@ export async function prepareEarlyAmbient(options: {
     } catch { /* ignore */ }
   }
 
-  // Scene analysis
+  // Scene analysis — use frozen JSON if available (deterministic evaluation)
   let scene: SceneAnalysis;
-  try {
-    console.log(`  🔊 Early ambient: Running scene analysis for chapter ${options.chapterIndex}...`);
-    scene = await analyzeChapterScene(options.chapterIndex, options.chapterText, bookInfo);
-    console.log(`  🔊 Early ambient: env="${scene.sceneSegments[0]?.environment ?? 'unknown'}" sfxEvents=${scene.sfxEvents.length}`);
-  } catch (llmErr) {
-    console.warn(`  🔊 Early ambient: LLM analysis failed, using fallback:`, llmErr instanceof Error ? llmErr.message : llmErr);
-    scene = buildFallbackScene(options.chapterIndex, options.chapterText, bookInfo);
+  const frozenScene = loadFrozenSceneAnalysis(bookDir, options.chapterIndex);
+  if (frozenScene) {
+    scene = frozenScene;
+  } else {
+    try {
+      console.log(`  🔊 Early ambient: Running scene analysis for chapter ${options.chapterIndex}...`);
+      scene = await analyzeChapterScene(options.chapterIndex, options.chapterText, bookInfo);
+      console.log(`  🔊 Early ambient: env="${scene.sceneSegments[0]?.environment ?? 'unknown'}" sfxEvents=${scene.sfxEvents.length}`);
+    } catch (llmErr) {
+      console.warn(`  🔊 Early ambient: LLM analysis failed, using fallback:`, llmErr instanceof Error ? llmErr.message : llmErr);
+      scene = buildFallbackScene(options.chapterIndex, options.chapterText, bookInfo);
+    }
   }
 
   // Resolve ambient assets for all scene segments
@@ -471,13 +513,19 @@ export async function applySoundscapeToChapter(options: {
         console.log(`  🔊 Ambient: Using cached scene analysis for chapter ${options.chapterIndex}`);
         scene = cached.scene;
       } else {
-        try {
-          console.log(`  🔊 Ambient: Running LLM scene analysis for chapter ${options.chapterIndex}...`);
-          scene = await analyzeChapterScene(options.chapterIndex, options.chapterText, bookInfo);
-          console.log(`  🔊 Ambient: env="${scene.sceneSegments[0]?.environment ?? 'unknown'}" sfxEvents=${scene.sfxEvents.length}`);
-        } catch (llmErr) {
-          console.warn(`  🔊 Ambient: LLM analysis failed, using fallback:`, llmErr instanceof Error ? llmErr.message : llmErr);
-          scene = buildFallbackScene(options.chapterIndex, options.chapterText, bookInfo);
+        // Try frozen scene analysis from disk first (deterministic evaluation)
+        const frozenScene = loadFrozenSceneAnalysis(bookDir, options.chapterIndex);
+        if (frozenScene) {
+          scene = frozenScene;
+        } else {
+          try {
+            console.log(`  🔊 Ambient: Running LLM scene analysis for chapter ${options.chapterIndex}...`);
+            scene = await analyzeChapterScene(options.chapterIndex, options.chapterText, bookInfo);
+            console.log(`  🔊 Ambient: env="${scene.sceneSegments[0]?.environment ?? 'unknown'}" sfxEvents=${scene.sfxEvents.length}`);
+          } catch (llmErr) {
+            console.warn(`  🔊 Ambient: LLM analysis failed, using fallback:`, llmErr instanceof Error ? llmErr.message : llmErr);
+            scene = buildFallbackScene(options.chapterIndex, options.chapterText, bookInfo);
+          }
         }
       }
 
