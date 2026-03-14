@@ -332,15 +332,18 @@ async function measureLufs(filePath: string): Promise<number | null> {
       return null;
     }
 
-    // Parse the summary block — look for "I:" line with LUFS value
-    // Example: "    I:         -22.5 LUFS"
-    const match = result.stderr.match(/I:\s+([-\d.]+)\s+LUFS/);
-    if (!match) {
+    // Parse the SUMMARY integrated LUFS — must be the LAST "I:" match.
+    // ebur128 outputs per-frame "I:" values (first one is often -70.0 for silence)
+    // followed by a Summary block with the true integrated loudness.
+    // We need the last match, not the first.
+    const allMatches = [...result.stderr.matchAll(/I:\s+([-\d.]+)\s+LUFS/g)];
+    if (allMatches.length === 0) {
       console.warn(`  ⚠️ LUFS: Could not parse integrated loudness from ebur128 output`);
       return null;
     }
+    const lastMatch = allMatches[allMatches.length - 1];
 
-    const lufs = parseFloat(match[1]);
+    const lufs = parseFloat(lastMatch[1]);
     if (isNaN(lufs)) {
       console.warn(`  ⚠️ LUFS: Parsed value is NaN`);
       return null;
