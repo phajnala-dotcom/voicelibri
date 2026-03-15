@@ -202,32 +202,22 @@ function findSentenceBoundaries(text: string): number[] {
 
 /**
  * Map a local character index within a subchunk to the midpoint of the
- * silence gap that follows the sentence containing that character.
+ * silence gap that immediately follows its proportional segment.
  *
- * Sentence-proportional algorithm:
- *   1. Split the subchunk text into sentences using punctuation boundaries.
- *   2. Determine which sentence the localCharIndex falls into.
- *   3. Compute the sentence's proportional position:
- *        proportion = (sentenceIndex + 1) / totalSentences
- *   4. Select the gap at that proportion of the total gap array:
- *        gapIndex = floor(proportion × gapCount)
- *   5. If proportion ≥ 1.0 (last sentence, no gap after) → null.
+ * Char-proportional algorithm:
+ *   - Divide the subchunk into N+1 equal-width proportional segments (N = gap count).
+ *   - Find which segment the event falls in using `localCharIndex / subchunkLength`.
+ *   - Return the midpointMs of the gap that follows that segment.
+ *   - If the event falls in the LAST segment (after all gaps) or there are no gaps → null.
+ *     Callers must skip SFX when null is returned.
  *
- * Why sentence-proportional, not char-proportional?
- *   TTS speaking rate varies: long descriptive sentences are spoken slower,
- *   short dialogue/action sentences faster. Char-proportional mapping
- *   drifts 5-13s because it assumes uniform chars-per-second.
- *   Sentence-proportional normalizes this: each sentence (regardless of
- *   length) is one spoken unit, giving a more uniform time mapping.
- *
- * Why not 1:1 sentence→gap?
- *   TTS produces gaps at commas, quotes, paragraph breaks etc — not just
- *   sentence endings. A subchunk with 10 sentences may have 30 gaps.
- *   1:1 mapping would compress all SFX into the first third of the audio.
+ * This approach is the best available without word-level TTS timestamps.
+ * It distributes timing error uniformly (~5-13s due to TTS rate variance)
+ * rather than concentrating errors at text edges.
  *
  * @param localCharIndex  - Position within the subchunk's plain text
- * @param subchunkText    - Full plain text of the subchunk (for sentence detection)
- * @param silenceGaps     - Detected silence gaps for this subchunk (ordered by time)
+ * @param subchunkText    - Full plain text of the subchunk
+ * @param silenceGaps     - Detected silence gaps for this subchunk (ordered)
  * @returns Millisecond offset for ffmpeg `adelay`, or null if no suitable gap
  */
 export function calculateSfxOffsetFromGaps(
@@ -237,41 +227,17 @@ export function calculateSfxOffsetFromGaps(
 ): number | null {
   if (silenceGaps.length === 0) return null;
 
-  const sentenceEnds = findSentenceBoundaries(subchunkText);
+  const subchunkCharCount = subchunkText.length;
+  const proportion = subchunkCharCount > 0 ? localCharIndex / subchunkCharCount : 0;
   const N = silenceGaps.length;
+  // N+1 equal segments of width 1/(N+1); segment index 0..N
+  const segmentWidth = 1 / (N + 1);
+  const segmentIndex = Math.floor(proportion / segmentWidth);
 
-  if (sentenceEnds.length === 0) {
-    // No sentence boundaries detected — entire text is one "sentence".
-    // Place at the first gap as a reasonable fallback.
-    return silenceGaps[0].midpointMs;
-  }
+  // If the event lands in the last segment (index N, after all gaps), no gap follows it
+  if (segmentIndex >= N) return null;
 
-  // Determine which sentence the localCharIndex falls into (0-based).
-  // Sentence 0: chars [0, sentenceEnds[0])
-  // Sentence 1: chars [sentenceEnds[0], sentenceEnds[1])
-  // ...
-  // Sentence S: chars [sentenceEnds[S-1], end-of-text)
-  let sentenceIndex = sentenceEnds.length; // default: after all boundaries
-  for (let i = 0; i < sentenceEnds.length; i++) {
-    if (localCharIndex < sentenceEnds[i]) {
-      sentenceIndex = i;
-      break;
-    }
-  }
-
-  // Map sentence position proportionally onto the gap array.
-  // Sentences divide text into (sentenceEnds.length + 1) spoken units.
-  // SFX should play in the gap AFTER the containing sentence finishes.
-  // proportion = (sentenceIndex + 1) / totalSentences → fraction of text spoken
-  // gapIndex = floor(proportion × N) → corresponding gap in time
-  const totalSentences = sentenceEnds.length + 1;
-  const proportion = (sentenceIndex + 1) / totalSentences;
-
-  // Last sentence — no gap after it
-  if (proportion >= 1.0) return null;
-
-  const gapIndex = Math.min(Math.floor(proportion * N), N - 1);
-  return silenceGaps[gapIndex].midpointMs;
+  return silenceGaps[segmentIndex].midpointMs;
 }
 
 // ========================================
