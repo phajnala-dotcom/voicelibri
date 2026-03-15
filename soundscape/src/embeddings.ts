@@ -136,9 +136,6 @@ export async function buildEmbeddingIndex(
 
       completed += batch.length;
       if (onProgress) onProgress(completed, items.length);
-
-      // Small delay to avoid rate limiting
-      await new Promise((r) => setTimeout(r, 50));
     }
   }
 
@@ -280,9 +277,6 @@ export async function searchEmbeddingsBatch(
 
       const [vector] = await embedTexts([item.text]);
       queryVectors.push({ idx: item.idx, vector });
-
-      // Small delay to avoid rate limiting
-      await new Promise((r) => setTimeout(r, 50));
     }
   }
 

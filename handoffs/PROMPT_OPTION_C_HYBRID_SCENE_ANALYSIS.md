@@ -47,13 +47,21 @@ Layer 1: DETERMINISTIC ANALYSIS (code + embedding API, 100% reproducible)
     → Min 2 segments for chapters > 2000 chars, max 6
     → Segment boundaries ARE ambience start/end points
 
-  Step 3: Ambient matching (embedding API, deterministic)
-    → Sliding window of 3-5 sentences → embed → match ambient catalog
-    → Best ambient asset per segment + environment label (from asset description)
-    → Both embedding vectors stored for reuse (no re-embedding)
+  Step 2b: Multi-scale embedding (embedding API, concurrent calls)
+    → Embed at 2 granularities: individual sentences (N) + consecutive 2-sentence pairs (N-1)
+    → Total texts: 2N-1, all processed via shared worker pool (concurrency=5)
+    → Vectors reused by BOTH Step 3 (ambient) and Step 4 (SFX)
+    → No redundant re-embedding; runs parallel to voice dramatization+TTS
 
-  Step 4: SFX matching (embedding API, deterministic)
-    → Embed each WHOLE SENTENCE → match SFX catalog
+  Step 3: Ambient matching (in-memory cosine, deterministic)
+    → Reuse embeddings from shared Step 2b
+    → Match BOTH individual sentences AND 2-sentence pairs against ambient catalog
+    → Best-scoring text (single or pair) per segment → determines ambient asset + environment label
+    → Multi-scale captures both single-sentence and multi-sentence scenery descriptions
+
+  Step 4: SFX matching (in-memory cosine, deterministic)
+    → Reuse individual sentence embeddings from Step 2b (NOT pairs)
+    → Match each sentence against SFX catalog (in-memory, <1ms each)
     → Keep SFX matches ≥ 0.72 threshold (max 1 SFX per sentence)
     → charIndex = sentence start offset (exact, from text splitting)
     → Multi-SFX sentences: embedding blends → dominant sound wins naturally
@@ -80,7 +88,7 @@ Every function the LLM performed has a deterministic replacement:
 |---|---|---|
 | Segment boundaries | Paragraph-break analysis (Layer 1, Step 2) | Structural, not semantic |
 | Environment labels | Top ambient asset description (Layer 1, Step 3) | Embedding match is direct |
-| Ambient asset matching | Sentence-window embedding vs catalog (Layer 1, Step 3) | `text-embedding-004` is multilingual — no translation needed |
+| Ambient asset matching | Per-sentence embedding vs catalog, best per segment (Layer 1, Step 3) | `text-embedding-004` is multilingual — no translation needed |
 | SFX identification | Whole sentence embedding vs SFX catalog (Layer 1, Step 4) | Cosine match finds sound-producing text; max 1 SFX per sentence |
 | SFX charIndex | Sentence char offset — known from splitting (Layer 1, Step 1) | Text position is structural data |
 | SFX query string | Eliminated — direct sentence embedding replaces it | No intermediary needed |
@@ -99,16 +107,26 @@ Fragment splitting (on `, and `, `, but `, `; `, etc.) was considered and reject
 
 **When it fails**: Sentences with 4+ sound references (*"Birds sang, rain fell, thunder crashed, and horses galloped"*) produce diffuse embeddings → score drops below threshold → no SFX. This is acceptable — adding noisy SFX to such dense sentences would be worse than silence.
 
-**3. Different Granularity for Ambient vs SFX**
+**3. Multi-Scale Embedding for Ambient, Sentence-Level for SFX**
 
-- **Ambient matching**: Wide context — sliding window of 3-5 consecutive sentences captures the environment described across multiple sentences
-- **SFX matching**: Sentence-level — each sentence is one SFX opportunity (max 1 SFX per sentence, dominant sound wins)
+Step 2b embeds texts at **two granularities** into ONE shared pool:
+- **Individual sentences** (N texts): Each sentence embedded separately (~80 chars avg)
+- **Consecutive 2-sentence pairs** (N-1 texts): Each pair of adjacent sentences concatenated and embedded (~160 chars avg)
+- **Total**: 2N-1 texts embedded via shared worker pool (concurrency=5)
 
-**4. Embedding Reuse**
+**Why multi-scale?** Catalog descriptions average ~139 chars. 77% are 1-sentence, but 22% are 2+ sentences (4,917 entries). Single sentences (~80 chars) capture specific sounds well but may miss broader scenery. 2-sentence pairs (~160 chars) better match multi-sentence catalog descriptions. Both granularities compete — best score wins.
 
-The current pipeline embeds twice: LLM generates searchSnippets → embed → match. The new pipeline embeds once: raw text fragments → embed → match both ambient and SFX catalogs directly. The multilingual embedding model (`text-embedding-004` / `gemini-embedding-001`) natively maps Czech/Slovak/English text to the same semantic space as English catalog descriptions.
+**Ambient matching**: Match BOTH individual sentences AND 2-sentence pairs against ambient catalog → best-scoring text per segment determines ambient asset. This captures both *"A fire crackled in the hearth."* (single) and *"The wind howled outside. Rain lashed against the glass."* (pair) equally well.
 
-**Net effect: ~2-5 seconds FASTER per chapter** (LLM call eliminated), **100% deterministic** (same input → always same output).
+**SFX matching**: Uses ONLY individual sentence embeddings — SFX assets are short, specific sounds that match single sentences. Pairs would dilute SFX signal.
+
+**4. Embedding Reuse & Early-Start Optimization**
+
+The current pipeline embeds twice: LLM generates searchSnippets → embed → match. The new pipeline embeds once: all texts (sentences + pairs) → embed (Step 2b) → match against both ambient and SFX catalogs via in-memory cosine. The multilingual embedding model (`gemini-embedding-001`) natively maps Czech/Slovak/English text to the same semantic space as English catalog descriptions.
+
+**Early-start optimization**: The entire Option C pipeline starts immediately after raw chapter text is available — **parallel to voice dramatization and TTS generation**. Since Option C operates on raw text (not dramatized text), it doesn't need to wait for the LLM dramatization step. The soundscape map is ready before the first voice subchunk finishes TTS.
+
+**Net effect**: LLM call eliminated, ~3-7s of embedding runs hidden behind the ~15-25s voice TTS pipeline. **100% deterministic** (same input → always same output). Zero added latency to user's time-to-first-listen.
 
 **5. Segment Boundaries = Ambience Boundaries**
 
@@ -138,11 +156,11 @@ soundscape/src/
 └── index.ts              # NO CHANGE (public API)
 
 apps/backend/src/
-├── soundscapeCompat.ts   # MODIFY: Wire new pipeline (replace analyzeChapterScene calls)
-└── index.ts              # NO CHANGE (orchestration unchanged)
+├── soundscapeCompat.ts   # MODIFY: Wire new pipeline, early-start before dramatization
+└── index.ts              # MODIFY: Move prepareEarlyAmbient() launch before dramatization
 
 NEW FILES:
-├── soundscape/src/textSplitter.ts              # Step 1: Sentence + fragment splitting
+├── soundscape/src/textSplitter.ts              # Step 1: Paragraph + sentence splitting
 ├── soundscape/src/deterministicAnalyzer.ts     # Steps 2-5: Full deterministic pipeline
 ├── soundscape/src/sceneValidator.ts            # Layer 2: Lightweight validation
 ```
@@ -159,7 +177,7 @@ NEW FILES:
 export interface TextSplitResult {
   /** All paragraphs with char offsets */
   paragraphs: Array<{ text: string; charIndex: number; charEnd: number }>;
-  /** All sentences with char offsets — used for both ambient windows and SFX matching */
+  /** All sentences with char offsets — used for both ambient matching and SFX matching */
   sentences: Array<{ text: string; charIndex: number; charEnd: number; paragraphIndex: number }>;
 }
 
@@ -216,6 +234,7 @@ export interface AnalyzerOptions {
  * Deterministic scene analysis — no LLM, 100% reproducible.
  * Produces a SceneAnalysis identical in interface to the LLM-based version.
  * SFX matching is sentence-level (max 1 SFX per sentence, dominant sound wins).
+ * Step 2b (embedding) is the only async operation — Steps 3-4 are in-memory cosine.
  */
 export async function analyzeSceneDeterministic(
   options: AnalyzerOptions
@@ -231,27 +250,37 @@ export async function analyzeSceneDeterministic(
    - Ensure no two segments share the same boundary (minimum 1 paragraph per segment)
 3. First segment always starts at charIndex 0
 
-**Step 3: Ambient matching** (async, uses embedding API):
+**Step 2b: Multi-scale embedding** (async, concurrent embedding API calls):
 
-1. For each segment, create an **ambient search window** by concatenating sentences within the segment's char range (use 3-5 consecutive sentences, or all sentences if fewer)
-2. Embed each window using `embedTexts()` (batch all segments together for efficiency)
-3. Match each window's embedding against the ambient index using `searchEmbeddingsWithVector()` — return top-5 candidates
-4. Select the best ambient asset per segment (highest cosine score ≥ `ambientThreshold`)
-5. Derive `environment` label: use the winning asset's description (truncate to first 60 chars if longer)
-6. Populate `searchSnippets` field: use the actual sentence texts from the window (for backward compatibility with existing code that reads searchSnippets)
-7. Store embedding vectors for reuse by asset resolver (avoids re-embedding)
+1. Collect all individual sentence texts from `splitResult.sentences` (N texts)
+2. Build consecutive 2-sentence pairs: for each sentence[i] and sentence[i+1] within the same paragraph, concatenate with space separator (N-1 texts)
+3. Call `embedTexts([...sentences, ...pairs])` — processes 2N-1 texts via shared worker pool (concurrency=5)
+4. Store the resulting vectors: first N vectors parallel to sentences, remaining N-1 vectors parallel to pairs
+5. **Ambient matching** (Step 3) uses BOTH sentence and pair vectors
+6. **SFX matching** (Step 4) uses ONLY individual sentence vectors
 
-**Step 4: SFX matching** (async, uses embedding API):
+**Cross-paragraph pairs**: Do NOT create pairs that span paragraph boundaries — they would blend unrelated scenes.
 
-1. Embed all sentences from `splitResult.sentences` using `embedTexts()` (batched, concurrent)
-2. Match each sentence's embedding against the SFX index using `searchEmbeddingsWithVector()` — return top-1 best candidate per sentence
-3. Filter: keep only matches where `score >= sfxThreshold` (default 0.72)
-4. For each qualifying match, create an `SfxEvent`:
+**Step 3: Ambient matching** (sync, in-memory cosine):
+
+1. For each segment, identify which sentences AND 2-sentence pairs fall within that segment's char range
+2. For each text (sentence or pair), match its pre-computed embedding vector against the ambient index using `searchEmbeddingsWithVector()` — top-1 result per text
+3. The **best-scoring text** (sentence or pair) across the segment determines the ambient asset:
+   - `environment` label: the winning ambient asset's description (truncate to first 60 chars if longer)
+   - `searchSnippets` field: the winning text's content (for backward compatibility with `resolveSceneSegmentAssets()` which re-embeds searchSnippets)
+4. Store the winning text's embedding vector for reuse by `resolveAmbientAssetFromVector()` (avoids re-embedding)
+5. If no text in the segment scores ≥ `ambientThreshold` (0.65): use the highest-scoring one anyway (every segment needs ambient — silence is worse than a weak match)
+
+**Step 4: SFX matching** (sync, in-memory cosine — reuses embeddings from Step 2b):
+
+1. For each sentence, match its pre-computed embedding vector against the SFX index using `searchEmbeddingsWithVector()` — top-1 result per sentence
+2. Filter: keep only matches where `score >= sfxThreshold` (default 0.72)
+3. For each qualifying match, create an `SfxEvent`:
    - `query`: the sentence's raw text (used for downstream SFX asset resolution via `resolveSfxEvents()`)
    - `charIndex`: the sentence's `charIndex` (exact, from text splitting)
    - `description`: the matching SFX asset's description
-5. **Max 1 SFX per sentence** — multi-SFX sentences produce a blended embedding that naturally picks the dominant sound. This is by design: rapid successive SFX within one sentence sounds artificial.
-6. **Threshold retry**: if total `sfxEvents.length < minSfxCount`, lower threshold from 0.72 to 0.65 and re-filter (same embeddings, no re-computation)
+4. **Max 1 SFX per sentence** — multi-SFX sentences produce a blended embedding that naturally picks the dominant sound. This is by design: rapid successive SFX within one sentence sounds artificial.
+5. **Threshold retry**: if total `sfxEvents.length < minSfxCount`, lower threshold from 0.72 to 0.65 and re-filter (same embeddings, no re-computation)
 
 **Step 5: Assemble SceneAnalysis** (sync):
 
@@ -335,16 +364,19 @@ This uses `searchEmbeddingsWithVector()` (already exists in `embeddings.ts`) —
 
 **`resolveAmbientAsset()` (existing)**: Keep unchanged — used when embedding vector is not pre-computed.
 
-**`resolveSfxEvents()` (existing)**: The `query` field will contain raw sentence text instead of LLM-generated English queries. The multilingual embedding model handles this natively. **The function itself needs no code change** — it embeds the query strings and matches against the SFX index. The only difference is the input strings are raw sentences instead of LLM-generated English snippets.
+**`resolveSfxEvents()` (existing)**: The `query` field will contain raw sentence text instead of LLM-generated English queries. The multilingual embedding model handles this natively. **The function itself needs no code change** — it embeds the query strings and matches against the SFX index. Note: `resolveSfxEvents()` internally re-embeds `query` via `searchEmbeddingsBatch()` — this is a second embedding of the same text (first in Step 2b, second here). This redundancy is acceptable (<50ms per sentence, <5 sentences typically qualify as SFX) and avoids changing the `SfxEvent` interface to carry pre-computed vectors.
 
 ### MODIFIED FILE: `soundscape/src/embeddings.ts`
 
-**One change**: Export `embedTexts()` which is currently private:
+**Changes**:
 
+1. Export `embedTexts()` which is currently private:
 ```typescript
 // Currently: async function embedTexts(texts: string[]): Promise<number[][]>
 // Change to: export async function embedTexts(texts: string[]): Promise<number[][]>
 ```
+
+2. ✅ **Already done**: Removed hardcoded 50ms rate-limiting delays from both `buildEmbeddingIndex()` and `searchEmbeddingsBatch()` worker loops. With measured API latency of ~467ms per call, the artificial delays were unnecessary — `EMBEDDING_CONCURRENCY=5` already caps parallelism.
 
 No other changes. All other functions already have the right exports.
 
@@ -361,21 +393,42 @@ The `SceneAnalysis` interface is **NOT changed**. The new pipeline produces iden
 loadFrozenSceneAnalysis() || analyzeChapterScene() → resolveSceneSegmentAssets() → ambient/SFX
 ```
 
-**New flow:**
+**New flow (early-start — parallel to dramatization+TTS):**
 ```
 loadFrozenSceneAnalysis() || {
   splitText()                      → Step 1 (sync, <1ms)
-  analyzeSceneDeterministic()      → Steps 2-5 (async, ~600ms embedding calls)
+  analyzeSceneDeterministic()      → Steps 2-5 (async, ~3-7s embedding calls)
   validateScene()                  → Layer 2 (sync, <1ms)
 } → resolveAmbientAssetFromVector() + resolveSfxEvents() → ambient/SFX
+```
+
+**Early-start optimization**: The Option C pipeline (`prepareEarlyAmbient`) is launched as fire-and-forget immediately after raw chapter text is available — **before** voice dramatization starts. Since Option C operates on raw (undramatized) text, it doesn't depend on the dramatization LLM output. This means the entire soundscape map computation runs hidden behind the voice pipeline:
+
+```
+  Chapter text ready
+       │
+       ├──► Option C pipeline (fire-and-forget)     ← STARTS HERE (parallel)
+       │      splitText() → embed 2N-1 texts → match → SceneAnalysis
+       │      Total: ~3-7s (hidden behind voice pipeline)
+       │
+       ├──► Voice dramatization (LLM)               ← ALSO STARTS HERE
+       │      ~2-5s
+       │      │
+       │      └──► chunkForTwoSpeakers() → TTS generation
+       │             subchunk[0]: ~5s (first-listen gate)
+       │             subchunk[1..N]: batches of 3 × ~5s
+       │             Total voice: ~15-25s
+       │
+       └──► Option C result ready (~3-7s)  ✓ DONE before first subchunk
 ```
 
 **Key changes:**
 1. Import new modules: `splitText`, `analyzeSceneDeterministic`, `validateScene`
 2. Replace `analyzeChapterScene()` calls with the new pipeline
-3. Pass pre-computed embedding vectors to asset resolution
-4. Keep `loadFrozenSceneAnalysis()` unchanged (G1-A freeze still works — bypasses entire pipeline)
-5. Keep `buildFallbackScene()` as ultimate fallback (existing, no LLM)
+3. Move `prepareEarlyAmbient()` launch point earlier — right after raw text extraction, before dramatization
+4. Pass pre-computed embedding vectors to asset resolution
+5. Keep `loadFrozenSceneAnalysis()` unchanged (G1-A freeze still works — bypasses entire pipeline)
+6. Keep `buildFallbackScene()` as ultimate fallback (existing, no LLM)
 
 The `intensity` field is now fixed at 0.7, so the volume adjustment `0 - (1 - 0.7) * 3 = -0.9 dB` is effectively constant. The LUFS normalization (G1-B) handles real volume balancing.
 
@@ -419,7 +472,7 @@ Use existing `scripts/soundscape_eval/evaluate.py` — the 7-criteria eval syste
 - `ambientOccurrence` — should **IMPROVE** (deterministic segment count ≥ 2, no more 1-segment chapters)
 - `sfxOccurrence` — should **IMPROVE** (minSfxCount floor ≥ 3, no more 0-SFX chapters)
 - `ambientSimilarity` — should be **COMPARABLE or BETTER** (direct text→catalog embedding vs LLM intermediary)
-- `sfxSimilarity` — **key metric to watch**: raw text fragments vs LLM-generated English queries. May be slightly different. The multilingual embedding model should handle this well.
+- `sfxSimilarity` — **key metric to watch**: raw sentences vs LLM-generated English queries. May be slightly different. The multilingual embedding model should handle this well.
 - `ambientCoverage` — unchanged (depends on FFmpeg mixing duration, not scene analysis)
 - `ambientVolume` — unchanged (depends on LUFS normalization, not scene analysis)
 - `sfxAudibility` — unchanged (depends on mixing spike detection, not scene analysis)
@@ -460,8 +513,9 @@ Use existing `scripts/soundscape_eval/evaluate.py` — the 7-criteria eval syste
 
 ### Embedding infrastructure (DO NOT REBUILD — reuse):
 - `embeddings.ts`: `embedTexts()` (MAKE PUBLIC), `searchEmbeddingsWithVector()`, `searchEmbeddingsBatch()`, `buildEmbeddingIndex()`, `cosineSimilarity()` (private)
-- Config: `EMBEDDING_MODEL = 'gemini-embedding-001'`, `EMBEDDING_DIMENSIONS = 768`, `EMBEDDING_BATCH_SIZE = 1`, `EMBEDDING_CONCURRENCY = 5`
-- Pre-built indexes on disk: `soundscape/assets/ambient_embeddings.json`, `sfx_embeddings.json`
+- Config: `EMBEDDING_MODEL = 'gemini-embedding-001'`, `EMBEDDING_DIMENSIONS = 768`, `EMBEDDING_BATCH_SIZE = 1` (API only supports 1 text per request), `EMBEDDING_CONCURRENCY = 5`
+- Pre-built indexes on disk: `soundscape/assets/ambient_embeddings.json` (22,457 entries), `sfx_embeddings.json` (2,596 entries)
+- ✅ Hardcoded 50ms worker-loop delays removed (unnecessary with ~467ms natural API latency)
 
 ### LLM infrastructure (DEPRECATED for scene analysis):
 - `llmDirector.ts`: `analyzeChapterScene()` — no longer called from main pipeline
@@ -470,6 +524,7 @@ Use existing `scripts/soundscape_eval/evaluate.py` — the 7-criteria eval syste
 
 ### Pipeline integration (MODIFY — rewire):
 - `soundscapeCompat.ts`: `prepareEarlyAmbient()` calls `analyzeChapterScene()` → replace with `analyzeSceneDeterministic()`
+- `soundscapeCompat.ts`: Move `prepareEarlyAmbient()` launch point to fire immediately after raw chapter text is available — **before** voice dramatization — since Option C operates on raw text
 - `soundscapeCompat.ts`: `applySoundscapeToChapter()` checks `earlyAmbientCache` → same, but fallback uses new pipeline
 - `soundscapeCompat.ts`: `loadFrozenSceneAnalysis()` — UNCHANGED (G1-A freeze still works)
 
@@ -485,6 +540,72 @@ Use existing `scripts/soundscape_eval/evaluate.py` — the 7-criteria eval syste
 - `scripts/soundscape_eval/ideal_template.json` — expected segment/SFX counts
 - `scripts/soundscape_eval/evaluate.py` — 7-criteria evaluation
 - `scripts/soundscape_eval/tracking.csv` — historical gate results (baseline: 61.8)
+
+---
+
+## Measured Benchmark Data
+
+### Embedding API (gemini-embedding-001)
+
+| Metric | Value |
+|--------|-------|
+| Sequential avg (10 calls) | **467ms** per call (range 276–697ms, bimodal ~300ms/~620ms) |
+| Concurrent 5-at-once Round 1 | **1032ms** (connection setup, warm-up) |
+| Concurrent 5-at-once Round 2+ | **~304ms** (HTTP keep-alive) |
+| Warm-up (first call ever) | 1020ms |
+| API quota | 5,000,000 tokens/min/region (token-based, no RPM limit) |
+| Batch support | **1 text per request** only (EMBEDDING_BATCH_SIZE=1) |
+
+### TTS API (gemini-2.5-flash-tts)
+
+| Metric | Value |
+|--------|-------|
+| Sequential avg (10 calls, ~50 char texts) | **4,827ms** per call |
+| Concurrent 3-at-once per round | **~5,200ms** per round |
+| Real subchunk (~2000 chars) | **~5-8s** estimated |
+| Pipeline concurrency | 3 (interactive path) |
+
+### Latency Projections for Typical Chapters
+
+Test story chapters: ~24 sentences, ~2000 chars.
+Multi-scale total: 2N-1 = ~47 texts to embed.
+
+| Strategy | API calls | Rounds@5 | Conservative (668ms/rnd) | Optimistic (1032+304ms) |
+|----------|-----------|----------|--------------------------|-------------------------|
+| Sentences-only | 24 | 5 | 3.3s | 2.2s |
+| **Multi-scale** (chosen) | **47** | **10** | **6.7s** | **3.8s** |
+| Old LLM pipeline | 1 call | — | 2–5s | 2–5s |
+
+### Bottleneck Analysis: Option C is NOT the bottleneck
+
+```
+Timeline for typical chapter:
+
+  0s        3s        5s        10s       15s       20s
+  │─────────│─────────│─────────│─────────│─────────│
+  ├── Option C (3.8-6.7s) ──────┤
+  ├── Voice dramatization (2-5s) ──┤
+  │                                ├── TTS subchunk[0] (~5s) ──┤
+  │                                │                            ├── TTS [1..N] ──── ...
+  │                                │                            │
+  │                          FIRST LISTEN ◄─────────────────────┘ (~10-12s from start)
+  │
+  └── Option C done (~4-7s) ✓  Hidden behind voice pipeline
+```
+
+Voice TTS is **10× slower** per API call than embedding. Option C completes its entire soundscape map (~47 embedding calls) in less time than a single TTS subchunk takes. With the early-start optimization (launching Option C before dramatization), the soundscape map is ready long before any voice audio exists.
+
+## Future Optimization Levers (if needed — not implemented now)
+
+The following optimizations are available if real-world usage reveals bottlenecks with very long chapters (60+ sentences, 5000+ chars). **None are needed for typical chapters.**
+
+1. **Increase embedding concurrency to 10+**: Google's quota is token-based (5M tokens/min), with **no RPM limit** per official docs. Concurrency can safely increase from 5 to 10 or 20. This would halve the number of rounds and cut embedding time proportionally. Change: single constant in `config.ts` (`EMBEDDING_CONCURRENCY`).
+
+2. **Pre-pipeline embeddings before dramatization**: Currently Step 1 (text splitting) runs after chapter text is extracted. It could run even earlier — during book upload processing — to pre-compute all sentence embeddings before any chapter generation begins. This front-loads the entire embedding cost.
+
+3. **Embedding result caching**: Since the pipeline is deterministic, embedding vectors for a given chapter text never change. Cache them to disk alongside the book. On re-generation, skip Step 2b entirely if cached vectors exist.
+
+4. **Reduce multi-scale scope**: If 2-sentence pairs prove to not significantly improve ambient matching quality (verified via eval scores), drop back to sentences-only — halves the embedding count from 2N-1 to N.
 
 ---
 
