@@ -68,6 +68,7 @@ export {
   searchEmbeddings,
   searchEmbeddingsBatch,
   searchEmbeddingsWithVector,
+  embedTexts,
   getAmbientIndex,
   setAmbientIndex,
   getMusicIndex,
@@ -103,6 +104,7 @@ export {
   ensureAmbientEmbeddingIndex,
   ensureSfxEmbeddingIndex,
   resolveAmbientAsset,
+  resolveAmbientAssetFromVector,
   resolveSfxEvents,
   resolveSceneSegmentAssets,
   resolveAllChapterAssets,
@@ -137,4 +139,16 @@ export type {
   MappedSfxEvent,
   PlacedSfxEvent,
 } from './subchunkSoundscape.js';
+
+// Deterministic text splitter (Option C)
+export { splitText } from './textSplitter.js';
+export type { TextSplitResult, ParagraphInfo, SentenceInfo } from './textSplitter.js';
+
+// Deterministic scene analyzer (Option C)
+export { analyzeSceneDeterministic } from './deterministicAnalyzer.js';
+export type { AnalyzerOptions } from './deterministicAnalyzer.js';
+
+// Scene validator (Option C)
+export { validateScene } from './sceneValidator.js';
+export type { ValidationResult } from './sceneValidator.js';
 

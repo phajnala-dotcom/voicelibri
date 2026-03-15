@@ -24,6 +24,7 @@ import {
   getSfxIndex,
   setSfxIndex,
   searchEmbeddingsBatch,
+  searchEmbeddingsWithVector,
 } from './embeddings.js';
 import type {
   SoundAsset,
@@ -191,6 +192,90 @@ export async function resolveAmbientAsset(
         );
         bestCandidate = candidate;
         break; // take the first (highest-scored) longer candidate
+      }
+    }
+  }
+
+  return { asset: bestCandidate.asset, score: bestCandidate.score };
+}
+
+/**
+ * Resolve the best matching ambient asset using a pre-computed embedding vector.
+ * Avoids re-embedding — uses the vector already computed by deterministicAnalyzer.
+ *
+ * Prefers longer-duration assets among top candidates (within score delta ≤0.02)
+ * to reduce audible looping, same strategy as resolveAmbientAsset().
+ *
+ * @param embeddingVector - Pre-computed embedding vector for the segment text
+ * @param logContext - Human-readable label for log messages
+ * @param topK - Candidates to consider
+ * @returns Best matching SoundAsset with score, or null if nothing suitable
+ */
+export async function resolveAmbientAssetFromVector(
+  embeddingVector: number[],
+  logContext: string = 'unknown',
+  topK: number = 5
+): Promise<{ asset: SoundAsset; score: number } | null> {
+  const index = await ensureAmbientEmbeddingIndex();
+  const catalog = loadCatalog();
+
+  // Pure in-memory cosine similarity, no API calls, <1ms
+  const results = searchEmbeddingsWithVector(index, embeddingVector, topK);
+
+  if (results.length === 0) {
+    console.warn(`⚠️ No ambient matches for ${logContext}`);
+    return null;
+  }
+
+  // Same duration-aware preference logic as resolveAmbientAsset()
+  const SCORE_DELTA = 0.02;
+  const DURATION_FACTOR = 1.5;
+
+  type RankedCandidate = { asset: SoundAsset; score: number };
+  let bestCandidate: RankedCandidate | null = null;
+  const topCandidates: RankedCandidate[] = [];
+
+  for (const result of results) {
+    const asset = catalog.find((a) => a.id === result.id);
+    if (!asset) continue;
+
+    if (!fs.existsSync(asset.filePath)) {
+      console.warn(`⚠️ Asset file missing: ${asset.filePath}`);
+      continue;
+    }
+
+    if (!bestCandidate) {
+      bestCandidate = { asset, score: result.score };
+      topCandidates.push(bestCandidate);
+      continue;
+    }
+
+    if (bestCandidate.score - result.score <= SCORE_DELTA) {
+      topCandidates.push({ asset, score: result.score });
+    } else {
+      break;
+    }
+  }
+
+  if (!bestCandidate) {
+    console.warn(`⚠️ All matched assets have missing files for ${logContext}`);
+    return null;
+  }
+
+  // Among top candidates, prefer the longest one to reduce looping
+  if (topCandidates.length > 1) {
+    const bestDuration = bestCandidate.asset.durationSec ?? 0;
+    for (const candidate of topCandidates) {
+      const candidateDuration = candidate.asset.durationSec ?? 0;
+      if (candidateDuration >= bestDuration * DURATION_FACTOR) {
+        console.log(
+          `🔄 Duration preference: swapping "${bestCandidate.asset.description.substring(0, 50)}" ` +
+          `(${bestDuration.toFixed(0)}s, score=${bestCandidate.score.toFixed(3)}) → ` +
+          `"${candidate.asset.description.substring(0, 50)}" ` +
+          `(${candidateDuration.toFixed(0)}s, score=${candidate.score.toFixed(3)})`
+        );
+        bestCandidate = candidate;
+        break;
       }
     }
   }

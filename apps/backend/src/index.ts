@@ -63,7 +63,7 @@ import {
   deleteAudiobook,
   type AudiobookMetadata,
 } from './audiobookManager.js';
-import { resolveChapterAudioPath, getAmbientAudioPath, getIntroAudioPath, applySoundscapeToChapter, startEarlyIntroGeneration, prepareEarlyAmbient, freezeCurrentScenes, unfreezeScenes, listFrozenScenes } from './soundscapeCompat.js';
+import { resolveChapterAudioPath, getAmbientAudioPath, getIntroAudioPath, applySoundscapeToChapter, startEarlyIntroGeneration, prepareEarlyAmbient } from './soundscapeCompat.js';
 import { 
   extractEpubChapters, 
   detectTextChapters, 
@@ -3198,61 +3198,6 @@ app.get('/api/audiobooks/:bookTitle/soundscape/themes', (_req: Request, res: Res
     error: 'Gone',
     message: 'Soundscape theme picker has been removed. Scene environments are now detected automatically by the LLM Director.',
   });
-});
-
-// ========================================
-// SCENE ANALYSIS FREEZE ENDPOINTS
-// ========================================
-
-/**
- * Freeze current scene analysis JSONs for a book.
- * Copies scene_analysis_chapter_N.json files to audiobooks/.frozen_scenes/{bookTitle}/
- * so they survive audiobook folder deletion during regeneration.
- *
- * POST /api/soundscape/freeze/:bookTitle
- */
-app.post('/api/soundscape/freeze/:bookTitle', (req: Request, res: Response) => {
-  const { bookTitle } = req.params;
-  const bookDir = path.join(getAudiobooksDir(), bookTitle);
-  if (!fs.existsSync(bookDir)) {
-    return res.status(404).json({ error: 'NOT_FOUND', message: `Audiobook folder not found: ${bookTitle}` });
-  }
-  try {
-    const count = freezeCurrentScenes(bookTitle, bookDir);
-    return res.json({ success: true, bookTitle, frozenCount: count });
-  } catch (err) {
-    return res.status(500).json({ error: 'FREEZE_FAILED', message: err instanceof Error ? err.message : String(err) });
-  }
-});
-
-/**
- * Unfreeze scene analysis JSONs for a book (delete frozen copies).
- * Next regeneration will re-run LLM for scene analysis.
- *
- * DELETE /api/soundscape/freeze/:bookTitle
- */
-app.delete('/api/soundscape/freeze/:bookTitle', (req: Request, res: Response) => {
-  const { bookTitle } = req.params;
-  try {
-    const count = unfreezeScenes(bookTitle);
-    return res.json({ success: true, bookTitle, unfrozenCount: count });
-  } catch (err) {
-    return res.status(500).json({ error: 'UNFREEZE_FAILED', message: err instanceof Error ? err.message : String(err) });
-  }
-});
-
-/**
- * List all books with frozen scene analysis files.
- *
- * GET /api/soundscape/freeze
- */
-app.get('/api/soundscape/freeze', (_req: Request, res: Response) => {
-  try {
-    const frozen = listFrozenScenes();
-    return res.json({ frozen });
-  } catch (err) {
-    return res.status(500).json({ error: 'LIST_FAILED', message: err instanceof Error ? err.message : String(err) });
-  }
 });
 
 // ========================================

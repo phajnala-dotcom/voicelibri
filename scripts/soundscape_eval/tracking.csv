@@ -8,3 +8,4 @@ timestamp,audiobook_dir,gate,attempt,total_score,grade,ch1_score,ch1_grade,ch2_s
 2026-03-14T22:37:12.510052,soundscape_test_story,1,1,44.1,E,56.4,E,31.9,F,66.7,45.5,81.2,38.5,62.6,0.0,0.0,"P1-P4: amix normalize, bed duration, SFX threshold 0.72, early bed safety"
 2026-03-14T23:05:27.504922,soundscape_test_story,1,1,59.0,E,71.1,C,46.9,E,66.7,45.5,81.2,38.5,61.7,100.0,0.0,"P1-P4: amix normalize, bed duration, SFX threshold 0.72, early bed safety"
 2026-03-14T23:11:45.780224,soundscape_test_story,,0,61.8,D,76.8,C,46.9,E,66.7,45.5,81.2,38.5,61.7,100.0,28.5,
+2026-03-15T13:24:20.028902,soundscape_test_story,1,1,65.4,D,65.4,D,65.4,D,29.1,50.0,81.3,75.4,100.0,100.0,0.0,"P1-P4: amix normalize, bed duration, SFX threshold 0.72, early bed safety"

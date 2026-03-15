@@ -54,8 +54,12 @@ import {
   groupMappedEventsBySubchunk,
   buildPlacedSfxEvents,
   calculateSfxOffsetFromGaps,
+  splitText,
+  analyzeSceneDeterministic,
+  ensureAmbientEmbeddingIndex,
+  ensureSfxEmbeddingIndex,
 } from '../../../soundscape/src/index.js';
-import type { SoundscapePreferences, BookInfo, SceneAnalysis, SceneSegment, SoundAsset } from '../../../soundscape/src/index.js';
+import type { SoundscapePreferences, BookInfo, SceneAnalysis, SceneSegment, SoundAsset, EmbeddingIndex } from '../../../soundscape/src/index.js';
 
 import { synthesizeText } from './ttsClient.js';
 import { loadAudiobookMetadata, getSubChunkPath } from './audiobookManager.js';
@@ -176,134 +180,6 @@ function normalizeTargetLanguage(raw?: string | null): string | null {
     es: 'es-ES', uk: 'uk-UA',
   };
   return map[trimmed.toLowerCase()] ?? trimmed;
-}
-
-// ========================================
-// Scene Analysis Freeze (deterministic pipeline evaluation)
-// ========================================
-
-/** Root directory for frozen scene analysis files (survives audiobook folder deletion) */
-const FROZEN_SCENES_ROOT = path.join(path.resolve(__dirname, '..', '..', '..'), 'audiobooks', '.frozen_scenes');
-
-/**
- * Load a previously-frozen scene analysis JSON.
- *
- * FREEZE MECHANISM: Frozen JSONs are stored in a SEPARATE directory
- * (audiobooks/.frozen_scenes/{bookTitle}/) so they survive audiobook folder
- * deletion during regeneration. This eliminates non-deterministic LLM
- * outputs during pipeline tuning & gate evaluation.
- *
- * Lookup order:
- *   1. audiobooks/.frozen_scenes/{bookTitle}/scene_analysis_chapter_N.json  (primary)
- *   2. {bookDir}/scene_analysis_chapter_N.json  (legacy fallback)
- *
- * Use freezeCurrentScenes() to copy scene JSONs to the frozen location.
- * Use unfreezeScenes() to remove them when ready for prompt engineering.
- *
- * @param bookDir      - Audiobook directory (e.g. audiobooks/title/)
- * @param chapterIndex - 1-based chapter index
- * @returns Parsed SceneAnalysis if frozen JSON exists, null otherwise
- */
-function loadFrozenSceneAnalysis(bookDir: string, chapterIndex: number): SceneAnalysis | null {
-  const bookTitle = path.basename(bookDir);
-  const frozenPath = path.join(FROZEN_SCENES_ROOT, bookTitle, `scene_analysis_chapter_${chapterIndex}.json`);
-  const legacyPath = path.join(bookDir, `scene_analysis_chapter_${chapterIndex}.json`);
-
-  // Try frozen location first, then legacy (in-bookDir) location
-  let jsonPath: string | null = null;
-  let source: string = '';
-  if (fs.existsSync(frozenPath)) {
-    jsonPath = frozenPath;
-    source = 'frozen';
-  } else if (fs.existsSync(legacyPath)) {
-    jsonPath = legacyPath;
-    source = 'legacy';
-  }
-
-  if (!jsonPath) return null;
-
-  try {
-    const data = JSON.parse(fs.readFileSync(jsonPath, 'utf-8')) as SceneAnalysis;
-    // Sanity check: must have sceneSegments array
-    if (!data.sceneSegments || !Array.isArray(data.sceneSegments) || data.sceneSegments.length === 0) {
-      console.warn(`  ⚠️ Frozen scene analysis invalid (no segments) — will re-run LLM`);
-      return null;
-    }
-    console.log(`  ❄️ Frozen scene analysis loaded [${source}]: ${path.basename(jsonPath)} (${data.sceneSegments.length} segments, ${data.sfxEvents?.length ?? 0} SFX)`);
-    return data;
-  } catch (err) {
-    console.warn(`  ⚠️ Failed to load frozen scene analysis:`, err instanceof Error ? err.message : err);
-    return null;
-  }
-}
-
-/**
- * Freeze current scene analysis JSONs for a book.
- *
- * Copies all scene_analysis_chapter_N.json files from the audiobook folder
- * to audiobooks/.frozen_scenes/{bookTitle}/ so they survive folder deletion.
- *
- * @param bookTitle - Book title (used as folder name)
- * @param bookDir   - Audiobook directory containing scene_analysis_chapter_*.json files
- * @returns Number of scene files frozen
- */
-export function freezeCurrentScenes(bookTitle: string, bookDir: string): number {
-  const frozenDir = path.join(FROZEN_SCENES_ROOT, bookTitle);
-  fs.mkdirSync(frozenDir, { recursive: true });
-
-  const files = fs.readdirSync(bookDir).filter(f => /^scene_analysis_chapter_\d+\.json$/.test(f));
-  let count = 0;
-  for (const file of files) {
-    const src = path.join(bookDir, file);
-    const dst = path.join(frozenDir, file);
-    fs.copyFileSync(src, dst);
-    count++;
-    console.log(`  ❄️ Frozen: ${file} → .frozen_scenes/${bookTitle}/`);
-  }
-  console.log(`  ❄️ Total frozen: ${count} scene analysis file(s) for "${bookTitle}"`);
-  return count;
-}
-
-/**
- * Unfreeze scene analysis JSONs for a book (delete the frozen copies).
- *
- * After unfreezing, the next regeneration will re-run the LLM for scene
- * analysis, producing fresh (potentially different) results.
- *
- * @param bookTitle - Book title
- * @returns Number of files removed
- */
-export function unfreezeScenes(bookTitle: string): number {
-  const frozenDir = path.join(FROZEN_SCENES_ROOT, bookTitle);
-  if (!fs.existsSync(frozenDir)) {
-    console.log(`  ❄️ No frozen scenes found for "${bookTitle}"`);
-    return 0;
-  }
-
-  const files = fs.readdirSync(frozenDir).filter(f => f.endsWith('.json'));
-  for (const file of files) {
-    fs.unlinkSync(path.join(frozenDir, file));
-  }
-  // Remove directory if empty
-  try { fs.rmdirSync(frozenDir); } catch { /* ignore if not empty */ }
-
-  console.log(`  🔓 Unfrozen: ${files.length} scene analysis file(s) for "${bookTitle}"`);
-  return files.length;
-}
-
-/**
- * List all books that have frozen scene analysis files.
- * @returns Array of { bookTitle, chapterCount } objects
- */
-export function listFrozenScenes(): Array<{ bookTitle: string; chapterCount: number }> {
-  if (!fs.existsSync(FROZEN_SCENES_ROOT)) return [];
-  const dirs = fs.readdirSync(FROZEN_SCENES_ROOT, { withFileTypes: true })
-    .filter(d => d.isDirectory());
-  return dirs.map(d => {
-    const files = fs.readdirSync(path.join(FROZEN_SCENES_ROOT, d.name))
-      .filter(f => /^scene_analysis_chapter_\d+\.json$/.test(f));
-    return { bookTitle: d.name, chapterCount: files.length };
-  }).filter(r => r.chapterCount > 0);
 }
 
 // ========================================
@@ -521,20 +397,26 @@ export async function prepareEarlyAmbient(options: {
     } catch { /* ignore */ }
   }
 
-  // Scene analysis — use frozen JSON if available (deterministic evaluation)
+  // Scene analysis — deterministic pipeline
   let scene: SceneAnalysis;
-  const frozenScene = loadFrozenSceneAnalysis(bookDir, options.chapterIndex);
-  if (frozenScene) {
-    scene = frozenScene;
-  } else {
-    try {
-      console.log(`  🔊 Early ambient: Running scene analysis for chapter ${options.chapterIndex}...`);
-      scene = await analyzeChapterScene(options.chapterIndex, options.chapterText, bookInfo);
-      console.log(`  🔊 Early ambient: env="${scene.sceneSegments[0]?.environment ?? 'unknown'}" sfxEvents=${scene.sfxEvents.length}`);
-    } catch (llmErr) {
-      console.warn(`  🔊 Early ambient: LLM analysis failed, using fallback:`, llmErr instanceof Error ? llmErr.message : llmErr);
-      scene = buildFallbackScene(options.chapterIndex, options.chapterText, bookInfo);
-    }
+  try {
+    console.log(`  🔊 Early ambient: Running deterministic scene analysis for chapter ${options.chapterIndex}...`);
+    const splitResult = splitText(options.chapterText);
+    const [ambientIdx, sfxIdx] = await Promise.all([
+      ensureAmbientEmbeddingIndex(),
+      ensureSfxEmbeddingIndex(),
+    ]);
+    scene = await analyzeSceneDeterministic({
+      chapterIndex: options.chapterIndex,
+      chapterText: options.chapterText,
+      splitResult,
+      ambientIndex: ambientIdx,
+      sfxIndex: sfxIdx,
+    });
+    console.log(`  🔊 Early ambient: env="${scene.sceneSegments[0]?.environment ?? 'unknown'}" segments=${scene.sceneSegments.length} sfxEvents=${scene.sfxEvents.length}`);
+  } catch (analyzerErr) {
+    console.warn(`  🔊 Early ambient: Deterministic analysis failed, using fallback:`, analyzerErr instanceof Error ? analyzerErr.message : analyzerErr);
+    scene = buildFallbackScene(options.chapterIndex, options.chapterText, bookInfo);
   }
 
   // Resolve ambient assets for all scene segments
@@ -659,19 +541,24 @@ export async function applySoundscapeToChapter(options: {
         console.log(`  🔊 Ambient: Using cached scene analysis for chapter ${options.chapterIndex}`);
         scene = cached.scene;
       } else {
-        // Try frozen scene analysis from disk first (deterministic evaluation)
-        const frozenScene = loadFrozenSceneAnalysis(bookDir, options.chapterIndex);
-        if (frozenScene) {
-          scene = frozenScene;
-        } else {
-          try {
-            console.log(`  🔊 Ambient: Running LLM scene analysis for chapter ${options.chapterIndex}...`);
-            scene = await analyzeChapterScene(options.chapterIndex, options.chapterText, bookInfo);
-            console.log(`  🔊 Ambient: env="${scene.sceneSegments[0]?.environment ?? 'unknown'}" sfxEvents=${scene.sfxEvents.length}`);
-          } catch (llmErr) {
-            console.warn(`  🔊 Ambient: LLM analysis failed, using fallback:`, llmErr instanceof Error ? llmErr.message : llmErr);
-            scene = buildFallbackScene(options.chapterIndex, options.chapterText, bookInfo);
-          }
+        try {
+          console.log(`  🔊 Ambient: Running deterministic scene analysis for chapter ${options.chapterIndex}...`);
+          const splitResult = splitText(options.chapterText);
+          const [ambientIdx, sfxIdx] = await Promise.all([
+            ensureAmbientEmbeddingIndex(),
+            ensureSfxEmbeddingIndex(),
+          ]);
+          scene = await analyzeSceneDeterministic({
+            chapterIndex: options.chapterIndex,
+            chapterText: options.chapterText,
+            splitResult,
+            ambientIndex: ambientIdx,
+            sfxIndex: sfxIdx,
+          });
+          console.log(`  🔊 Ambient: env="${scene.sceneSegments[0]?.environment ?? 'unknown'}" segments=${scene.sceneSegments.length} sfxEvents=${scene.sfxEvents.length}`);
+        } catch (analyzerErr) {
+          console.warn(`  🔊 Ambient: Deterministic analysis failed, using fallback:`, analyzerErr instanceof Error ? analyzerErr.message : analyzerErr);
+          scene = buildFallbackScene(options.chapterIndex, options.chapterText, bookInfo);
         }
       }
 

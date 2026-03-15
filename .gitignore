@@ -1,5 +1,6 @@
 apps/backend/nul
 node_modules/
+__pycache__/
 audiobooks/
 soundscape/assets/
 soundscape/assets/assets_ogg_opus/

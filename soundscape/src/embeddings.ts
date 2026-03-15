@@ -58,7 +58,7 @@ const auth = new GoogleAuth({
  * Request format: { instances: [{ content }], parameters: { outputDimensionality } }
  * Response format: { predictions: [{ embeddings: { values: number[] } }] }
  */
-async function embedTexts(texts: string[]): Promise<number[][]> {
+export async function embedTexts(texts: string[]): Promise<number[][]> {
   const projectId = process.env.GOOGLE_CLOUD_PROJECT || 'calmbridge-2';
   const location = process.env.GOOGLE_CLOUD_LOCATION || 'us-central1';
   const endpoint = `https://${location}-aiplatform.googleapis.com/v1/projects/${projectId}/locations/${location}/publishers/google/models/${EMBEDDING_MODEL}:predict`;
