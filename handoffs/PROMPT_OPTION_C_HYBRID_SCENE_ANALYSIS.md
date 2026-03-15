@@ -1,15 +1,15 @@
-# Option C: Hybrid Scene Analysis Pipeline — Implementation Prompt
+# Deterministic Scene Analysis Pipeline — Implementation Prompt
 
-## ⚠️ IMPORTANT: Prerequisites Before Starting This Work
+## Status
 
-This prompt is for a FUTURE session. Before implementing Option C, the following must be completed and verified on the `feature/soundscape-refactor` branch:
-
-1. ✅ G1-A: Scene analysis freeze mechanism (already committed `9b125178`)
-2. ⬜ G1-B: LUFS normalization (ambient volume relative to voice)
-3. ⬜ Option B: Prompt engineering sprint (structured output schema, topK=1, few-shot examples, min constraints)
-4. ⬜ Gate evaluation confirming Option B improvements
-
-Only after Option B is stable and evaluated should Option C be started — ideally on a new branch (e.g., `feature/hybrid-scene-analysis`) off the latest `feature/soundscape-refactor`.
+- **Branch**: `feature/hybrid-scene-analysis` (branched from `feature/soundscape-refactor` at `48db1e34`)
+- **Prerequisites**: All completed on `feature/soundscape-refactor`:
+  - ✅ G1-A: Scene analysis freeze mechanism (`9b125178`)
+  - ✅ G1-B: LUFS normalization (`2e2fc4d2`)
+  - ✅ Eval LUFS fix + `_ambient` → `_soundscape` rename (`5e4c9ace`)
+  - ✅ Eval spike detection parsing fix (`2f6560ed`)
+- **Baseline score**: 61.8/100 (Ch1=76.8, Ch2=46.9) — with frozen scenes, no cherry-picking
+- **Option B (prompt engineering)**: Skipped — effort wasted since LLM is eliminated entirely
 
 ---
 
@@ -18,63 +18,106 @@ Only after Option B is stable and evaluated should Option C be started — ideal
 ### The Problem
 
 The current soundscape pipeline uses an LLM (Gemini 2.5 Flash) to analyze chapter text and produce a `SceneAnalysis` JSON containing:
-- Scene segments (1–6 per chapter) with environment descriptions and English search queries
+- Scene segments (1–6 per chapter) with environment descriptions and English search queries (`searchSnippets`)
 - SFX events with character offsets and English search queries
 - Metadata (time of day, weather, moods, intensity)
 
-The LLM then generates **English search snippets** (e.g., `"quiet forest at dusk with distant owl hooting"`) which are separately embedded and cosine-matched against the pre-embedded asset catalog.
+The LLM generates **English search snippets** (e.g., `"quiet forest at dusk with distant owl hooting"`) which are separately embedded and cosine-matched against the pre-embedded asset catalog.
 
 **Critical issues with this approach:**
-1. **Extreme non-determinism** — Identical inputs produce wildly different outputs across runs (1 segment/0 SFX vs 6 segments/12 SFX)
-2. **Unnecessary LLM intermediary** — The LLM "translates" raw text into English search snippets, then those snippets are embedded. This adds LLM hallucination risk, latency (2-5s), and cost, while the embedding model (`text-embedding-004`) is already multilingual and could match raw text directly against the catalog
-3. **The English searchSnippets layer was NOT the original design intent** — it was added during implementation without explicit approval. The original intent was raw text → embedding → direct catalog match
+1. **Extreme non-determinism** — Identical inputs produce wildly different outputs across runs (Ch1: 6 segments/12 SFX vs Ch2: 1 segment/0 SFX for similar-quality text)
+2. **Unnecessary LLM intermediary** — The LLM "translates" raw text into English search snippets, then those snippets are embedded. This adds hallucination risk, latency (2-5s), and cost, while the embedding model (`text-embedding-004`) is already multilingual and matches raw text directly
+3. **Metadata waste** — `timeOfDay`, `weather`, `moods` are **never consumed** downstream. `intensity` adjusts ambient volume by 0-3 dB — negligible vs LUFS normalization
+4. **Every function the LLM performs can be replaced** with deterministic code + embeddings (proven by analysis of all downstream consumers)
 
-### The Solution: Hybrid 3-Layer Architecture
+### The Solution: Deterministic 2-Layer Pipeline (No LLM)
 
-Replace the monolithic LLM scene analysis with a 3-layer pipeline:
+Replace the monolithic LLM scene analysis with a fully deterministic pipeline:
 
 ```
-Layer 1a: STRUCTURAL ANALYSIS (pure code, offline, 100% deterministic, language-agnostic)
-  → Paragraph-level text segmentation
-  → Scene boundary detection via structural heuristics
-  → Minimum segment/SFX count guarantees
-  → Character offset positions for segment boundaries
-  Output: StructuralSceneBase (deterministic skeleton)
+Layer 1: DETERMINISTIC ANALYSIS (code + embedding API, 100% reproducible)
 
-Layer 1b: SEMANTIC CLASSIFICATION (embedding API, deterministic, language-agnostic)
-  → Embed raw paragraph text directly (any language)
-  → Cosine-match against pre-embedded catalog descriptions
-  → Classify environment per segment
-  → These SAME embeddings are reused for asset matching (no separate embed step)
-  Output: SemanticSceneBase (environment classification + asset candidates per segment)
-  KEY: This REPLACES the current LLM searchSnippet → embed → match flow
+  Step 1: Text splitting (rule-based, sync)
+    → Sentences (split on .!?)
+    → Fragments per sentence (split on ,;—and) with char offsets
+    → Paragraph boundaries (split on \n\n)
+
+  Step 2: Segment detection (rule-based, sync)
+    → Segment boundaries at paragraph breaks
+    → Min 2 segments for chapters > 2000 chars, max 6
+    → Segment boundaries ARE ambience start/end points
+
+  Step 3: Ambient matching (embedding API, deterministic)
+    → Sliding window of 3-5 sentences → embed → match ambient catalog
+    → Best ambient asset per segment + environment label (from asset description)
+    → Both embedding vectors stored for reuse (no re-embedding)
+
+  Step 4: SFX matching (embedding API, deterministic)
+    → Embed each fragment → match BOTH ambient AND SFX catalogs
+    → Keep SFX matches ≥ 0.72 threshold
+    → charIndex = fragment start offset (exact, from text splitting)
+    → Handles multi-SFX sentences via clause-level splitting
+
+  Step 5: Assemble SceneAnalysis
+    → Populate interface with defaults for unused metadata fields
+    → Output identical SceneAnalysis interface as today
+
+  Output: SceneAnalysis (same interface — all downstream code unchanged)
 
 Layer 2: LLM ENRICHMENT (constrained, optional enhancement)
-  → Receives Layer 1a+1b output as INPUT (pre-built segments, pre-matched assets)
-  → Only adds: SFX events with charIndex placement, mood refinement, intensity
-  → CANNOT change segment count, boundaries, or ambient asset assignments
-  → Uses structured output (response_json_schema) with strict constraints
-  Output: EnrichedSceneAnalysis
-
-Layer 3: VALIDATION GATE (pure code, deterministic)
-  → Validates: segments ≥ min, SFX ≥ min, charIndexes within bounds
-  → On failure: retry LLM (max 2x), then fall back to Layer 1a+1b output
-  Output: FinalSceneAnalysis (guaranteed quality floor)
+Layer 2: VALIDATION (code, sync, lightweight)
+  → Min segment count, min SFX count, dedup, bounds check
+  → If 0 SFX found: lower threshold to 0.65 and retry matching
+  → Guaranteed quality floor (no LLM fallback needed — deterministic input)
 ```
 
-### Key Architectural Insight: Embedding Reuse
+### Key Architectural Decisions
 
-The current pipeline has two separate embedding operations:
-1. LLM generates English searchSnippets → embed snippets → match against catalog
-2. Asset catalog descriptions are pre-embedded on first run
+**1. LLM Completely Eliminated**
 
-**In the new architecture, paragraph embeddings serve DUAL purpose:**
-- Environment classification (cosine vs concept vectors)
-- Direct asset matching (cosine vs catalog vectors)
+Every function the LLM performed has a deterministic replacement:
 
-This eliminates the LLM as intermediary for ambient matching. The multilingual embedding model (`text-embedding-004` / `gemini-embedding-001`) natively maps Czech/Slovak/English text to the same semantic space as the English catalog descriptions.
+| LLM Function | Replacement | Why LLM is unnecessary |
+|---|---|---|
+| Segment boundaries | Paragraph-break analysis (Layer 1, Step 2) | Structural, not semantic |
+| Environment labels | Top ambient asset description (Layer 1, Step 3) | Embedding match is direct |
+| Ambient asset matching | Sentence-window embedding vs catalog (Layer 1, Step 3) | `text-embedding-004` is multilingual — no translation needed |
+| SFX identification | Fragment embedding vs SFX catalog (Layer 1, Step 4) | Cosine match finds sound-producing text |
+| SFX charIndex | Fragment char offset — known from splitting (Layer 1, Step 1) | Text position is structural data |
+| SFX query string | Eliminated — direct fragment embedding replaces it | No intermediary needed |
+| intensity | Fixed 0.7 (only adjusts volume by 0-3 dB, negligible vs LUFS normalization) | Not worth any computation |
+| timeOfDay, weather, moods | Fixed defaults (`'unknown'`, `'none'`, `[]`) | **Never consumed downstream** — verified |
 
-**Net latency effect: ~2-5 seconds FASTER per chapter** (LLM call eliminated for ambient matching).
+**2. Fragment-Level SFX Matching (Multi-SFX Sentences)**
+
+A sentence like *"Lightning cracked across the sky and thunder rumbled"* contains two SFX. Embedding the whole sentence would produce a blended vector matching neither asset cleanly.
+
+Solution: Split sentences into **fragments** on clause boundaries (`, and `, `, `, `; `, ` — `):
+- *"Lightning cracked across the sky"* → matches "lightning crack" SFX at ~0.84
+- *"thunder rumbled"* → matches "thunder rumble" SFX at ~0.86
+
+Each fragment gets its own embedding, catalog match, and `charIndex`.
+
+Short fragments like *"and ran"* produce low cosine scores → filtered by ≥0.72 threshold naturally.
+
+**3. Different Granularity for Ambient vs SFX**
+
+- **Ambient matching**: Wide context needed — sliding window of 3-5 consecutive sentences captures the environment described across multiple sentences
+- **SFX matching**: Narrow context needed — individual fragments capture discrete sound-producing actions
+
+**4. Embedding Reuse**
+
+The current pipeline embeds twice: LLM generates searchSnippets → embed → match. The new pipeline embeds once: raw text fragments → embed → match both ambient and SFX catalogs directly. The multilingual embedding model (`text-embedding-004` / `gemini-embedding-001`) natively maps Czech/Slovak/English text to the same semantic space as English catalog descriptions.
+
+**Net effect: ~2-5 seconds FASTER per chapter** (LLM call eliminated), **100% deterministic** (same input → always same output).
+
+**5. Segment Boundaries = Ambience Boundaries**
+
+Layer 1, Step 2 places segment boundaries at paragraph breaks. These charIndex values ARE the ambience start/end points. The existing mixing code in `soundscapeCompat.ts` already uses `(seg.charIndex / chapterText.length) * estimatedDurationMs` for proportional timing. No change needed downstream.
+
+**6. Silence Gap Detection Unchanged**
+
+FFmpeg silence gap detection (`detectSilenceGaps()`) remains in the mixing layer (`subchunkSoundscape.ts`). The new pipeline only replaces how we analyze text → `SceneAnalysis` JSON. Everything downstream (silence gaps, SFX timing, crossfading, LUFS normalization) stays unchanged.
 
 ---
 
@@ -82,11 +125,11 @@ This eliminates the LLM as intermediary for ambient matching. The multilingual e
 
 ```
 soundscape/src/
-├── llmDirector.ts        # MODIFY: Layer 2 (constrained LLM for SFX only)
-├── assetResolver.ts      # MODIFY: Replace searchSnippet-based matching with direct paragraph embedding matching
-├── embeddings.ts         # MODIFY: Add paragraph embedding + concept classification functions
-├── types.ts              # MODIFY: Add StructuralSceneBase, SemanticSceneBase types
-├── config.ts             # MODIFY: Add concept vector config, structural analysis constants
+├── llmDirector.ts        # KEEP (buildFallbackScene only, analyzeChapterScene deprecated)
+├── assetResolver.ts      # MODIFY: Add resolveAmbientAssetFromVector(), keep resolveSfxEvents()
+├── embeddings.ts         # MINOR: Export embedTexts() (currently private)
+├── types.ts              # NO CHANGE (SceneAnalysis interface preserved exactly)
+├── config.ts             # MINOR: Add text splitting constants
 ├── subchunkSoundscape.ts # NO CHANGE (consumes SceneAnalysis — interface stays same)
 ├── ambientLayer.ts       # NO CHANGE (consumes resolved assets — interface stays same)
 ├── catalogLoader.ts      # NO CHANGE
@@ -100,214 +143,230 @@ apps/backend/src/
 └── index.ts              # NO CHANGE (orchestration unchanged)
 
 NEW FILES:
-├── soundscape/src/structuralAnalyzer.ts   # Layer 1a: Pure code structural analysis
-├── soundscape/src/semanticClassifier.ts   # Layer 1b: Embedding-based classification
-├── soundscape/src/sceneValidator.ts       # Layer 3: Validation gate
+├── soundscape/src/textSplitter.ts              # Step 1: Sentence + fragment splitting
+├── soundscape/src/deterministicAnalyzer.ts     # Steps 2-5: Full deterministic pipeline
+├── soundscape/src/sceneValidator.ts            # Layer 2: Lightweight validation
 ```
 
 ---
 
 ## Detailed Implementation Spec
 
-### NEW FILE: `soundscape/src/structuralAnalyzer.ts` — Layer 1a
+### NEW FILE: `soundscape/src/textSplitter.ts` — Step 1
 
-**Purpose**: Pure deterministic code that analyzes text structure to produce segment boundaries and minimum counts. 100% language-agnostic (operates on text structure, not content).
+**Purpose**: Pure deterministic text splitting into sentences and fragments with character offsets. 100% language-agnostic (operates on punctuation and whitespace structure).
 
 ```typescript
-export interface StructuralSceneBase {
-  chapterIndex: number;
-  /** Paragraph boundaries (char offsets) */
-  paragraphBoundaries: number[];
-  /** Computed segment boundaries — char offsets where environment likely changes */
-  segmentBoundaries: number[];
-  /** Number of segments (guaranteed ≥ 2 for chapters > 2000 chars, else ≥ 1) */
-  segmentCount: number;
-  /** Minimum SFX count based on text activity indicators */
-  minSfxCount: number;
-  /** Per-segment text slices for embedding */
-  segmentTexts: string[];
+export interface TextFragment {
+  /** The text content of this fragment */
+  text: string;
+  /** Character offset where this fragment starts in the original chapter text */
+  charIndex: number;
+  /** Character offset where this fragment ends (exclusive) */
+  charEnd: number;
+  /** Index of the sentence this fragment belongs to */
+  sentenceIndex: number;
+  /** Index of the paragraph this fragment belongs to */
+  paragraphIndex: number;
 }
+
+export interface TextSplitResult {
+  /** All paragraphs with char offsets */
+  paragraphs: Array<{ text: string; charIndex: number; charEnd: number }>;
+  /** All sentences with char offsets */
+  sentences: Array<{ text: string; charIndex: number; charEnd: number; paragraphIndex: number }>;
+  /** All fragments (clause-level) with char offsets — used for SFX matching */
+  fragments: TextFragment[];
+}
+
+/**
+ * Split chapter text into paragraphs, sentences, and fragments.
+ * Pure synchronous function, language-agnostic.
+ */
+export function splitText(chapterText: string): TextSplitResult;
 ```
 
 **Implementation requirements:**
 
-1. **Paragraph detection**: Split on `\n\n` (or `\r\n\r\n`). Handle edge cases: single newlines within dialogue, markdown-style formatting.
+1. **Paragraph splitting**: Split on `\n\n` (or `\r\n\r\n`). Trim whitespace. Track char offsets.
 
-2. **Segment boundary computation**:
-   - Base count: `Math.max(2, Math.min(6, Math.ceil(chapterText.length / 3000)))` — at least 2 segments for any non-trivial chapter
-   - Place boundaries at paragraph breaks nearest to equal-length splits
-   - Heuristic boost: paragraphs with significant whitespace density changes, or after long dialogue sequences followed by narration, suggest scene changes
+2. **Sentence splitting**: Within each paragraph, split on sentence-ending punctuation:
+   - Primary delimiters: `. `, `! `, `? ` (period/exclamation/question followed by space)
+   - Handle edge cases: abbreviations (Mr., Dr., etc.), ellipsis (`...`), quotes ending sentences
+   - Keep dialogue quotes with their sentence
+   - Minimum sentence length: 10 chars (merge shorter fragments with preceding sentence)
 
-3. **Minimum SFX count**:
-   - Count exclamation marks (`!`) — action indicators
-   - Count very short paragraphs (< 50 chars) in narration — often sound-producing actions
-   - Count quotation-terminated paragraphs followed by action narration
-   - Formula: `Math.max(3, Math.min(15, Math.ceil(actionIndicators / 3)))` — at least 3 SFX per chapter
-
-4. **Segment text extraction**: For each segment, concatenate the paragraphs within that segment's char range. These raw text slices will be embedded by Layer 1b.
+3. **Fragment splitting**: Within each sentence, split on clause boundaries:
+   - Delimiters: `, and `, `, but `, `, or `, `; `, ` — `, ` – `
+   - Also split on `, ` when the clause before the comma is ≥ 30 chars (avoids splitting short lists)
+   - Minimum fragment length: 15 chars (don't split further)
+   - Each fragment retains its charIndex from the original text
 
 **Critical constraints:**
-- NO language-specific keywords or dictionaries
+- NO language-specific keywords or dictionaries (clause delimiters are punctuation-based)
 - NO imports of any external NLP library
-- Operates only on: character offsets, whitespace patterns, punctuation, paragraph structure
 - Must be synchronous (no async, no API calls)
 - Must be pure function (no side effects, no state)
+- Handles empty text, single paragraph, no punctuation gracefully
 
-### NEW FILE: `soundscape/src/semanticClassifier.ts` — Layer 1b
+### NEW FILE: `soundscape/src/deterministicAnalyzer.ts` — Steps 2-5
 
-**Purpose**: Embed raw paragraph text (any language) directly against the pre-embedded asset catalog. Classify environments and pre-select asset candidates per segment. These embeddings are then REUSED by the asset resolver — no separate embedding step needed.
+**Purpose**: The main analysis pipeline. Takes split text + embedding indexes and produces a complete `SceneAnalysis` without any LLM calls.
 
 ```typescript
-export interface SemanticSceneBase {
+import type { SceneAnalysis } from './types.js';
+import type { TextSplitResult } from './textSplitter.js';
+import type { EmbeddingIndex } from './types.js';
+
+export interface AnalyzerOptions {
   chapterIndex: number;
-  /** Per-segment semantic classification */
-  segments: Array<{
-    charIndex: number;
-    /** Best-matching catalog asset and its cosine score */
-    topAssetCandidates: Array<{ assetId: string; score: number }>;
-    /** Dominant environment label (derived from top asset's description) */
-    environment: string;
-    /** The raw embedding vector for this segment's text — reused for asset matching */
-    embeddingVector: number[];
-  }>;
+  chapterText: string;
+  splitResult: TextSplitResult;
+  ambientIndex: EmbeddingIndex;
+  sfxIndex: EmbeddingIndex;
+  /** Cosine similarity threshold for SFX matches (default: 0.72) */
+  sfxThreshold?: number;
+  /** Cosine similarity threshold for ambient matches (default: 0.65) */
+  ambientThreshold?: number;
 }
+
+/**
+ * Deterministic scene analysis — no LLM, 100% reproducible.
+ * Produces a SceneAnalysis identical in interface to the LLM-based version.
+ */
+export async function analyzeSceneDeterministic(
+  options: AnalyzerOptions
+): Promise<SceneAnalysis>;
 ```
 
-**Implementation requirements:**
+**Step 2: Segment detection** (sync, within the function):
 
-1. **Embed segment texts**: Take `segmentTexts` from Layer 1a, call `embedTexts()` for each segment. Use existing `EMBEDDING_CONCURRENCY` for parallelism.
+1. Compute segment count: `Math.max(2, Math.min(6, Math.ceil(chapterText.length / 3000)))` — at least 2 for non-trivial chapters
+2. Place boundaries at paragraph breaks nearest to equal-length splits:
+   - Divide total char length by segment count → ideal split points
+   - For each split point, find the nearest paragraph boundary (from `splitResult.paragraphs`)
+   - Ensure no two segments share the same boundary (minimum 1 paragraph per segment)
+3. First segment always starts at charIndex 0
 
-2. **Match against ambient catalog**: Use existing `searchEmbeddingsWithVector()` against the ambient embedding index. Return top-5 candidates per segment.
+**Step 3: Ambient matching** (async, uses embedding API):
 
-3. **Derive environment label**: Extract from the top-matching asset's description. E.g., if top match is "rain in a dark forest with thunder", environment = "dark forest" (simple: take the asset description, or first N words of it).
+1. For each segment, create an **ambient search window** by concatenating sentences within the segment's char range (use 3-5 consecutive sentences, or all sentences if fewer)
+2. Embed each window using `embedTexts()` (batch all segments together for efficiency)
+3. Match each window's embedding against the ambient index using `searchEmbeddingsWithVector()` — return top-5 candidates
+4. Select the best ambient asset per segment (highest cosine score ≥ `ambientThreshold`)
+5. Derive `environment` label: use the winning asset's description (truncate to first 60 chars if longer)
+6. Populate `searchSnippets` field: use the actual sentence texts from the window (for backward compatibility with existing code that reads searchSnippets)
+7. Store embedding vectors for reuse by asset resolver (avoids re-embedding)
 
-4. **Store embedding vectors**: The per-segment embedding vectors must be accessible for later reuse by `resolveSceneSegmentAssets()` — this eliminates the need to embed LLM-generated searchSnippets.
+**Step 4: SFX matching** (async, uses embedding API):
 
-**Critical constraints:**
-- Uses EXISTING `embedTexts()`, `searchEmbeddingsWithVector()`, `ensureAmbientEmbeddingIndex()` from `embeddings.ts` and `assetResolver.ts`
-- NO new embedding API endpoint — reuses exact same infrastructure
-- Deterministic: same input text → same embedding → same cosine scores → same results
+1. Embed all fragments from `splitResult.fragments` using `embedTexts()` (batched, concurrent)
+2. Match each fragment's embedding against the SFX index using `searchEmbeddingsWithVector()` — return top-3 candidates per fragment
+3. Filter: keep only matches where `score >= sfxThreshold` (default 0.72)
+4. For each qualifying match, create an `SfxEvent`:
+   - `query`: the fragment's raw text (used for downstream SFX embedding — but since we already have the embedding vector, we can pass it through)
+   - `charIndex`: the fragment's `charIndex` (exact, from text splitting)
+   - `description`: the matching SFX asset's description
+5. Deduplicate: if two fragments within ±50 chars match the same SFX asset, keep only the higher-scoring one
 
-### MODIFIED FILE: `soundscape/src/llmDirector.ts` — Layer 2 (Constrained)
-
-**Purpose**: LLM is now ONLY used for SFX event identification (narrative comprehension that embeddings cannot do). Ambient environment analysis is fully handled by Layer 1b.
-
-**Changes to `analyzeChapterScene()`:**
-
-1. **New function signature**: Receives `StructuralSceneBase` + `SemanticSceneBase` as input (the pre-built skeleton)
-
-2. **Reduced prompt scope**: Only asks LLM for:
-   - SFX events with charIndex placement (requires narrative comprehension)
-   - Mood refinement per segment (nice-to-have, not critical)
-   - Time of day, weather, intensity metadata
-   - Does NOT ask for scene segments, environments, or searchSnippets
-
-3. **Structured output**: Add `response_json_schema` to the Gemini API call with:
-   - `sfxEvents`: array with `minItems` matching `StructuralSceneBase.minSfxCount`
-   - Strict field types and constraints
-
-4. **Reduced temperature**: Set `topK: 1`, keep `temperature: 0.3`, `topP: 0.5` for maximum determinism
-
-5. **The prompt must include the pre-computed segment boundaries** so the LLM knows WHERE each segment starts/ends and can place SFX charIndexes correctly within the right segments
-
-**Key prompt structure:**
-```
-You are a sound effects designer. The scene segments and ambient environments
-have already been determined. Your ONLY job is to identify discrete sound
-effects (SFX) events in the chapter text.
-
-Pre-determined segments:
-- Segment 0 (chars 0-3200): [environment from Layer 1b]
-- Segment 1 (chars 3201-6500): [environment from Layer 1b]
-...
-
-Chapter text:
----
-[full chapter text]
----
-
-Identify SFX events: short, discrete sounds (1-10 seconds) that occur as
-one-shot events. For each, provide:
-- query: English search query for SFX catalog
-- charIndex: exact character offset where the sound occurs
-- description: brief description
-
-Minimum {minSfxCount} events required. Every chapter with human activity has
-footsteps, door sounds, object handling, etc.
-```
-
-### NEW FILE: `soundscape/src/sceneValidator.ts` — Layer 3
-
-**Purpose**: Deterministic validation gate. Ensures the final SceneAnalysis meets quality floor requirements.
+**Step 5: Assemble SceneAnalysis** (sync):
 
 ```typescript
+const sceneAnalysis: SceneAnalysis = {
+  chapterIndex: options.chapterIndex,
+  timeOfDay: 'unknown',     // NOT consumed downstream
+  weather: 'none',           // NOT consumed downstream
+  moods: [],                 // NOT consumed downstream
+  soundElements: [],         // NOT consumed downstream
+  intensity: 0.7,            // Fixed — only adjusts volume by -0.9 dB
+  sceneSegments,             // From Steps 2+3
+  sfxEvents,                 // From Step 4
+};
+```
+
+### NEW FILE: `soundscape/src/sceneValidator.ts` — Layer 2
+
+**Purpose**: Lightweight validation and auto-correction. Since the pipeline is fully deterministic (no LLM), validation mainly handles edge cases and enforces minimums.
+
+```typescript
+import type { SceneAnalysis } from './types.js';
+
 export interface ValidationResult {
   valid: boolean;
-  errors: string[];
-  /** If invalid, the corrected SceneAnalysis (auto-fixed where possible) */
-  corrected?: SceneAnalysis;
+  corrections: string[];  // Human-readable list of corrections applied
+  scene: SceneAnalysis;   // Corrected scene (same as input if valid)
 }
 
-export function validateSceneAnalysis(
+/**
+ * Validate and auto-correct a SceneAnalysis.
+ * Since the pipeline is deterministic, this is a lightweight sanity check.
+ */
+export function validateScene(
   scene: SceneAnalysis,
-  structural: StructuralSceneBase,
-  textLength: number
+  chapterTextLength: number,
+  minSegments: number,
+  minSfxCount: number
 ): ValidationResult;
 ```
 
 **Validation rules:**
-1. `sceneSegments.length >= structural.segmentCount` — cannot have fewer segments than Layer 1a determined
-2. `sceneSegments[0].charIndex === 0` — first segment must start at 0
-3. All `charIndex` values strictly increasing and within `[0, textLength)`
-4. `sfxEvents.length >= structural.minSfxCount` — minimum SFX count enforced
-5. All SFX `charIndex` values within `[0, textLength)`
-6. No duplicate SFX at same charIndex (within ±50 chars)
+1. `sceneSegments.length >= minSegments` — if too few, add segments at equal intervals
+2. `sceneSegments[0].charIndex === 0` — force to 0 if not
+3. All `charIndex` values strictly increasing and within `[0, chapterTextLength)` — clamp out-of-bounds
+4. No duplicate SFX at same charIndex (within ±50 chars) — deduplicate, keep higher score
+5. If `sfxEvents.length < minSfxCount` — **do NOT silently fail**: log a note, return what we have (the threshold can be lowered and retried by the caller)
 
-**Auto-correction**: Where possible, fix rather than reject:
-- Clamp out-of-bounds charIndexes
+**Auto-correction** (fix rather than reject):
+- Clamp out-of-bounds charIndexes to valid range
 - Deduplicate SFX events
-- If segments are missing, restore from Layer 1a boundaries
+- Ensure first segment charIndex = 0
+- Sort segments and SFX by charIndex ascending
 
-**Retry logic** (in the caller, not in validator):
-- If validation fails and LLM was used: retry LLM call (max 2 retries)
-- If still failing after retries: use Layer 1a+1b output only (no LLM enrichment) — this is the guaranteed quality floor
+**Retry logic** (in the caller, `deterministicAnalyzer.ts`):
+- If SFX count < minSfxCount after Step 4: lower threshold from 0.72 to 0.65 and retry SFX matching
+- This is deterministic — same result every time, no LLM retry randomness
 
 ### MODIFIED FILE: `soundscape/src/assetResolver.ts`
 
-**Key change**: `resolveSceneSegmentAssets()` must accept pre-computed embedding vectors from Layer 1b instead of embedding LLM-generated searchSnippets.
+**Add one new function** for resolving ambient assets from pre-computed embedding vectors:
 
-**Current flow (REMOVE):**
-```
-searchSnippets → searchEmbeddingsBatch() → cosine match → asset
-```
-
-**New flow:**
-```
-Layer 1b embeddingVector (already computed) → searchEmbeddingsWithVector() → asset
-```
-
-Add a new function or overload:
 ```typescript
-export async function resolveSceneSegmentAssetsFromVectors(
-  segments: Array<{
-    segment: SceneSegment;
-    embeddingVector: number[];
-  }>
-): Promise<Array<{ segment: SceneSegment; asset: SoundAsset | null; score: number }>>;
+/**
+ * Resolve the best matching ambient asset using a pre-computed embedding vector.
+ * Avoids re-embedding — uses the vector already computed by deterministicAnalyzer.
+ *
+ * @param embeddingVector - Pre-computed embedding vector for the segment text
+ * @param logContext - Human-readable label for log messages
+ * @param topK - Candidates to consider
+ * @returns Best matching SoundAsset with score, or null if nothing suitable
+ */
+export async function resolveAmbientAssetFromVector(
+  embeddingVector: number[],
+  logContext: string = 'unknown',
+  topK: number = 5
+): Promise<{ asset: SoundAsset; score: number } | null>;
 ```
 
-This uses `searchEmbeddingsWithVector()` (already exists in `embeddings.ts` line 236) — pure in-memory cosine similarity, no API calls, <1ms per segment.
+This uses `searchEmbeddingsWithVector()` (already exists in `embeddings.ts`) — pure in-memory cosine similarity, no API calls, <1ms.
 
-**`resolveSfxEvents()` remains unchanged** — it embeds the LLM-generated English SFX queries (which are short, specific, and appropriate for LLM generation since they require narrative comprehension).
+**`resolveAmbientAsset()` (existing)**: Keep unchanged — used when embedding vector is not pre-computed.
 
-### MODIFIED FILE: `soundscape/src/types.ts`
+**`resolveSfxEvents()` (existing)**: The `query` field will contain raw fragment text instead of LLM-generated English queries. The multilingual embedding model handles this natively. **The function itself needs no code change** — it embeds the query strings and matches against the SFX index. The only difference is the input strings are raw text fragments instead of LLM-generated English snippets.
 
-Add new types:
-- `StructuralSceneBase` (from Layer 1a)
-- `SemanticSceneBase` (from Layer 1b)
-- `ValidationResult` (from Layer 3)
+### MODIFIED FILE: `soundscape/src/embeddings.ts`
 
-The existing `SceneAnalysis` interface MUST NOT CHANGE — it is the contract consumed by `subchunkSoundscape.ts`, `ambientLayer.ts`, and `soundscapeCompat.ts`. The new pipeline must produce the same `SceneAnalysis` output.
+**One change**: Export `embedTexts()` which is currently private:
+
+```typescript
+// Currently: async function embedTexts(texts: string[]): Promise<number[][]>
+// Change to: export async function embedTexts(texts: string[]): Promise<number[][]>
+```
+
+No other changes. All other functions already have the right exports.
+
+### NOT MODIFIED: `soundscape/src/types.ts`
+
+The `SceneAnalysis` interface is **NOT changed**. The new pipeline produces identical output. No new types need to be added to this file — all new types are defined in their own modules (`textSplitter.ts`, `deterministicAnalyzer.ts`, `sceneValidator.ts`).
 
 ### MODIFIED FILE: `apps/backend/src/soundscapeCompat.ts`
 
@@ -321,14 +380,20 @@ loadFrozenSceneAnalysis() || analyzeChapterScene() → resolveSceneSegmentAssets
 **New flow:**
 ```
 loadFrozenSceneAnalysis() || {
-  structuralAnalyze() →              // Layer 1a (sync, ~1ms)
-  semanticClassify() →               // Layer 1b (async, ~600ms for ~30 paragraphs)
-  enrichWithLlm() →                  // Layer 2 (async, ~2s, SFX only)
-  validateScene()                     // Layer 3 (sync, ~1ms)
-} → resolveSceneSegmentAssetsFromVectors() → ambient/SFX
+  splitText()                      → Step 1 (sync, <1ms)
+  analyzeSceneDeterministic()      → Steps 2-5 (async, ~600ms embedding calls)
+  validateScene()                  → Layer 2 (sync, <1ms)
+} → resolveAmbientAssetFromVector() + resolveSfxEvents() → ambient/SFX
 ```
 
-The frozen scene analysis mechanism (G1-A) continues to work as-is — it loads a pre-computed `SceneAnalysis` JSON from disk, bypassing the entire pipeline.
+**Key changes:**
+1. Import new modules: `splitText`, `analyzeSceneDeterministic`, `validateScene`
+2. Replace `analyzeChapterScene()` calls with the new pipeline
+3. Pass pre-computed embedding vectors to asset resolution
+4. Keep `loadFrozenSceneAnalysis()` unchanged (G1-A freeze still works — bypasses entire pipeline)
+5. Keep `buildFallbackScene()` as ultimate fallback (existing, no LLM)
+
+The `intensity` field is now fixed at 0.7, so the volume adjustment `0 - (1 - 0.7) * 3 = -0.9 dB` is effectively constant. The LUFS normalization (G1-B) handles real volume balancing.
 
 ---
 
@@ -336,86 +401,115 @@ The frozen scene analysis mechanism (G1-A) continues to work as-is — it loads 
 
 ### Unit Tests (vitest)
 
-1. **Layer 1a tests** (`structuralAnalyzer.test.ts`):
-   - English text: verify segment count, boundaries at paragraph breaks
-   - Czech text: verify SAME structural output (language-agnostic proof)
-   - Short text (< 500 chars): verify minimum 1 segment
-   - Long text (> 10000 chars): verify 3-6 segments
-   - Edge cases: no paragraph breaks, single paragraph, empty text
+1. **Text splitter tests** (`textSplitter.test.ts`):
+   - English text: verify sentence and fragment splitting with correct char offsets
+   - Czech text: verify SAME structural splitting (language-agnostic proof — punctuation-based)
+   - Multi-SFX sentence: *"Lightning cracked and thunder rumbled"* → 2 fragments
+   - Edge cases: no punctuation, single sentence, empty text, dialogue-heavy text
+   - Char offset accuracy: fragment.charIndex must match actual position in original text
 
-2. **Layer 3 tests** (`sceneValidator.test.ts`):
-   - Valid input → passes
-   - Too few segments → fails with error
-   - Out-of-bounds charIndex → auto-corrected
-   - Zero SFX → fails
+2. **Deterministic analyzer tests** (`deterministicAnalyzer.test.ts`):
+   - Verify segment count formula (short text → 2, long text → 6)
+   - Verify segment boundaries fall on paragraph breaks
+   - Verify output conforms to `SceneAnalysis` interface exactly
+   - **Determinism proof**: run 3x with same input → identical output every time
+
+3. **Validator tests** (`sceneValidator.test.ts`):
+   - Valid input → no corrections
+   - Out-of-bounds charIndex → clamped
+   - Duplicate SFX → deduplicated
+   - Missing first segment at 0 → auto-corrected
 
 ### Integration Test
 
 Use the existing `soundscape_test_story` with 2 chapters:
-1. Run new pipeline on both chapters
-2. Compare output `SceneAnalysis` structure against expected `ideal_template.json`
-3. Verify determinism: run 3x → identical Layer 1a+1b output every time
-4. Verify LLM variance is contained: Layer 2 SFX may vary but segment structure is locked
+1. Run new pipeline on both chapters (unfrozen — to test the deterministic pipeline itself)
+2. Verify output `SceneAnalysis` has ≥2 segments and ≥3 SFX per chapter
+3. **Determinism proof**: Run 5x → identical scene JSON every time (this was impossible with LLM)
+4. Compare output quality against the frozen LLM-generated `scene_analysis_chapter_1.json` (Ch1, good quality)
 
 ### Gate Evaluation
 
 Use existing `scripts/soundscape_eval/evaluate.py` — the 7-criteria eval system:
-- `ambientOccurrence` — should IMPROVE (deterministic segment count)
-- `sfxOccurrence` — should stabilize (minSfxCount floor)
-- `ambientSimilarity` — should IMPROVE (direct text→catalog embedding, no LLM hallucination intermediary)
-- `ambientCoverage` — unchanged (depends on FFmpeg mixing, not scene analysis)
+
+- `ambientOccurrence` — should **IMPROVE** (deterministic segment count ≥ 2, no more 1-segment chapters)
+- `sfxOccurrence` — should **IMPROVE** (minSfxCount floor ≥ 3, no more 0-SFX chapters)
+- `ambientSimilarity` — should be **COMPARABLE or BETTER** (direct text→catalog embedding vs LLM intermediary)
+- `sfxSimilarity` — **key metric to watch**: raw text fragments vs LLM-generated English queries. May be slightly different. The multilingual embedding model should handle this well.
+- `ambientCoverage` — unchanged (depends on FFmpeg mixing duration, not scene analysis)
 - `ambientVolume` — unchanged (depends on LUFS normalization, not scene analysis)
-- `sfxAudibility` — unchanged (depends on mixing, not scene analysis)
+- `sfxAudibility` — unchanged (depends on mixing spike detection, not scene analysis)
+
+**Expected score improvement**: Primarily from Ch2 consistency — no more 1-segment/0-SFX chapters. Ch1 should maintain similar quality. Target: **70+** total score (from 61.8 baseline).
 
 ---
 
 ## Implementation Order
 
-1. **Types** (`types.ts`) — add new interfaces
-2. **Layer 1a** (`structuralAnalyzer.ts`) — pure code, with unit tests
-3. **Layer 1b** (`semanticClassifier.ts`) — embedding classification, depends on existing `embeddings.ts`
-4. **Layer 3** (`sceneValidator.ts`) — validation gate, with unit tests
-5. **Layer 2** (`llmDirector.ts`) — modify existing `analyzeChapterScene()` to constrained SFX-only
-6. **Asset resolver** (`assetResolver.ts`) — add `resolveSceneSegmentAssetsFromVectors()`
-7. **Bridge** (`soundscapeCompat.ts`) — wire the new pipeline
-8. **Test** — run against soundscape_test_story, verify determinism, run eval
+1. **Text splitter** (`textSplitter.ts`) — pure sync code, with unit tests
+2. **Deterministic analyzer** (`deterministicAnalyzer.ts`) — main pipeline, depends on embeddings.ts + textSplitter.ts
+3. **Validator** (`sceneValidator.ts`) — lightweight validation, with unit tests
+4. **Export embedTexts** (`embeddings.ts`) — one-line change
+5. **Asset resolver addition** (`assetResolver.ts`) — add `resolveAmbientAssetFromVector()`
+6. **Bridge** (`soundscapeCompat.ts`) — wire the new pipeline, replace `analyzeChapterScene()` calls
+7. **Integration test** — run against soundscape_test_story, verify determinism
+8. **Gate evaluation** — run eval, compare against 61.8 baseline
 
 ---
 
 ## Constraints & Rules
 
-1. **DO NOT change the `SceneAnalysis` output interface** — downstream consumers (`ambientLayer.ts`, `subchunkSoundscape.ts`, `soundscapeCompat.ts`) depend on it
-2. **DO NOT remove the frozen scene analysis mechanism** — `loadFrozenSceneAnalysis()` in `soundscapeCompat.ts` must continue to work
+1. **DO NOT change the `SceneAnalysis` output interface** — downstream consumers depend on it
+2. **DO NOT remove the frozen scene analysis mechanism** — `loadFrozenSceneAnalysis()` must continue to work
 3. **DO NOT add any new npm dependencies** — use existing embedding infrastructure
-4. **DO NOT change `embeddings.ts` API surface** — only add new utility functions alongside existing ones
-5. **Existing `buildFallbackScene()` in `llmDirector.ts` should be updated** to use Layer 1a output instead of its current English-only keyword matching
-6. **All Layer 1a code must be pure synchronous functions** — no async, no API calls, no side effects
-7. **The LLM (Layer 2) must use `response_json_schema`** per [Gemini structured output docs](https://ai.google.dev/gemini-api/docs/structured-output) — not just `responseMimeType: 'application/json'`
-8. **Use `topK: 1` for Layer 2 LLM calls** for maximum determinism. NOTE: Gemini docs warn against low temperature on Gemini 3 models, but we use `gemini-2.5-flash` where this is valid
-9. **Follow existing code patterns** — same error handling, same console.log emoji prefixes, same TypeScript style
-10. **This is a commercial codebase** — production-quality error handling, no shortcuts
+4. **DO NOT modify `embeddings.ts` API surface** — only export `embedTexts()` (currently private)
+5. **DO NOT remove `llmDirector.ts`** — keep `buildFallbackScene()` as ultimate fallback; `analyzeChapterScene()` can remain but is no longer called from the main pipeline
+6. **All text splitting code must be pure synchronous functions** — no async, no API calls, no side effects
+7. **Follow existing code patterns** — same error handling, same `console.log` emoji prefixes, same TypeScript style
+8. **This is a commercial codebase** — production-quality error handling, no shortcuts
+9. **Embedding calls use existing infrastructure** — `embedTexts()`, `searchEmbeddingsWithVector()`, `ensureAmbientEmbeddingIndex()`, `ensureSfxEmbeddingIndex()`
+10. **Fragment-level SFX matching threshold** starts at 0.72 (same as current `resolveSfxEvents()` line 402), retries at 0.65 if below minSfxCount
 
 ---
 
 ## Current Codebase Reference
 
 ### Embedding infrastructure (DO NOT REBUILD — reuse):
-- `embeddings.ts`: `embedTexts()`, `searchEmbeddingsWithVector()`, `searchEmbeddingsBatch()`, `buildEmbeddingIndex()`, `cosineSimilarity()` (private)
+- `embeddings.ts`: `embedTexts()` (MAKE PUBLIC), `searchEmbeddingsWithVector()`, `searchEmbeddingsBatch()`, `buildEmbeddingIndex()`, `cosineSimilarity()` (private)
 - Config: `EMBEDDING_MODEL = 'gemini-embedding-001'`, `EMBEDDING_DIMENSIONS = 768`, `EMBEDDING_BATCH_SIZE = 1`, `EMBEDDING_CONCURRENCY = 5`
 - Pre-built indexes on disk: `soundscape/assets/ambient_embeddings.json`, `sfx_embeddings.json`
 
-### LLM infrastructure (MODIFY — constrain):
-- `llmDirector.ts`: `callGemini()` (private), `analyzeChapterScene()`, `buildFallbackScene()`
+### LLM infrastructure (DEPRECATED for scene analysis):
+- `llmDirector.ts`: `analyzeChapterScene()` — no longer called from main pipeline
+- `llmDirector.ts`: `buildFallbackScene()` — kept as ultimate fallback
 - Config: `SCENE_ANALYSIS_MODEL = 'gemini-2.5-flash'`
-- Current: `temperature: 0.3`, `topP: 0.8`, `responseMimeType: 'application/json'` — NO `response_json_schema`
 
 ### Pipeline integration (MODIFY — rewire):
-- `soundscapeCompat.ts`: `prepareEarlyAmbient()` calls `analyzeChapterScene()` + `resolveSceneSegmentAssets()`
-- `soundscapeCompat.ts`: `applySoundscapeToChapter()` checks `earlyAmbientCache`, else calls `analyzeChapterScene()` + asset resolution
-- `soundscapeCompat.ts`: `loadFrozenSceneAnalysis()` loads scene JSON from disk (G1-A freeze)
+- `soundscapeCompat.ts`: `prepareEarlyAmbient()` calls `analyzeChapterScene()` → replace with `analyzeSceneDeterministic()`
+- `soundscapeCompat.ts`: `applySoundscapeToChapter()` checks `earlyAmbientCache` → same, but fallback uses new pipeline
+- `soundscapeCompat.ts`: `loadFrozenSceneAnalysis()` — UNCHANGED (G1-A freeze still works)
+
+### Downstream consumers (NO CHANGES — interface preserved):
+- `subchunkSoundscape.ts`: `mapSfxEventsToSubchunks()` — uses `sfxEvent.charIndex` (same field, same values)
+- `subchunkSoundscape.ts`: `calculateSfxOffsetFromGaps()` — uses proportional charIndex mapping (unchanged)
+- `soundscapeCompat.ts`: ambient segment mixing — uses `seg.charIndex / chapterText.length` (unchanged)
+- `assetResolver.ts`: `resolveSfxEvents()` — embeds `sfxEvent.query` strings (now raw text instead of LLM English, but embedding model is multilingual)
 
 ### Test book for validation:
 - `audiobooks/soundscape_test_story/` — 2 chapters
+- `audiobooks/.frozen_scenes/soundscape_test_story/` — frozen scene JSONs (baseline)
 - `scripts/soundscape_eval/ideal_template.json` — expected segment/SFX counts
 - `scripts/soundscape_eval/evaluate.py` — 7-criteria evaluation
-- `scripts/soundscape_eval/tracking.csv` — historical gate results
+- `scripts/soundscape_eval/tracking.csv` — historical gate results (baseline: 61.8)
+
+---
+
+## Future Enhancement: Audio-Language Evaluation (Post-MVP)
+
+After the deterministic pipeline is stable and scoring well, add an AI-powered evaluation layer:
+
+**Option A: Gemini 2.5 Flash Audio Input** — Send generated `_soundscape.ogg` + chapter text excerpt to Gemini. Ask it to rate audio-text alignment 1-10. Use as additional eval criterion. Already have API access.
+
+**Option B: CLAP (Contrastive Language-Audio Pretraining)** — Embeds audio and text into same vector space. Cosine similarity between actual audio clip and text description measures real audio-text alignment (not just catalog-description-to-text). Requires hosting a model.
+
+Both are evaluation-only enhancements (NOT in the generation pipeline) to measure actual audio quality beyond the current proxy metrics.
