@@ -13,8 +13,18 @@
  */
 
 import fs from 'fs';
-import { AMBIENT_EMBEDDINGS_PATH, SFX_EMBEDDINGS_PATH } from './config.js';
+import path from 'path';
+import crypto from 'crypto';
+import {
+  AMBIENT_EMBEDDINGS_PATH,
+  SFX_EMBEDDINGS_PATH,
+  CROPPED_SFX_CACHE_DIR,
+  AUDIO_SAMPLE_RATE,
+  AUDIO_CHANNELS,
+  AUDIO_CODEC,
+} from './config.js';
 import { loadCatalog, loadSfxCatalog } from './catalogLoader.js';
+import { runFfmpeg, getAudioDuration } from './ffmpegRunner.js';
 import {
   buildEmbeddingIndex,
   saveEmbeddingIndex,
@@ -461,37 +471,231 @@ export async function ensureSfxEmbeddingIndex(): Promise<EmbeddingIndex> {
 /**
  * Resolve a SoundAsset from the SFX catalog for each SfxEvent.
  *
- * Each event's `query` string is embedded and matched against the SFX catalog.
+ * Dual-index search: each event's `query` is embedded and matched against
+ * BOTH the SFX catalog and the ambient (realistic) catalog. The winner is
+ * selected by highest cosine similarity, with a small preference boost for
+ * SFX assets (+0.03) since they are already the correct length/dynamics for
+ * one-shot sound effects.
+ *
+ * If the winning asset comes from the ambient catalog, it is automatically
+ * cropped to ~5 seconds centered on the loudest peak (with 250ms fades)
+ * and cached for reuse.
+ *
  * Events that score below the relevance threshold or whose file is missing are
  * returned with `asset: null` so callers can skip them cleanly.
  *
  * @param sfxEvents - SFX events from SceneAnalysis (each carrying a `query` and `charIndex`)
- * @returns Per-event results: `{ sfxEvent, asset, score }` — asset may be null if unresolved
+ * @returns Per-event results: `{ sfxEvent, asset, score, fromAmbient }` — asset may be null
  */
 export async function resolveSfxEvents(
   sfxEvents: SfxEvent[]
-): Promise<Array<{ sfxEvent: SfxEvent; asset: SoundAsset | null; score: number }>> {
+): Promise<Array<{ sfxEvent: SfxEvent; asset: SoundAsset | null; score: number; fromAmbient: boolean }>> {
   if (sfxEvents.length === 0) return [];
 
-  const index = await ensureSfxEmbeddingIndex();
-  const catalog = loadSfxCatalog();
+  /** SFX assets get a small preference boost — they have correct length/dynamics for one-shots */
+  const SFX_PREFERENCE_BOOST = 0.03;
+  /** Minimum cosine similarity for any match to be used */
+  const MIN_THRESHOLD = 0.65;
+  /** Crop duration for ambient assets used as SFX (seconds) */
+  const CROP_DURATION_SEC = 5;
+  /** Fade in/out for cropped ambient SFX (ms) */
+  const CROP_FADE_MS = 250;
 
-  // Batch-embed all unique queries in one call
+  const [sfxIndex, ambientIndex] = await Promise.all([
+    ensureSfxEmbeddingIndex(),
+    ensureAmbientEmbeddingIndex(),
+  ]);
+  const sfxCatalog = loadSfxCatalog();
+  const ambientCatalog = loadCatalog();
+
+  // Embed all queries and search both indexes in parallel
   const queries = sfxEvents.map((e) => e.query);
-  const batchResults = await searchEmbeddingsBatch(index, queries, 3);
+  const [sfxBatch, ambientBatch] = await Promise.all([
+    searchEmbeddingsBatch(sfxIndex, queries, 3),
+    searchEmbeddingsBatch(ambientIndex, queries, 3),
+  ]);
 
-  return sfxEvents.map((sfxEvent, i) => {
-    // Top-1 result for this query — reject below 0.72 (no sound better than wrong sound)
-    const topResult = batchResults[i]?.results[0];
-    if (!topResult || topResult.score < 0.72) {
-      return { sfxEvent, asset: null, score: 0 };
+  const results: Array<{ sfxEvent: SfxEvent; asset: SoundAsset | null; score: number; fromAmbient: boolean }> = [];
+
+  for (let i = 0; i < sfxEvents.length; i++) {
+    const sfxTop = sfxBatch[i]?.results[0];
+    const ambientTop = ambientBatch[i]?.results[0];
+
+    const sfxScore = sfxTop?.score ?? 0;
+    const ambientScore = ambientTop?.score ?? 0;
+    const sfxScoreBoosted = sfxScore + SFX_PREFERENCE_BOOST;
+
+    // Determine winner: highest effective score
+    const sfxWins = sfxScoreBoosted >= ambientScore;
+    const winningScore = sfxWins ? sfxScore : ambientScore;
+
+    // Below minimum threshold — no match
+    if (winningScore < MIN_THRESHOLD) {
+      console.log(`  🎯 SFX[${i}]: "${sfxEvents[i].query.substring(0, 50)}" — no match above ${MIN_THRESHOLD} (sfx=${sfxScore.toFixed(3)}, ambient=${ambientScore.toFixed(3)})`);
+      results.push({ sfxEvent: sfxEvents[i], asset: null, score: 0, fromAmbient: false });
+      continue;
     }
 
-    const asset = catalog.find((a) => a.id === topResult.id) ?? null;
-    if (!asset || !fs.existsSync(asset.filePath)) {
-      return { sfxEvent, asset: null, score: topResult.score };
+    if (sfxWins && sfxTop) {
+      // SFX catalog wins (with preference boost)
+      const asset = sfxCatalog.find((a) => a.id === sfxTop.id) ?? null;
+      if (asset && fs.existsSync(asset.filePath)) {
+        console.log(`  🎯 SFX[${i}]: "${sfxEvents[i].query.substring(0, 40)}" → SFX "${asset.description?.substring(0, 40)}" (score=${sfxScore.toFixed(3)}, ambient=${ambientScore.toFixed(3)})`);
+        results.push({ sfxEvent: sfxEvents[i], asset, score: sfxScore, fromAmbient: false });
+        continue;
+      }
     }
 
-    return { sfxEvent, asset, score: topResult.score };
-  });
+    if (ambientTop) {
+      // Ambient catalog wins — need to crop to SFX-length clip
+      const asset = ambientCatalog.find((a) => a.id === ambientTop.id) ?? null;
+      if (asset && fs.existsSync(asset.filePath)) {
+        try {
+          const croppedPath = await cropAmbientForSfx(asset.filePath, CROP_DURATION_SEC, CROP_FADE_MS);
+          if (croppedPath) {
+            // Create a modified asset pointing to the cropped file
+            const croppedAsset: SoundAsset = {
+              ...asset,
+              filePath: croppedPath,
+              loopable: false,
+            };
+            console.log(`  🎯 SFX[${i}]: "${sfxEvents[i].query.substring(0, 40)}" → AMBIENT(cropped) "${asset.description?.substring(0, 40)}" (score=${ambientScore.toFixed(3)}, sfx=${sfxScore.toFixed(3)})`);
+            results.push({ sfxEvent: sfxEvents[i], asset: croppedAsset, score: ambientScore, fromAmbient: true });
+            continue;
+          }
+        } catch (cropErr) {
+          console.warn(`  ⚠️ SFX[${i}]: Ambient crop failed:`, cropErr instanceof Error ? cropErr.message : cropErr);
+        }
+      }
+    }
+
+    // Fallback: try SFX without boost if it was above threshold
+    if (sfxTop && sfxScore >= MIN_THRESHOLD) {
+      const asset = sfxCatalog.find((a) => a.id === sfxTop.id) ?? null;
+      if (asset && fs.existsSync(asset.filePath)) {
+        results.push({ sfxEvent: sfxEvents[i], asset, score: sfxScore, fromAmbient: false });
+        continue;
+      }
+    }
+
+    results.push({ sfxEvent: sfxEvents[i], asset: null, score: 0, fromAmbient: false });
+  }
+
+  return results;
+}
+
+// ========================================
+// Ambient-to-SFX cropping
+// ========================================
+
+/**
+ * Crop an ambient asset to a short SFX-length clip centered on the loudest moment.
+ *
+ * Uses ffmpeg `ebur128` filter to find the peak momentary loudness timestamp,
+ * then crops `cropDurationSec` seconds around it with fade in/out.
+ *
+ * Results are cached in CROPPED_SFX_CACHE_DIR keyed by MD5 hash of the source
+ * file path + crop parameters, so the same ambient asset is only cropped once.
+ *
+ * @param ambientFilePath - Path to the full ambient OGG file
+ * @param cropDurationSec - Target crop length in seconds (default: 5)
+ * @param fadeMs - Fade in/out duration in milliseconds (default: 250)
+ * @returns Path to the cropped OGG file, or null if cropping failed
+ */
+async function cropAmbientForSfx(
+  ambientFilePath: string,
+  cropDurationSec: number = 5,
+  fadeMs: number = 250,
+): Promise<string | null> {
+  // Ensure cache directory exists
+  if (!fs.existsSync(CROPPED_SFX_CACHE_DIR)) {
+    fs.mkdirSync(CROPPED_SFX_CACHE_DIR, { recursive: true });
+  }
+
+  // Cache key: hash of source path + crop params
+  const cacheKey = crypto
+    .createHash('md5')
+    .update(`${ambientFilePath}|${cropDurationSec}|${fadeMs}`)
+    .digest('hex');
+  const cachedPath = path.join(CROPPED_SFX_CACHE_DIR, `${cacheKey}.ogg`);
+
+  // Return cached version if it exists
+  if (fs.existsSync(cachedPath)) {
+    return cachedPath;
+  }
+
+  // Get total duration
+  const totalDur = await getAudioDuration(ambientFilePath);
+  if (totalDur <= 0) return null;
+
+  const fadeSec = fadeMs / 1000;
+
+  // If file is already shorter than crop duration, just copy with fades
+  if (totalDur <= cropDurationSec) {
+    const fadeOutStart = Math.max(totalDur - fadeSec, 0);
+    const result = await runFfmpeg([
+      '-i', ambientFilePath,
+      '-af', `afade=t=in:st=0:d=${fadeSec},afade=t=out:st=${fadeOutStart.toFixed(3)}:d=${fadeSec}`,
+      '-ar', AUDIO_SAMPLE_RATE.toString(),
+      '-ac', AUDIO_CHANNELS.toString(),
+      '-c:a', AUDIO_CODEC,
+      cachedPath,
+    ]);
+    return result.code === 0 ? cachedPath : null;
+  }
+
+  // Find loudest moment using ebur128 momentary loudness
+  let peakTimeSec = totalDur / 2; // fallback: center of file
+  try {
+    const analyzeResult = await runFfmpeg([
+      '-i', ambientFilePath,
+      '-af', 'ebur128=peak=true',
+      '-f', 'null', '-',
+    ]);
+
+    // Parse momentary loudness (M:) values from ebur128 stderr output
+    // Format: "t: 1.2      TARGET:-23 LUFS  M: -18.5 S: ..."
+    let maxM = -Infinity;
+    const lines = analyzeResult.stderr.split('\n');
+    for (const line of lines) {
+      const match = line.match(/t:\s*([\d.]+)\s.*M:\s*(-?[\d.]+)/);
+      if (match) {
+        const t = parseFloat(match[1]);
+        const m = parseFloat(match[2]);
+        if (m > maxM) {
+          maxM = m;
+          peakTimeSec = t;
+        }
+      }
+    }
+  } catch { /* use fallback center */ }
+
+  // Calculate crop window centered on peak
+  const halfCrop = cropDurationSec / 2;
+  let cropStart = Math.max(0, peakTimeSec - halfCrop);
+  // Ensure crop doesn't extend past file end
+  if (cropStart + cropDurationSec > totalDur) {
+    cropStart = Math.max(0, totalDur - cropDurationSec);
+  }
+
+  // Crop with fade in/out
+  const fadeOutStart = Math.max(cropDurationSec - fadeSec, 0);
+  const result = await runFfmpeg([
+    '-i', ambientFilePath,
+    '-ss', cropStart.toFixed(3),
+    '-t', cropDurationSec.toString(),
+    '-af', `afade=t=in:st=0:d=${fadeSec},afade=t=out:st=${fadeOutStart.toFixed(3)}:d=${fadeSec}`,
+    '-ar', AUDIO_SAMPLE_RATE.toString(),
+    '-ac', AUDIO_CHANNELS.toString(),
+    '-c:a', AUDIO_CODEC,
+    cachedPath,
+  ]);
+
+  if (result.code === 0) {
+    console.log(`  ✂️ Cropped ambient→SFX: ${path.basename(ambientFilePath)} → ${cacheKey}.ogg (${cropDurationSec}s @ ${cropStart.toFixed(1)}s)`);
+    return cachedPath;
+  }
+
+  console.warn(`  ⚠️ Ambient crop failed: ${result.stderr.substring(0, 200)}`);
+  return null;
 }

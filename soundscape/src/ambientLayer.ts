@@ -163,7 +163,7 @@ export async function generateSubchunkAmbientTrack(
     filterComplex = filterComplex.replace(/;\s*$/, '');
   } else {
     filterComplex +=
-      `${allMixLabels.join('')}amix=inputs=${allMixLabels.length}:duration=first:dropout_transition=2:normalize=0[out]`;
+      `${allMixLabels.join('')}amix=inputs=${allMixLabels.length}:duration=longest:dropout_transition=2:normalize=0[out]`;
   }
 
   const args = [

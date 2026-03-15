@@ -661,7 +661,7 @@ export async function applySoundscapeToChapter(options: {
 
   // ── LUFS-normalized mix: voice + ambient into single file ──
   // Target: ambient should be AMBIENT_LUFS_OFFSET_DB below voice (EBU R128)
-  const AMBIENT_LUFS_OFFSET_DB = -15; // ambient sits 15 dB below voice
+  const AMBIENT_LUFS_OFFSET_DB = -10; // ambient sits 10 dB below voice
   const finalAmbientPath = getAmbientTrackPath(options.chapterPath);
   if (fs.existsSync(finalAmbientPath) && fs.existsSync(options.chapterPath)) {
     const mixedPath = options.chapterPath.replace(/\.ogg$/i, '_mixed.ogg');
@@ -787,15 +787,16 @@ async function generateChapterSoundscapeFromSubchunks(options: {
   const mappedSfxEvents = mapSfxEventsToSubchunks(scene.sfxEvents, chapterText.length, segmentInfos);
   const sfxEventsBySubchunk = groupMappedEventsBySubchunk(mappedSfxEvents);
 
-  // Resolve SFX assets for all events (batch embedding search)
-  let sfxAssetMap = new Map<string, { asset: SoundAsset; score: number }>();
+  // Resolve SFX assets for all events (dual-index: SFX + ambient catalogs)
+  let sfxAssetMap = new Map<string, { asset: SoundAsset; score: number; fromAmbient: boolean }>();
   if (scene.sfxEvents.length > 0) {
     try {
       const resolved = await resolveSfxEvents(scene.sfxEvents);
       for (const r of resolved) {
         if (r.asset) {
-          sfxAssetMap.set(r.sfxEvent.query, { asset: r.asset, score: r.score });
-          console.log(`  🎯 SFX: "${r.sfxEvent.description.substring(0, 50)}" → "${r.asset.description?.substring(0, 40)}" (score=${r.score.toFixed(3)})`);
+          sfxAssetMap.set(r.sfxEvent.query, { asset: r.asset, score: r.score, fromAmbient: r.fromAmbient });
+          const source = r.fromAmbient ? '🌿AMB' : '🔊SFX';
+          console.log(`  🎯 SFX: "${r.sfxEvent.description.substring(0, 50)}" → [${source}] "${r.asset.description?.substring(0, 40)}" (score=${r.score.toFixed(3)})`);
         } else {
           console.log(`  🎯 SFX: "${r.sfxEvent.description.substring(0, 50)}" → no match`);
         }
@@ -832,6 +833,7 @@ async function generateChapterSoundscapeFromSubchunks(options: {
             filePath: resolved.asset.filePath,
           } : null,
           cosineSimilarity: resolved?.score ?? 0,
+          fromAmbient: resolved?.fromAmbient ?? false,
         };
       }),
     };

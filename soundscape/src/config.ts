@@ -36,6 +36,9 @@ export const MUSIC_EMBEDDINGS_PATH = path.join(ASSETS_ROOT, 'music_embeddings.js
 /** Persisted embedding index for SFX assets */
 export const SFX_EMBEDDINGS_PATH = path.join(ASSETS_ROOT, 'sfx_embeddings.json');
 
+/** Cache directory for ambient assets cropped to SFX-length clips */
+export const CROPPED_SFX_CACHE_DIR = path.join(ASSETS_ROOT, 'cropped_sfx_cache');
+
 // ========================================
 // Feature toggles (env-driven)
 // ========================================

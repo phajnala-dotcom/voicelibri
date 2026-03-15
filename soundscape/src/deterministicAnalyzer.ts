@@ -20,6 +20,9 @@ import type { TextSplitResult, SentenceInfo } from './textSplitter.js';
 import { embedTexts, searchEmbeddingsWithVector } from './embeddings.js';
 import { validateScene } from './sceneValidator.js';
 
+/** Minimum segment size in characters (~20 seconds of narration) */
+const MIN_SEGMENT_CHARS = 200;
+
 // ========================================
 // Types
 // ========================================
@@ -88,17 +91,22 @@ export async function analyzeSceneDeterministic(
 
   console.log(`  🔬 Deterministic analyzer: chapter ${chapterIndex}, ${paragraphs.length} paragraphs, ${sentences.length} sentences`);
 
-  // ── Step 2: Segment detection ──
-  const segmentBoundaries = detectSegments(chapterText, paragraphs);
-  console.log(`  🔬 Segments: ${segmentBoundaries.length} detected`);
-
-  // ── Step 2b: Multi-scale embedding ──
+  // ── Step 2b: Multi-scale embedding (BEFORE segment detection — needed for content-aware segmentation) ──
   const embeddedTexts = await embedMultiScale(sentences);
   console.log(`  🔬 Embedded: ${embeddedTexts.length} texts (${sentences.length} sentences + ${embeddedTexts.length - sentences.length} pairs)`);
 
   // Separate individual sentence embeddings and pair embeddings
   const sentenceEmbeddings = embeddedTexts.filter((e) => !e.isPair);
   const pairEmbeddings = embeddedTexts.filter((e) => e.isPair);
+
+  // ── Step 2: Content-aware segment detection (uses sentence embeddings + ambient index) ──
+  const segmentBoundaries = detectSegmentsContentAware(
+    sentenceEmbeddings,
+    ambientIndex,
+    paragraphs,
+    chapterText.length,
+  );
+  console.log(`  🔬 Segments: ${segmentBoundaries.length} detected (content-aware, min ${MIN_SEGMENT_CHARS} chars)`);
 
   // ── Step 3: Ambient matching ──
   const sceneSegments = matchAmbient(
@@ -135,7 +143,7 @@ export async function analyzeSceneDeterministic(
   };
 
   // ── Layer 2: Validation ──
-  const minSegments = Math.max(2, Math.min(6, Math.ceil(chapterText.length / 1500)));
+  const minSegments = segmentBoundaries.length; // content-aware detection already optimal
   const validation = validateScene(scene, chapterText.length, minSegments, minSfxCount);
 
   if (validation.corrections.length > 0) {
@@ -146,70 +154,106 @@ export async function analyzeSceneDeterministic(
 }
 
 // ========================================
-// Step 2: Segment Detection
+// Step 2: Content-Aware Segment Detection
 // ========================================
 
 /**
- * Detect segment boundaries at paragraph breaks nearest to equal-length splits.
- * Returns charIndex values for each segment start (first is always 0).
+ * Detect segment boundaries by tracking where the dominant ambient environment
+ * changes between paragraphs. Uses pre-computed sentence embeddings matched
+ * against the ambient catalog to determine each paragraph's best ambient match.
  *
- * @param chapterText - Full chapter text
- * @param paragraphs - Paragraphs from text splitting
- * @returns Array of charIndex values for segment boundaries
+ * Algorithm:
+ *   1. For each sentence, find the best ambient catalog match (top-1 cosine).
+ *   2. For each paragraph, pick the highest-scoring sentence's ambient match
+ *      as the paragraph's "dominant ambient".
+ *   3. Walk paragraphs in order — when the dominant ambient asset changes,
+ *      insert a segment boundary at that paragraph start.
+ *   4. Merge segments shorter than MIN_SEGMENT_CHARS (~200 chars ≈ 20s) into
+ *      the previous segment.
+ *
+ * No maximum segment cap — the text's actual environment changes drive the count.
+ * A chapter set entirely in one room produces 1 segment; a chapter crossing
+ * forest → stream → meadow → storm produces 4.
+ *
+ * @param sentenceEmbeddings - Individual sentence embeddings with paragraphIndex
+ * @param ambientIndex - Pre-built ambient embedding index
+ * @param paragraphs - Paragraphs from text splitting (for snapping boundaries)
+ * @param chapterLength - Total chapter text length
+ * @returns Array of charIndex values for segment boundaries (first is always 0)
  */
-function detectSegments(
-  chapterText: string,
+function detectSegmentsContentAware(
+  sentenceEmbeddings: EmbeddedText[],
+  ambientIndex: EmbeddingIndex,
   paragraphs: Array<{ text: string; charIndex: number; charEnd: number }>,
+  chapterLength: number,
 ): number[] {
-  const totalLength = chapterText.length;
+  if (sentenceEmbeddings.length === 0 || paragraphs.length <= 1) return [0];
 
-  // Segment count formula: min 2 for chapters > 500 chars, max 6
-  // Divisor 1500 ensures ~2000 char chapters get 2 segments (forest→door transitions)
-  const segmentCount = totalLength <= 500
-    ? 1
-    : Math.max(2, Math.min(6, Math.ceil(totalLength / 1500)));
+  // Step 1: For each sentence, find top-1 ambient asset ID via in-memory cosine
+  const sentenceMatches: Array<{
+    paragraphIndex: number;
+    ambientId: string;
+    score: number;
+  }> = [];
 
-  if (segmentCount === 1 || paragraphs.length <= 1) {
-    return [0];
-  }
-
-  // Ideal split points at equal intervals
-  const idealPoints: number[] = [];
-  for (let i = 1; i < segmentCount; i++) {
-    idealPoints.push(Math.round((i / segmentCount) * totalLength));
-  }
-
-  // For each ideal point, find the nearest paragraph boundary
-  const boundaries: number[] = [0]; // First segment always starts at 0
-  const usedParagraphs = new Set<number>(); // Track used paragraph indices
-
-  for (const ideal of idealPoints) {
-    let bestParaIdx = -1;
-    let bestDistance = Infinity;
-
-    for (let pi = 1; pi < paragraphs.length; pi++) {
-      if (usedParagraphs.has(pi)) continue;
-
-      const paraStart = paragraphs[pi].charIndex;
-      const distance = Math.abs(paraStart - ideal);
-
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        bestParaIdx = pi;
-      }
-    }
-
-    if (bestParaIdx >= 0) {
-      const boundary = paragraphs[bestParaIdx].charIndex;
-      // Ensure strictly increasing
-      if (boundary > boundaries[boundaries.length - 1]) {
-        boundaries.push(boundary);
-        usedParagraphs.add(bestParaIdx);
-      }
+  for (const emb of sentenceEmbeddings) {
+    const results = searchEmbeddingsWithVector(ambientIndex, emb.vector, 1);
+    if (results.length > 0) {
+      sentenceMatches.push({
+        paragraphIndex: emb.paragraphIndex,
+        ambientId: results[0].id,
+        score: results[0].score,
+      });
     }
   }
 
-  return boundaries;
+  if (sentenceMatches.length === 0) return [0];
+
+  // Step 2: For each paragraph, determine dominant ambient by highest-scoring sentence
+  const paragraphAmbientId = new Map<number, string>();
+  const paragraphBestScore = new Map<number, number>();
+
+  for (const m of sentenceMatches) {
+    const currentBest = paragraphBestScore.get(m.paragraphIndex) ?? -1;
+    if (m.score > currentBest) {
+      paragraphAmbientId.set(m.paragraphIndex, m.ambientId);
+      paragraphBestScore.set(m.paragraphIndex, m.score);
+    }
+  }
+
+  // Step 3: Walk paragraphs in order; boundary where dominant ambient changes
+  const rawBoundaries: number[] = [0];
+  let currentAmbId = paragraphAmbientId.get(0) ?? '';
+
+  for (let pi = 1; pi < paragraphs.length; pi++) {
+    const paraAmbId = paragraphAmbientId.get(pi);
+    if (paraAmbId && paraAmbId !== currentAmbId) {
+      rawBoundaries.push(paragraphs[pi].charIndex);
+      currentAmbId = paraAmbId;
+    }
+  }
+
+  // Step 4: Merge segments shorter than MIN_SEGMENT_CHARS
+  const merged: number[] = [0];
+  for (let i = 1; i < rawBoundaries.length; i++) {
+    const segSize = rawBoundaries[i] - merged[merged.length - 1];
+    if (segSize >= MIN_SEGMENT_CHARS) {
+      merged.push(rawBoundaries[i]);
+    }
+  }
+
+  // Check last segment isn't too short — merge into previous
+  if (merged.length > 1) {
+    const lastSize = chapterLength - merged[merged.length - 1];
+    if (lastSize < MIN_SEGMENT_CHARS) {
+      merged.pop();
+    }
+  }
+
+  // Fallback: ensure at least 1 boundary
+  if (merged.length === 0) merged.push(0);
+
+  return merged;
 }
 
 // ========================================
