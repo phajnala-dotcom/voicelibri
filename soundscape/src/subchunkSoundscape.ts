@@ -204,18 +204,26 @@ function findSentenceBoundaries(text: string): number[] {
  * Map a local character index within a subchunk to the midpoint of the
  * silence gap that follows the sentence containing that character.
  *
- * Sentence-counting algorithm (replaces proportional char mapping):
+ * Sentence-proportional algorithm:
  *   1. Split the subchunk text into sentences using punctuation boundaries.
  *   2. Determine which sentence the localCharIndex falls into.
- *   3. TTS silence gaps correspond to pauses between spoken sentences:
- *      gap[i] is the pause after sentence[i].
- *   4. Return gap[sentenceIndex].midpointMs.
- *   5. If the event falls in the last sentence (no gap follows) → null.
+ *   3. Compute the sentence's proportional position:
+ *        proportion = (sentenceIndex + 1) / totalSentences
+ *   4. Select the gap at that proportion of the total gap array:
+ *        gapIndex = floor(proportion × gapCount)
+ *   5. If proportion ≥ 1.0 (last sentence, no gap after) → null.
  *
- * This is much more accurate than proportional mapping because TTS
- * speaking rate varies across sentences (descriptive prose is slower,
- * action/dialogue is faster). Sentence-counting maps content position
- * to structural pauses regardless of speaking rate.
+ * Why sentence-proportional, not char-proportional?
+ *   TTS speaking rate varies: long descriptive sentences are spoken slower,
+ *   short dialogue/action sentences faster. Char-proportional mapping
+ *   drifts 5-13s because it assumes uniform chars-per-second.
+ *   Sentence-proportional normalizes this: each sentence (regardless of
+ *   length) is one spoken unit, giving a more uniform time mapping.
+ *
+ * Why not 1:1 sentence→gap?
+ *   TTS produces gaps at commas, quotes, paragraph breaks etc — not just
+ *   sentence endings. A subchunk with 10 sentences may have 30 gaps.
+ *   1:1 mapping would compress all SFX into the first third of the audio.
  *
  * @param localCharIndex  - Position within the subchunk's plain text
  * @param subchunkText    - Full plain text of the subchunk (for sentence detection)
@@ -238,11 +246,11 @@ export function calculateSfxOffsetFromGaps(
     return silenceGaps[0].midpointMs;
   }
 
-  // Determine which sentence the localCharIndex falls into.
+  // Determine which sentence the localCharIndex falls into (0-based).
   // Sentence 0: chars [0, sentenceEnds[0])
   // Sentence 1: chars [sentenceEnds[0], sentenceEnds[1])
   // ...
-  // Sentence K: chars [sentenceEnds[K-1], ...)
+  // Sentence S: chars [sentenceEnds[S-1], end-of-text)
   let sentenceIndex = sentenceEnds.length; // default: after all boundaries
   for (let i = 0; i < sentenceEnds.length; i++) {
     if (localCharIndex < sentenceEnds[i]) {
@@ -251,10 +259,19 @@ export function calculateSfxOffsetFromGaps(
     }
   }
 
-  // Gap[i] follows sentence[i]. If sentenceIndex >= N (gap count), no gap follows.
-  if (sentenceIndex >= N) return null;
+  // Map sentence position proportionally onto the gap array.
+  // Sentences divide text into (sentenceEnds.length + 1) spoken units.
+  // SFX should play in the gap AFTER the containing sentence finishes.
+  // proportion = (sentenceIndex + 1) / totalSentences → fraction of text spoken
+  // gapIndex = floor(proportion × N) → corresponding gap in time
+  const totalSentences = sentenceEnds.length + 1;
+  const proportion = (sentenceIndex + 1) / totalSentences;
 
-  return silenceGaps[sentenceIndex].midpointMs;
+  // Last sentence — no gap after it
+  if (proportion >= 1.0) return null;
+
+  const gapIndex = Math.min(Math.floor(proportion * N), N - 1);
+  return silenceGaps[gapIndex].midpointMs;
 }
 
 // ========================================
