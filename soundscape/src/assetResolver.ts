@@ -497,7 +497,7 @@ export async function resolveSfxEvents(
   /** Minimum cosine similarity for any match to be used */
   const MIN_THRESHOLD = 0.65;
   /** Crop duration for ambient assets used as SFX (seconds) */
-  const CROP_DURATION_SEC = 5;
+  const CROP_DURATION_SEC = 3;
   /** Fade in/out for cropped ambient SFX (ms) */
   const CROP_FADE_MS = 250;
 

@@ -33,7 +33,7 @@ import type {
 const SFX_VOLUME_BOOST_DB = 12;
 
 /** Crossfade duration between adjacent ambient segments (seconds) */
-const AMBIENT_CROSSFADE_SEC = 0.5;
+const AMBIENT_CROSSFADE_SEC = 2;
 
 /** Short boundary fade at the subchunk edges to hide concat seams (seconds) */
 const BOUNDARY_FADE_SEC = 0.05;
