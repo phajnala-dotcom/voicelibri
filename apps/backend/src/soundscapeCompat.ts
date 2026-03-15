@@ -844,6 +844,44 @@ async function generateChapterSoundscapeFromSubchunks(options: {
     console.warn(`  ⚠️ Failed to save resolution JSON:`, resErr instanceof Error ? resErr.message : resErr);
   }
 
+  // Fix K: Measure LUFS for all unique resolved assets (ambient + SFX)
+  // Populates loudnessLUFS on SoundAsset objects so ambientLayer.ts
+  // can apply per-asset LUFS normalization to a common -16 LUFS target.
+  const allAssetPaths = new Set<string>();
+  for (const r of segmentAssets) {
+    if (r.asset?.filePath) allAssetPaths.add(r.asset.filePath);
+  }
+  for (const { asset } of sfxAssetMap.values()) {
+    if (asset?.filePath) allAssetPaths.add(asset.filePath);
+  }
+
+  // Measure all assets in parallel (each runs a short ffmpeg ebur128 pass)
+  const lufsEntries = await Promise.all(
+    [...allAssetPaths].map(async (fp) => {
+      const lufs = await measureLufs(fp);
+      return [fp, lufs] as const;
+    })
+  );
+  const lufsCache = new Map<string, number>();
+  for (const [fp, lufs] of lufsEntries) {
+    if (lufs !== null) lufsCache.set(fp, lufs);
+  }
+  console.log(`  📏 LUFS measured: ${lufsCache.size}/${allAssetPaths.size} assets`);
+
+  // Populate loudnessLUFS on all resolved asset objects
+  for (const r of segmentAssets) {
+    if (r.asset?.filePath) {
+      const lufs = lufsCache.get(r.asset.filePath);
+      if (lufs !== undefined) r.asset.loudnessLUFS = lufs;
+    }
+  }
+  for (const { asset } of sfxAssetMap.values()) {
+    if (asset?.filePath) {
+      const lufs = lufsCache.get(asset.filePath);
+      if (lufs !== undefined) asset.loudnessLUFS = lufs;
+    }
+  }
+
   // Pre-fetch SFX asset durations (for no-boundary-crossing constraint)
   const sfxDurations = new Map<string, number>();
   for (const { asset } of sfxAssetMap.values()) {
@@ -939,7 +977,7 @@ async function generateChapterSoundscapeFromSubchunks(options: {
 
       // This segment starts within this subchunk — map to a silence gap
       const localCharIndex = segSubchunkChar - subchunkStartChar;
-      const segOffsetMs = calculateSfxOffsetFromGaps(localCharIndex, info.charCount, silenceGaps);
+      const segOffsetMs = calculateSfxOffsetFromGaps(localCharIndex, info.text, silenceGaps);
       if (segOffsetMs === null) continue; // no suitable gap — skip this ambient change
 
       const segAsset = segmentAssets[si]?.asset;
@@ -968,7 +1006,7 @@ async function generateChapterSoundscapeFromSubchunks(options: {
     const placedSfx = buildPlacedSfxEvents(
       eventsForThis,
       sfxAssetMap,
-      info.charCount,
+      info.text,
       subchunkDurationMs,
       silenceGaps,
       ambientChangeOffsets,

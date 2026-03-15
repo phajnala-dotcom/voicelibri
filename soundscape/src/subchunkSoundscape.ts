@@ -10,10 +10,12 @@
  *   accumulated into a running offset and the chapter charIndex is rescaled
  *   proportionally onto that offset space.
  *
- * Step 2.4 — Proportional Timing Calculation
+ * Step 2.4 — Sentence-Counting Timing Calculation
  *   Once the actual TTS duration of a subchunk is known (from ffprobe):
- *     offsetMs = (localCharIndex / subchunkCharCount) × subchunkDurationMs
- *   This gives precise millisecond SFX placement without any timestamp data.
+ *     1. Split subchunk text into sentences (punctuation boundaries).
+ *     2. Map SFX charIndex → containing sentence → corresponding silence gap.
+ *   TTS gaps correspond 1:1 to sentence boundaries, so this mapping is
+ *   independent of speaking rate variation (unlike proportional char mapping).
  *
  * Step 2.6 — Subchunk Soundscape Orchestration
  *   Builds the per-subchunk SFX placement data used by generateSubchunkAmbientTrack()
@@ -157,39 +159,102 @@ export function mapSfxEventsToSubchunks(
 // Re-export SilenceGap from canonical location for existing consumers
 export type { SilenceGap };
 
+// ========================================
+// Sentence boundary detection (language-agnostic)
+// ========================================
+
 /**
- * Map a local character index within a subchunk to the midpoint of the silence
- * gap that immediately follows its proportional segment.
+ * Find sentence end positions within a text (language-agnostic).
+ * A sentence ends at [.!?] followed by whitespace, end-of-text,
+ * or a closing quote + whitespace/end-of-text.
  *
- * Algorithm:
- *   - Divide the subchunk into N+1 equal-width proportional segments (N = gap count).
- *   - Find which segment the event falls in using `localCharIndex / subchunkCharCount`.
- *   - Return the midpointMs of the gap that follows that segment.
- *   - If the event falls in the LAST segment (after all gaps) or there are no gaps → null.
- *     Callers must skip SFX when null is returned.
+ * Handles ellipsis (consecutive dots) by skipping them.
+ * Handles quoted dialogue with closing-quote-after-punctuation patterns.
  *
- * @param localCharIndex     - Position within the subchunk's plain text
- * @param subchunkCharCount  - Total character count of the subchunk's plain text
- * @param silenceGaps        - Detected silence gaps for this subchunk (ordered)
+ * Returns array of char offsets where each sentence ends (exclusive),
+ * sorted ascending. Used by sentence-counting gap assignment:
+ * each end position marks where TTS would insert a pause,
+ * corresponding to a detected silence gap.
+ */
+function findSentenceBoundaries(text: string): number[] {
+  const ends: number[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch !== '.' && ch !== '!' && ch !== '?') continue;
+
+    // Skip ellipsis: consecutive dots
+    if (ch === '.' && ((i > 0 && text[i - 1] === '.') || text[i + 1] === '.')) continue;
+
+    // Check for closing quote after punctuation
+    const next = text[i + 1];
+    const isClosingQuote =
+      next === '"' || next === "'" ||
+      next === '\u201D' || next === '\u00BB' || next === '\u00AB';
+    const checkIdx = isClosingQuote ? i + 2 : i + 1;
+
+    // Must be followed by whitespace or end-of-text
+    if (checkIdx < text.length && !/\s/.test(text[checkIdx])) continue;
+
+    ends.push(isClosingQuote ? i + 2 : i + 1);
+  }
+  return ends;
+}
+
+/**
+ * Map a local character index within a subchunk to the midpoint of the
+ * silence gap that follows the sentence containing that character.
+ *
+ * Sentence-counting algorithm (replaces proportional char mapping):
+ *   1. Split the subchunk text into sentences using punctuation boundaries.
+ *   2. Determine which sentence the localCharIndex falls into.
+ *   3. TTS silence gaps correspond to pauses between spoken sentences:
+ *      gap[i] is the pause after sentence[i].
+ *   4. Return gap[sentenceIndex].midpointMs.
+ *   5. If the event falls in the last sentence (no gap follows) → null.
+ *
+ * This is much more accurate than proportional mapping because TTS
+ * speaking rate varies across sentences (descriptive prose is slower,
+ * action/dialogue is faster). Sentence-counting maps content position
+ * to structural pauses regardless of speaking rate.
+ *
+ * @param localCharIndex  - Position within the subchunk's plain text
+ * @param subchunkText    - Full plain text of the subchunk (for sentence detection)
+ * @param silenceGaps     - Detected silence gaps for this subchunk (ordered by time)
  * @returns Millisecond offset for ffmpeg `adelay`, or null if no suitable gap
  */
 export function calculateSfxOffsetFromGaps(
   localCharIndex: number,
-  subchunkCharCount: number,
+  subchunkText: string,
   silenceGaps: SilenceGap[]
 ): number | null {
   if (silenceGaps.length === 0) return null;
 
-  const proportion = subchunkCharCount > 0 ? localCharIndex / subchunkCharCount : 0;
+  const sentenceEnds = findSentenceBoundaries(subchunkText);
   const N = silenceGaps.length;
-  // N+1 equal segments of width 1/(N+1); segment index 0..N
-  const segmentWidth = 1 / (N + 1);
-  const segmentIndex = Math.floor(proportion / segmentWidth);
 
-  // If the event lands in the last segment (index N, after all gaps), no gap follows it
-  if (segmentIndex >= N) return null;
+  if (sentenceEnds.length === 0) {
+    // No sentence boundaries detected — entire text is one "sentence".
+    // Place at the first gap as a reasonable fallback.
+    return silenceGaps[0].midpointMs;
+  }
 
-  return silenceGaps[segmentIndex].midpointMs;
+  // Determine which sentence the localCharIndex falls into.
+  // Sentence 0: chars [0, sentenceEnds[0])
+  // Sentence 1: chars [sentenceEnds[0], sentenceEnds[1])
+  // ...
+  // Sentence K: chars [sentenceEnds[K-1], ...)
+  let sentenceIndex = sentenceEnds.length; // default: after all boundaries
+  for (let i = 0; i < sentenceEnds.length; i++) {
+    if (localCharIndex < sentenceEnds[i]) {
+      sentenceIndex = i;
+      break;
+    }
+  }
+
+  // Gap[i] follows sentence[i]. If sentenceIndex >= N (gap count), no gap follows.
+  if (sentenceIndex >= N) return null;
+
+  return silenceGaps[sentenceIndex].midpointMs;
 }
 
 // ========================================
@@ -229,7 +294,7 @@ export function groupMappedEventsBySubchunk(
  *
  * @param mappedEvents          - Events mapped to this subchunk
  * @param resolvedAssets        - Map: sfxEvent.query → { asset, score } (from resolver)
- * @param subchunkCharCount     - Character count of this subchunk’s plain text
+ * @param subchunkText          - Full plain text of the subchunk (for sentence-counting timing)
  * @param subchunkDurationMs    - Actual TTS duration of this subchunk in ms
  * @param silenceGaps           - Detected silence gaps for this subchunk
  * @param ambientChangeOffsets  - ms offsets where ambient scene changes happen (for exclusion)
@@ -238,7 +303,7 @@ export function groupMappedEventsBySubchunk(
 export function buildPlacedSfxEvents(
   mappedEvents: MappedSfxEvent[],
   resolvedAssets: Map<string, { asset: SoundAsset; score: number }>,
-  subchunkCharCount: number,
+  subchunkText: string,
   subchunkDurationMs: number,
   silenceGaps: SilenceGap[],
   ambientChangeOffsets: number[],
@@ -264,7 +329,7 @@ export function buildPlacedSfxEvents(
 
     const offsetMs = calculateSfxOffsetFromGaps(
       mapped.localCharIndex,
-      subchunkCharCount,
+      subchunkText,
       silenceGaps
     );
     if (offsetMs === null) continue; // No suitable gap — skip
