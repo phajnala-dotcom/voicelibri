@@ -135,7 +135,7 @@ export async function analyzeSceneDeterministic(
   };
 
   // ── Layer 2: Validation ──
-  const minSegments = Math.max(2, Math.min(6, Math.ceil(chapterText.length / 3000)));
+  const minSegments = Math.max(2, Math.min(6, Math.ceil(chapterText.length / 1500)));
   const validation = validateScene(scene, chapterText.length, minSegments, minSfxCount);
 
   if (validation.corrections.length > 0) {
@@ -163,10 +163,11 @@ function detectSegments(
 ): number[] {
   const totalLength = chapterText.length;
 
-  // Segment count formula: min 2 for chapters > 2000 chars, max 6
-  const segmentCount = totalLength <= 2000
+  // Segment count formula: min 2 for chapters > 500 chars, max 6
+  // Divisor 1500 ensures ~2000 char chapters get 2 segments (forest→door transitions)
+  const segmentCount = totalLength <= 500
     ? 1
-    : Math.max(2, Math.min(6, Math.ceil(totalLength / 3000)));
+    : Math.max(2, Math.min(6, Math.ceil(totalLength / 1500)));
 
   if (segmentCount === 1 || paragraphs.length <= 1) {
     return [0];

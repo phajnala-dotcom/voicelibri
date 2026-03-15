@@ -29,8 +29,8 @@ import type {
 // Step 2.5 — Per-subchunk Ambient + SFX Generation
 // ========================================
 
-/** Volume boost for SFX relative to the ambient bed */
-const SFX_VOLUME_BOOST_DB = 6;
+/** Volume boost for SFX relative to the ambient bed (12 dB = clearly audible above ambient) */
+const SFX_VOLUME_BOOST_DB = 12;
 
 /** Crossfade duration between adjacent ambient segments (seconds) */
 const AMBIENT_CROSSFADE_SEC = 0.5;

@@ -156,8 +156,10 @@ export function loadCatalog(csvPath?: string): SoundAsset[] {
       assetType = 'music';
     } else if (rawType === 'sfx') {
       assetType = 'sfx';
+    } else if (rawType === 'cinematic') {
+      continue; // cinematic one-shots excluded — contaminate ambient index
     } else {
-      assetType = 'ambient'; // realistic, cinematic → ambient
+      assetType = 'ambient'; // realistic → ambient
     }
 
     // Derive genre/mood from category + subcategory + keywords
