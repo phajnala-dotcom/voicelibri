@@ -38,9 +38,9 @@ Replace the monolithic LLM scene analysis with a fully deterministic pipeline:
 Layer 1: DETERMINISTIC ANALYSIS (code + embedding API, 100% reproducible)
 
   Step 1: Text splitting (rule-based, sync)
-    → Sentences (split on .!?)
-    → Fragments per sentence (split on ,;—and) with char offsets
+    → Sentences (split on .!?) with char offsets
     → Paragraph boundaries (split on \n\n)
+    → No sub-sentence fragmentation (language-agnostic, see Decision #2)
 
   Step 2: Segment detection (rule-based, sync)
     → Segment boundaries at paragraph breaks
@@ -53,10 +53,10 @@ Layer 1: DETERMINISTIC ANALYSIS (code + embedding API, 100% reproducible)
     → Both embedding vectors stored for reuse (no re-embedding)
 
   Step 4: SFX matching (embedding API, deterministic)
-    → Embed each fragment → match BOTH ambient AND SFX catalogs
-    → Keep SFX matches ≥ 0.72 threshold
-    → charIndex = fragment start offset (exact, from text splitting)
-    → Handles multi-SFX sentences via clause-level splitting
+    → Embed each WHOLE SENTENCE → match SFX catalog
+    → Keep SFX matches ≥ 0.72 threshold (max 1 SFX per sentence)
+    → charIndex = sentence start offset (exact, from text splitting)
+    → Multi-SFX sentences: embedding blends → dominant sound wins naturally
 
   Step 5: Assemble SceneAnalysis
     → Populate interface with defaults for unused metadata fields
@@ -64,7 +64,6 @@ Layer 1: DETERMINISTIC ANALYSIS (code + embedding API, 100% reproducible)
 
   Output: SceneAnalysis (same interface — all downstream code unchanged)
 
-Layer 2: LLM ENRICHMENT (constrained, optional enhancement)
 Layer 2: VALIDATION (code, sync, lightweight)
   → Min segment count, min SFX count, dedup, bounds check
   → If 0 SFX found: lower threshold to 0.65 and retry matching
@@ -82,28 +81,28 @@ Every function the LLM performed has a deterministic replacement:
 | Segment boundaries | Paragraph-break analysis (Layer 1, Step 2) | Structural, not semantic |
 | Environment labels | Top ambient asset description (Layer 1, Step 3) | Embedding match is direct |
 | Ambient asset matching | Sentence-window embedding vs catalog (Layer 1, Step 3) | `text-embedding-004` is multilingual — no translation needed |
-| SFX identification | Fragment embedding vs SFX catalog (Layer 1, Step 4) | Cosine match finds sound-producing text |
-| SFX charIndex | Fragment char offset — known from splitting (Layer 1, Step 1) | Text position is structural data |
-| SFX query string | Eliminated — direct fragment embedding replaces it | No intermediary needed |
+| SFX identification | Whole sentence embedding vs SFX catalog (Layer 1, Step 4) | Cosine match finds sound-producing text; max 1 SFX per sentence |
+| SFX charIndex | Sentence char offset — known from splitting (Layer 1, Step 1) | Text position is structural data |
+| SFX query string | Eliminated — direct sentence embedding replaces it | No intermediary needed |
 | intensity | Fixed 0.7 (only adjusts volume by 0-3 dB, negligible vs LUFS normalization) | Not worth any computation |
 | timeOfDay, weather, moods | Fixed defaults (`'unknown'`, `'none'`, `[]`) | **Never consumed downstream** — verified |
 
-**2. Fragment-Level SFX Matching (Multi-SFX Sentences)**
+**2. Sentence-Level SFX Matching (No Sub-Sentence Fragmentation)**
 
-A sentence like *"Lightning cracked across the sky and thunder rumbled"* contains two SFX. Embedding the whole sentence would produce a blended vector matching neither asset cleanly.
+Fragment splitting (on `, and `, `, but `, `; `, etc.) was considered and rejected for two reasons:
 
-Solution: Split sentences into **fragments** on clause boundaries (`, and `, `, `, `; `, ` — `):
-- *"Lightning cracked across the sky"* → matches "lightning crack" SFX at ~0.84
-- *"thunder rumbled"* → matches "thunder rumble" SFX at ~0.86
+1. **Language dependency** — English uses `, and ` but Czech uses `, a `, Slovak `, a ` / `, ale `. Punctuation-only splitting (`, `) is too aggressive: Czech prose uses commas heavily for subordinate clauses (*"Muž, který stál u okna, se otočil"*) creating noisy non-sound fragments.
 
-Each fragment gets its own embedding, catalog match, and `charIndex`.
+2. **Audio quality** — Two SFX events within one sentence (2-5 seconds of speech) sound artificial. Professional audiobooks never layer multiple one-shot SFX in rapid succession without careful manual mixing. Our automated pipeline cannot achieve that precision.
 
-Short fragments like *"and ran"* produce low cosine scores → filtered by ≥0.72 threshold naturally.
+**Solution**: Embed whole sentences against the SFX catalog. For multi-SFX sentences like *"Lightning cracked across the sky and thunder rumbled"*, the embedding vector blends both concepts but still scores ~0.78 against the dominant SFX asset — above the 0.72 threshold. The pipeline picks the **strongest single match** naturally. One SFX per sentence maximum.
+
+**When it fails**: Sentences with 4+ sound references (*"Birds sang, rain fell, thunder crashed, and horses galloped"*) produce diffuse embeddings → score drops below threshold → no SFX. This is acceptable — adding noisy SFX to such dense sentences would be worse than silence.
 
 **3. Different Granularity for Ambient vs SFX**
 
-- **Ambient matching**: Wide context needed — sliding window of 3-5 consecutive sentences captures the environment described across multiple sentences
-- **SFX matching**: Narrow context needed — individual fragments capture discrete sound-producing actions
+- **Ambient matching**: Wide context — sliding window of 3-5 consecutive sentences captures the environment described across multiple sentences
+- **SFX matching**: Sentence-level — each sentence is one SFX opportunity (max 1 SFX per sentence, dominant sound wins)
 
 **4. Embedding Reuse**
 
@@ -154,34 +153,20 @@ NEW FILES:
 
 ### NEW FILE: `soundscape/src/textSplitter.ts` — Step 1
 
-**Purpose**: Pure deterministic text splitting into sentences and fragments with character offsets. 100% language-agnostic (operates on punctuation and whitespace structure).
+**Purpose**: Pure deterministic text splitting into paragraphs and sentences with character offsets. 100% language-agnostic (operates on punctuation and whitespace structure). No sub-sentence fragmentation — sentences are the smallest unit for SFX matching.
 
 ```typescript
-export interface TextFragment {
-  /** The text content of this fragment */
-  text: string;
-  /** Character offset where this fragment starts in the original chapter text */
-  charIndex: number;
-  /** Character offset where this fragment ends (exclusive) */
-  charEnd: number;
-  /** Index of the sentence this fragment belongs to */
-  sentenceIndex: number;
-  /** Index of the paragraph this fragment belongs to */
-  paragraphIndex: number;
-}
-
 export interface TextSplitResult {
   /** All paragraphs with char offsets */
   paragraphs: Array<{ text: string; charIndex: number; charEnd: number }>;
-  /** All sentences with char offsets */
+  /** All sentences with char offsets — used for both ambient windows and SFX matching */
   sentences: Array<{ text: string; charIndex: number; charEnd: number; paragraphIndex: number }>;
-  /** All fragments (clause-level) with char offsets — used for SFX matching */
-  fragments: TextFragment[];
 }
 
 /**
- * Split chapter text into paragraphs, sentences, and fragments.
+ * Split chapter text into paragraphs and sentences.
  * Pure synchronous function, language-agnostic.
+ * Sentences are the smallest unit — no sub-sentence fragmentation.
  */
 export function splitText(chapterText: string): TextSplitResult;
 ```
@@ -194,16 +179,11 @@ export function splitText(chapterText: string): TextSplitResult;
    - Primary delimiters: `. `, `! `, `? ` (period/exclamation/question followed by space)
    - Handle edge cases: abbreviations (Mr., Dr., etc.), ellipsis (`...`), quotes ending sentences
    - Keep dialogue quotes with their sentence
-   - Minimum sentence length: 10 chars (merge shorter fragments with preceding sentence)
-
-3. **Fragment splitting**: Within each sentence, split on clause boundaries:
-   - Delimiters: `, and `, `, but `, `, or `, `; `, ` — `, ` – `
-   - Also split on `, ` when the clause before the comma is ≥ 30 chars (avoids splitting short lists)
-   - Minimum fragment length: 15 chars (don't split further)
-   - Each fragment retains its charIndex from the original text
+   - Minimum sentence length: 10 chars (merge shorter with preceding sentence)
 
 **Critical constraints:**
-- NO language-specific keywords or dictionaries (clause delimiters are punctuation-based)
+- NO sub-sentence fragmentation (no clause/comma splitting — language-dependent and produces noisy results)
+- NO language-specific keywords or dictionaries
 - NO imports of any external NLP library
 - Must be synchronous (no async, no API calls)
 - Must be pure function (no side effects, no state)
@@ -228,11 +208,14 @@ export interface AnalyzerOptions {
   sfxThreshold?: number;
   /** Cosine similarity threshold for ambient matches (default: 0.65) */
   ambientThreshold?: number;
+  /** Minimum SFX count — if not met, retry at lower threshold (default: 3) */
+  minSfxCount?: number;
 }
 
 /**
  * Deterministic scene analysis — no LLM, 100% reproducible.
  * Produces a SceneAnalysis identical in interface to the LLM-based version.
+ * SFX matching is sentence-level (max 1 SFX per sentence, dominant sound wins).
  */
 export async function analyzeSceneDeterministic(
   options: AnalyzerOptions
@@ -260,14 +243,15 @@ export async function analyzeSceneDeterministic(
 
 **Step 4: SFX matching** (async, uses embedding API):
 
-1. Embed all fragments from `splitResult.fragments` using `embedTexts()` (batched, concurrent)
-2. Match each fragment's embedding against the SFX index using `searchEmbeddingsWithVector()` — return top-3 candidates per fragment
+1. Embed all sentences from `splitResult.sentences` using `embedTexts()` (batched, concurrent)
+2. Match each sentence's embedding against the SFX index using `searchEmbeddingsWithVector()` — return top-1 best candidate per sentence
 3. Filter: keep only matches where `score >= sfxThreshold` (default 0.72)
 4. For each qualifying match, create an `SfxEvent`:
-   - `query`: the fragment's raw text (used for downstream SFX embedding — but since we already have the embedding vector, we can pass it through)
-   - `charIndex`: the fragment's `charIndex` (exact, from text splitting)
+   - `query`: the sentence's raw text (used for downstream SFX asset resolution via `resolveSfxEvents()`)
+   - `charIndex`: the sentence's `charIndex` (exact, from text splitting)
    - `description`: the matching SFX asset's description
-5. Deduplicate: if two fragments within ±50 chars match the same SFX asset, keep only the higher-scoring one
+5. **Max 1 SFX per sentence** — multi-SFX sentences produce a blended embedding that naturally picks the dominant sound. This is by design: rapid successive SFX within one sentence sounds artificial.
+6. **Threshold retry**: if total `sfxEvents.length < minSfxCount`, lower threshold from 0.72 to 0.65 and re-filter (same embeddings, no re-computation)
 
 **Step 5: Assemble SceneAnalysis** (sync):
 
@@ -313,7 +297,7 @@ export function validateScene(
 1. `sceneSegments.length >= minSegments` — if too few, add segments at equal intervals
 2. `sceneSegments[0].charIndex === 0` — force to 0 if not
 3. All `charIndex` values strictly increasing and within `[0, chapterTextLength)` — clamp out-of-bounds
-4. No duplicate SFX at same charIndex (within ±50 chars) — deduplicate, keep higher score
+4. No duplicate SFX at same charIndex (within ±200 chars — sentence-level dedup) — deduplicate, keep higher score
 5. If `sfxEvents.length < minSfxCount` — **do NOT silently fail**: log a note, return what we have (the threshold can be lowered and retried by the caller)
 
 **Auto-correction** (fix rather than reject):
@@ -351,7 +335,7 @@ This uses `searchEmbeddingsWithVector()` (already exists in `embeddings.ts`) —
 
 **`resolveAmbientAsset()` (existing)**: Keep unchanged — used when embedding vector is not pre-computed.
 
-**`resolveSfxEvents()` (existing)**: The `query` field will contain raw fragment text instead of LLM-generated English queries. The multilingual embedding model handles this natively. **The function itself needs no code change** — it embeds the query strings and matches against the SFX index. The only difference is the input strings are raw text fragments instead of LLM-generated English snippets.
+**`resolveSfxEvents()` (existing)**: The `query` field will contain raw sentence text instead of LLM-generated English queries. The multilingual embedding model handles this natively. **The function itself needs no code change** — it embeds the query strings and matches against the SFX index. The only difference is the input strings are raw sentences instead of LLM-generated English snippets.
 
 ### MODIFIED FILE: `soundscape/src/embeddings.ts`
 
@@ -402,11 +386,11 @@ The `intensity` field is now fixed at 0.7, so the volume adjustment `0 - (1 - 0.
 ### Unit Tests (vitest)
 
 1. **Text splitter tests** (`textSplitter.test.ts`):
-   - English text: verify sentence and fragment splitting with correct char offsets
+   - English text: verify paragraph and sentence splitting with correct char offsets
    - Czech text: verify SAME structural splitting (language-agnostic proof — punctuation-based)
-   - Multi-SFX sentence: *"Lightning cracked and thunder rumbled"* → 2 fragments
    - Edge cases: no punctuation, single sentence, empty text, dialogue-heavy text
-   - Char offset accuracy: fragment.charIndex must match actual position in original text
+   - Char offset accuracy: sentence.charIndex must match actual position in original text
+   - No sub-sentence output: verify only paragraphs and sentences are returned
 
 2. **Deterministic analyzer tests** (`deterministicAnalyzer.test.ts`):
    - Verify segment count formula (short text → 2, long text → 6)
@@ -468,7 +452,7 @@ Use existing `scripts/soundscape_eval/evaluate.py` — the 7-criteria eval syste
 7. **Follow existing code patterns** — same error handling, same `console.log` emoji prefixes, same TypeScript style
 8. **This is a commercial codebase** — production-quality error handling, no shortcuts
 9. **Embedding calls use existing infrastructure** — `embedTexts()`, `searchEmbeddingsWithVector()`, `ensureAmbientEmbeddingIndex()`, `ensureSfxEmbeddingIndex()`
-10. **Fragment-level SFX matching threshold** starts at 0.72 (same as current `resolveSfxEvents()` line 402), retries at 0.65 if below minSfxCount
+10. **Sentence-level SFX matching**: max 1 SFX per sentence, threshold starts at 0.72 (same as current `resolveSfxEvents()` line 402), retries at 0.65 if below minSfxCount
 
 ---
 
@@ -493,7 +477,7 @@ Use existing `scripts/soundscape_eval/evaluate.py` — the 7-criteria eval syste
 - `subchunkSoundscape.ts`: `mapSfxEventsToSubchunks()` — uses `sfxEvent.charIndex` (same field, same values)
 - `subchunkSoundscape.ts`: `calculateSfxOffsetFromGaps()` — uses proportional charIndex mapping (unchanged)
 - `soundscapeCompat.ts`: ambient segment mixing — uses `seg.charIndex / chapterText.length` (unchanged)
-- `assetResolver.ts`: `resolveSfxEvents()` — embeds `sfxEvent.query` strings (now raw text instead of LLM English, but embedding model is multilingual)
+- `assetResolver.ts`: `resolveSfxEvents()` — embeds `sfxEvent.query` strings (now raw sentence text instead of LLM English, but embedding model is multilingual)
 
 ### Test book for validation:
 - `audiobooks/soundscape_test_story/` — 2 chapters
